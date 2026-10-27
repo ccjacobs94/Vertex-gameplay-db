@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Game Hub | Unified Library</title>
+  <link rel="stylesheet" href="/static/styles.css?v=6">
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <div class="brand-group">
+        <h1>Game Hub</h1>
+        <p class="subtitle" id="sync-badge">Syncing across PC, Xbox, PS4 &amp; Switch</p>
+      </div>
+      <div class="header-actions">
+        <button type="button" id="btn-open-reconcile" class="btn btn-reconcile">
+          🔗 Reconcile
+        </button>
+        <button type="button" id="btn-open-triage" class="btn btn-triage">
+          ⚡ Quick Triage
+        </button>
+        <button type="button" id="btn-sync" class="btn btn-secondary">
+          Sync Libraries
+        </button>
+        <button type="button" id="btn-open-add" class="btn btn-primary">
+          + Add Game
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <section class="metrics-bar" aria-label="Library overview metrics">
+      <article class="metric-card">
+        <span class="metric-label">Total Games</span>
+        <strong class="metric-value" id="stat-total-games">0</strong>
+      </article>
+      <article class="metric-card">
+        <span class="metric-label">Total Playtime</span>
+        <strong class="metric-value" id="stat-total-hours">0 hrs</strong>
+      </article>
+      <article class="metric-card">
+        <span class="metric-label">Currently Playing</span>
+        <strong class="metric-value" id="stat-playing">0</strong>
+      </article>
+      <article class="metric-card">
+        <span class="metric-label">Backlog</span>
+        <strong class="metric-value" id="stat-backlog">0</strong>
+      </article>
+      <article class="metric-card">
+        <span class="metric-label">Beaten / Completed</span>
+        <strong class="metric-value" id="stat-completed">0</strong>
+      </article>
+    </section>
+
+    <search class="controls-bar">
+      <form id="filter-form" class="filter-form">
+        <div class="search-field">
+          <label for="search-input" class="sr-only">Search games by title or notes</label>
+          <input
+            type="search"
+            id="search-input"
+            name="q"
+            placeholder="Search games or notes..."
+          >
+        </div>
+
+        <div class="platform-pills" role="group" aria-label="Filter by platform" id="platform-pills">
+          <button type="button" class="pill active" data-platform="">All Platforms</button>
+          <button type="button" class="pill" data-platform="Steam">PC (Steam)</button>
+          <button type="button" class="pill" data-platform="Xbox">Xbox / Game Pass</button>
+          <button type="button" class="pill" data-platform="PlayStation">PS4 / PS5</button>
+          <button type="button" class="pill" data-platform="Switch">Nintendo Switch</button>
+        </div>
+
+        <div class="filter-selects">
+          <label for="genre-filter" class="sr-only">Genre</label>
+          <select id="genre-filter" name="genre">
+            <option value="">All Genres</option>
+          </select>
+
+          <label for="status-filter" class="sr-only">Completion status</label>
+          <select id="status-filter" name="status">
+            <option value="">All Statuses</option>
+            <option value="Playing">Playing</option>
+            <option value="Plan to Play">Plan to Play</option>
+            <option value="Not Played">Not Played</option>
+            <option value="Beaten">Beaten</option>
+            <option value="Completed">Completed (100%)</option>
+            <option value="Dropped">Dropped</option>
+          </select>
+
+          <label for="sort-select" class="sr-only">Sort order</label>
+          <select id="sort-select" name="sort">
+            <option value="playtime_desc">Most Played</option>
+            <option value="last_played_desc">Recently Played</option>
+            <option value="rating_desc">Highest Rated</option>
+            <option value="title_asc">Title (A–Z)</option>
+            <option value="recent_added">Recently Updated</option>
+          </select>
+
+          <button type="button" id="btn-fav-toggle" class="btn btn-chip" aria-pressed="false">
+            ★ Favorites
+          </button>
+        </div>
+      </form>
+    </search>
+
+    <section aria-labelledby="library-heading">
+      <div class="section-header">
+        <h2 id="library-heading">Library (<span id="results-count">0</span>)</h2>
+        <div id="source-indicators" class="source-indicators"></div>
+      </div>
+
+      <div id="games-grid" class="games-grid"></div>
+    </section>
+  </main>
+
+  <!-- Add Game Modal Dialog (for Switch, PS4, physical, or custom games) -->
+  <dialog id="add-game-dialog" class="modal-dialog" closedby="any" aria-labelledby="add-modal-title">
+    <div class="modal-content">
+      <header class="modal-header">
+        <h2 id="add-modal-title">Add Game to Library</h2>
+        <button type="button" id="btn-close-add" class="btn-icon" aria-label="Close modal">✕</button>
+      </header>
+
+      <div class="catalog-lookup">
+        <label for="catalog-search-input">Auto-fill cover art &amp; details from catalog:</label>
+        <div class="lookup-row">
+          <input
+            type="search"
+            id="catalog-search-input"
+            placeholder="e.g. Zelda Tears of the Kingdom, Bloodborne, Halo..."
+          >
+          <button type="button" id="btn-catalog-lookup" class="btn btn-secondary">Search Catalog</button>
+        </div>
+        <ul id="catalog-results" class="catalog-results" hidden></ul>
+      </div>
+
+      <form id="add-game-form" class="modal-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="add-title">Game Title *</label>
+            <input type="text" id="add-title" name="title" required>
+          </div>
+          <div class="form-group">
+            <label for="add-platform">Platform *</label>
+            <select id="add-platform" name="platform">
+              <option value="Nintendo Switch">Nintendo Switch</option>
+              <option value="PlayStation 4">PlayStation 4</option>
+              <option value="PlayStation 5">PlayStation 5</option>
+              <option value="Xbox">Xbox</option>
+              <option value="Xbox / PC">Xbox / PC</option>
+              <option value="PC (Steam)">PC (Steam)</option>
+              <option value="PC (Other)">PC (Other)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="add-status">Status</label>
+            <select id="add-status" name="completion_status">
+              <option value="Plan to Play">Plan to Play</option>
+              <option value="Playing">Playing</option>
+              <option value="Not Played">Not Played</option>
+              <option value="Beaten">Beaten</option>
+              <option value="Completed">Completed</option>
+              <option value="Dropped">Dropped</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="add-hours">Playtime (Hours)</label>
+            <input type="number" id="add-hours" name="playtime_hours" step="any" min="0" value="0">
+          </div>
+          <div class="form-group">
+            <label for="add-rating">Your Rating (1–10)</label>
+            <input type="number" id="add-rating" name="user_rating" min="1" max="10" placeholder="Optional">
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="add-cover">Cover Art URL</label>
+            <input type="url" id="add-cover" name="cover_url" placeholder="https://...">
+          </div>
+          <div class="form-group">
+            <label for="add-genres">Genres (comma-separated)</label>
+            <input type="text" id="add-genres" name="genres" placeholder="RPG, Action, Adventure">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="add-notes">Personal Notes (visible to AI / MCP)</label>
+          <textarea id="add-notes" name="notes" rows="2" placeholder="What you liked, who lent it to you, or why it's in your backlog..."></textarea>
+        </div>
+
+        <footer class="modal-footer">
+          <button type="button" id="btn-cancel-add" class="btn btn-secondary">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save to Library</button>
+        </footer>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Edit Game Modal Dialog -->
+  <dialog id="edit-game-dialog" class="modal-dialog edit-game-modal" closedby="any" aria-labelledby="edit-modal-title">
+    <div class="modal-content edit-modal-content">
+      <header class="modal-header edit-modal-header">
+        <div class="edit-header-left">
+          <h2 id="edit-modal-title">Edit Game</h2>
+          <div id="edit-header-badges" class="edit-header-badges"></div>
+        </div>
+        <div class="edit-header-right">
+          <button type="button" id="btn-edit-fav" class="btn btn-chip edit-fav-toggle" aria-pressed="false">
+            ★ Favorite
+          </button>
+          <button type="button" id="btn-close-edit" class="btn-icon" aria-label="Close modal">✕</button>
+        </div>
+      </header>
+
+      <form id="edit-game-form" class="modal-form edit-modal-form">
+        <input type="hidden" id="edit-id">
+        <input type="checkbox" id="edit-favorite" hidden>
+
+        <div class="edit-hero-layout">
+          <aside class="edit-cover-sidebar">
+            <div class="cover-wrapper edit-cover-preview-wrap">
+              <img id="edit-cover-preview" src="" alt="Game cover preview" width="300" height="450">
+            </div>
+
+            <div class="edit-readonly-stats">
+              <div class="edit-stat-tile">
+                <div class="edit-stat-tile-top">
+                  <span class="edit-stat-label">Playtime</span>
+                  <button type="button" id="btn-toggle-edit-hours" class="btn-link-subtle" title="Override playtime hours">
+                    Edit
+                  </button>
+                </div>
+                <div id="edit-hours-display" class="edit-stat-value">0 hrs</div>
+                <div id="edit-hours-edit-wrap" class="edit-hours-input-wrap" hidden>
+                  <input type="number" id="edit-hours" name="playtime_hours" step="any" min="0" readonly>
+                </div>
+                <small id="edit-hours-hint" class="field-hint" hidden>Consolidated across linked platforms</small>
+              </div>
+
+              <div class="edit-stat-tile" id="edit-ach-tile">
+                <span class="edit-stat-label">Achievements</span>
+                <div id="edit-ach-display" class="edit-stat-value">—</div>
+              </div>
+
+              <div class="edit-stat-tile" id="edit-meta-tile">
+                <span class="edit-stat-label">Release &amp; Critic</span>
+                <div id="edit-meta-display" class="edit-stat-value">—</div>
+              </div>
+            </div>
+          </aside>
+
+          <div class="edit-main-fields">
+            <div class="edit-primary-row">
+              <div class="form-group edit-status-group">
+                <label for="edit-status">Completion Status</label>
+                <select id="edit-status" name="completion_status">
+                  <option value="Not Played">Not Played</option>
+                  <option value="Plan to Play">Plan to Play</option>
+                  <option value="Playing">Playing</option>
+                  <option value="Beaten">Beaten</option>
+                  <option value="Completed">Completed (100%)</option>
+                  <option value="Dropped">Dropped</option>
+                </select>
+              </div>
+
+              <div class="form-group edit-rating-group">
+                <div class="edit-label-row">
+                  <label>Your Rating (1–10)</label>
+                  <button type="button" id="btn-clear-rating" class="btn-link-subtle" hidden>Clear</button>
+                </div>
+                <input type="hidden" id="edit-rating" name="user_rating">
+                <div id="edit-rating-pills" class="triage-rating-pills edit-rating-pills" role="group" aria-label="Your Rating from 1 to 10"></div>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="edit-genre-picker">Genres</label>
+              <input type="hidden" id="edit-genres" name="genres">
+              <div class="edit-genre-bar">
+                <div id="edit-genre-chips" class="edit-genre-chips"></div>
+                <select id="edit-genre-picker" class="edit-genre-select" aria-label="Add a genre">
+                  <option value="">+ Add genre...</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="edit-notes">Personal Notes &amp; Review <span class="label-muted">(visible to AI / MCP)</span></label>
+              <textarea id="edit-notes" name="notes" rows="4" placeholder="What you liked, thoughts on the story/mechanics, or why it's in your backlog..."></textarea>
+            </div>
+
+            <details class="edit-advanced-details">
+              <summary>Cover Art URL &amp; Advanced Metadata</summary>
+              <div class="edit-advanced-body">
+                <div class="form-group">
+                  <label for="edit-cover">Cover Art URL</label>
+                  <input type="url" id="edit-cover" name="cover_url" placeholder="https://...">
+                </div>
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <div id="edit-linked-section" class="linked-copies-panel">
+          <div class="linked-copies-header">
+            <strong>🔗 Cross-Platform Copies &amp; Playtime Breakdown</strong>
+            <span id="edit-linked-summary" class="linked-summary-badge"></span>
+          </div>
+          <ul id="edit-linked-list" class="linked-copies-list"></ul>
+          <div class="link-another-row">
+            <label for="edit-link-search" class="sr-only">Link another game copy from your library</label>
+            <input
+              type="search"
+              id="edit-link-search"
+              placeholder="+ Search library to link another platform copy..."
+            >
+            <ul id="edit-link-results" class="catalog-results" hidden></ul>
+          </div>
+        </div>
+
+        <footer class="modal-footer modal-footer-split">
+          <button type="button" id="btn-delete-game" class="btn btn-danger">Remove Game</button>
+          <div class="footer-right">
+            <button type="button" id="btn-cancel-edit" class="btn btn-secondary">Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Changes</button>
+          </div>
+        </footer>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Cross-Platform Reconciliation Modal Dialog -->
+  <dialog id="reconcile-dialog" class="modal-dialog reconcile-modal" closedby="any" aria-labelledby="reconcile-modal-title">
+    <div class="modal-content triage-content">
+      <header class="modal-header triage-header">
+        <div class="triage-header-left">
+          <h2 id="reconcile-modal-title">🔗 Reconcile Cross-Platform Games</h2>
+          <span id="reconcile-counter" class="triage-counter-badge">0 / 0</span>
+        </div>
+        <div class="triage-header-controls">
+          <label for="reconcile-scope" class="sr-only">Reconciliation mode</label>
+          <select id="reconcile-scope" class="triage-scope-select">
+            <option value="all">All Suggested Matches</option>
+            <option value="cross_platform">Cross-Platform Only</option>
+            <option value="manual">Manual Link &amp; Linked Games</option>
+          </select>
+          <button type="button" id="btn-close-reconcile" class="btn-icon" aria-label="Close reconcile modal">✕</button>
+        </div>
+      </header>
+
+      <div id="reconcile-progress-bar" class="triage-progress-track" aria-hidden="true">
+        <div id="reconcile-progress-fill" class="triage-progress-fill"></div>
+      </div>
+
+      <!-- Queue Mode Stage -->
+      <div id="reconcile-stage" class="reconcile-stage">
+        <div id="reconcile-card" class="reconcile-card">
+          <div class="reconcile-preview-banner">
+            <div class="reconcile-preview-main">
+              <div class="form-group reconcile-title-field">
+                <label for="reconcile-unified-title">Consolidated Title</label>
+                <input type="text" id="reconcile-unified-title">
+              </div>
+              <div class="form-group reconcile-status-field">
+                <label for="reconcile-unified-status">Unified Status</label>
+                <select id="reconcile-unified-status">
+                  <option value="Playing">Playing</option>
+                  <option value="Plan to Play">Plan to Play</option>
+                  <option value="Beaten">Beaten</option>
+                  <option value="Completed">Completed</option>
+                  <option value="Dropped">Dropped</option>
+                  <option value="Not Played">Not Played</option>
+                </select>
+              </div>
+            </div>
+            <div class="reconcile-preview-metrics">
+              <div class="reconcile-metric-pill">
+                <span class="triage-stat-label">Consolidated Playtime</span>
+                <strong id="reconcile-total-hours" class="reconcile-hours-highlight">0 hrs</strong>
+              </div>
+              <div class="reconcile-metric-pill">
+                <span class="triage-stat-label">Combined Platforms</span>
+                <strong id="reconcile-unified-plat">Steam + Xbox</strong>
+              </div>
+            </div>
+          </div>
+
+          <div class="reconcile-copies-section">
+            <div class="reconcile-copies-header">
+              <span class="triage-prompt-label">Check the copies below that are the same game (click card to toggle):</span>
+              <span id="reconcile-selected-count" class="linked-summary-badge">2 selected</span>
+            </div>
+            <div id="reconcile-candidates-grid" class="reconcile-candidates-grid"></div>
+          </div>
+
+          <div class="reconcile-decision-bar">
+            <button type="button" id="btn-reconcile-confirm" class="btn btn-primary btn-reconcile-confirm">
+              ✓ Confirm Same Game &amp; Consolidate (<kbd>Enter</kbd> / <kbd>C</kbd>)
+            </button>
+            <button type="button" id="btn-reconcile-dismiss" class="btn btn-danger">
+              ✕ Not the Same (<kbd>X</kbd>)
+            </button>
+          </div>
+        </div>
+
+        <div id="reconcile-empty" class="triage-empty-state" hidden>
+          <h3>🎉 All duplicate suggestions reviewed!</h3>
+          <p>All detected cross-platform matches have been reconciled or dismissed. You can manually link any games or manage existing links below.</p>
+          <div class="reconcile-empty-actions">
+            <button type="button" id="btn-reconcile-open-manual" class="btn btn-primary">Manual Link &amp; Manage Linked</button>
+            <button type="button" id="btn-reconcile-reset-dismissed" class="btn btn-secondary">Restore Dismissed Suggestions</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Manual Link & Linked Groups Stage -->
+      <div id="reconcile-manual-stage" class="reconcile-manual-stage" hidden>
+        <div class="manual-reconcile-box">
+          <h3>Link Any Games Across Platforms</h3>
+          <p class="subtitle">Search your library and select 2 or more entries to confirm they are the same game and consolidate their playtime.</p>
+          <div class="lookup-row">
+            <label for="manual-reconcile-search" class="sr-only">Search library games to link</label>
+            <input
+              type="search"
+              id="manual-reconcile-search"
+              placeholder="Search your library by title (e.g. Halo, Witcher, Ori, Call of Duty)..."
+            >
+          </div>
+          <div id="manual-reconcile-selected" class="manual-selected-bar" hidden></div>
+          <ul id="manual-reconcile-results" class="manual-reconcile-results"></ul>
+        </div>
+
+        <div class="manual-reconcile-box">
+          <div class="linked-copies-header">
+            <h3>Currently Reconciled Games (<span id="reconciled-groups-count">0</span>)</h3>
+          </div>
+          <div id="reconciled-groups-list" class="reconciled-groups-list"></div>
+        </div>
+      </div>
+
+      <footer id="reconcile-footer" class="modal-footer modal-footer-split triage-footer">
+        <div class="triage-nav-left">
+          <button type="button" id="btn-reconcile-prev" class="btn btn-secondary" title="Previous Group (←)">
+            ← Previous
+          </button>
+          <span id="reconcile-toast" class="triage-toast" aria-live="polite"></span>
+        </div>
+        <div class="triage-nav-right">
+          <span class="triage-shortcuts-hint">
+            <kbd>Enter</kbd>/<kbd>C</kbd> Confirm &bull; <kbd>X</kbd> Not Same &bull; <kbd>Space</kbd>/<kbd>→</kbd> Skip &bull; <kbd>←</kbd> Back
+          </span>
+          <button type="button" id="btn-reconcile-skip" class="btn btn-secondary" title="Skip Group (Space or →)">
+            Skip →
+          </button>
+        </div>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- Quick Triage Modal Dialog (< 5s per game workflow) -->
+  <dialog id="triage-dialog" class="modal-dialog triage-modal" closedby="any" aria-labelledby="triage-modal-title">
+    <div class="modal-content triage-content">
+      <header class="modal-header triage-header">
+        <div class="triage-header-left">
+          <h2 id="triage-modal-title">⚡ Quick Triage</h2>
+          <span id="triage-counter" class="triage-counter-badge">0 / 0</span>
+        </div>
+        <div class="triage-header-controls">
+          <label for="triage-scope" class="sr-only">Triage queue filter</label>
+          <select id="triage-scope" class="triage-scope-select">
+            <option value="unlocked">Untriaged (Auto-Synced Only)</option>
+            <option value="not_played">Not Played Only</option>
+            <option value="current_filter">Current Library View</option>
+            <option value="all">All Games</option>
+          </select>
+          <button type="button" id="btn-close-triage" class="btn-icon" aria-label="Close triage">✕</button>
+        </div>
+      </header>
+
+      <div class="triage-progress-track" aria-hidden="true">
+        <div id="triage-progress-fill" class="triage-progress-fill"></div>
+      </div>
+
+      <div id="triage-stage" class="triage-stage">
+        <div id="triage-card" class="triage-card">
+          <div class="triage-cover-col">
+            <div class="cover-wrapper triage-cover-wrapper">
+              <img id="triage-img" src="" alt="" width="300" height="450">
+              <span id="triage-plat" class="platform-badge"></span>
+              <button
+                type="button"
+                id="btn-triage-fav"
+                class="triage-fav-btn"
+                title="Toggle Favorite (Shortcut: F)"
+                aria-label="Toggle Favorite"
+                aria-pressed="false"
+              >★</button>
+            </div>
+          </div>
+
+          <div class="triage-info-col">
+            <div class="triage-title-group">
+              <h3 id="triage-title" class="triage-game-title">Game Title</h3>
+              <p id="triage-submeta" class="triage-submeta"></p>
+            </div>
+
+            <div class="triage-stats-chips">
+              <div class="triage-stat-box">
+                <span class="triage-stat-label">Playtime</span>
+                <strong id="triage-playtime">0 hrs</strong>
+              </div>
+              <div class="triage-stat-box">
+                <span class="triage-stat-label">Achievements</span>
+                <strong id="triage-achievements">0 / 0</strong>
+              </div>
+              <div class="triage-stat-box">
+                <span class="triage-stat-label">Last Played</span>
+                <strong id="triage-last-played">Never</strong>
+              </div>
+              <div class="triage-stat-box">
+                <span class="triage-stat-label">Current Status</span>
+                <span id="triage-current-status" class="status-pill">Not Played</span>
+              </div>
+            </div>
+
+            <div class="triage-actions-section">
+              <span class="triage-prompt-label">Set status &amp; advance (1 click or keys <kbd>1</kbd>–<kbd>6</kbd>):</span>
+              <div class="triage-status-grid" role="group" aria-label="Set completion status">
+                <button type="button" class="triage-action-btn" data-status="Playing" data-key="1">
+                  <kbd>1</kbd>
+                  <span class="triage-btn-text">Playing</span>
+                </button>
+                <button type="button" class="triage-action-btn" data-status="Plan to Play" data-key="2">
+                  <kbd>2</kbd>
+                  <span class="triage-btn-text">Plan to Play</span>
+                </button>
+                <button type="button" class="triage-action-btn" data-status="Beaten" data-key="3">
+                  <kbd>3</kbd>
+                  <span class="triage-btn-text">Beaten</span>
+                </button>
+                <button type="button" class="triage-action-btn" data-status="Completed" data-key="4">
+                  <kbd>4</kbd>
+                  <span class="triage-btn-text">Completed</span>
+                </button>
+                <button type="button" class="triage-action-btn" data-status="Dropped" data-key="5">
+                  <kbd>5</kbd>
+                  <span class="triage-btn-text">Dropped</span>
+                </button>
+                <button type="button" class="triage-action-btn" data-status="Not Played" data-key="6">
+                  <kbd>6</kbd>
+                  <span class="triage-btn-text">Not Played</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="triage-rating-row">
+              <span class="triage-prompt-label">Optional Quick Rating:</span>
+              <div id="triage-rating-pills" class="triage-rating-pills" role="group" aria-label="Quick rating 1 to 10"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="triage-empty" class="triage-empty-state" hidden>
+          <h3>🎉 All caught up!</h3>
+          <p>You have triaged all games in this queue. Switch the queue filter above if you want to review another set of games.</p>
+          <button type="button" id="btn-done-triage" class="btn btn-primary">Back to Library</button>
+        </div>
+      </div>
+
+      <footer class="modal-footer modal-footer-split triage-footer">
+        <div class="triage-nav-left">
+          <button type="button" id="btn-triage-prev" class="btn btn-secondary" title="Previous Game (← or Backspace)">
+            ← Previous
+          </button>
+          <span id="triage-toast" class="triage-toast" aria-live="polite"></span>
+        </div>
+        <div class="triage-nav-right">
+          <span class="triage-shortcuts-hint">
+            <kbd>1</kbd>–<kbd>6</kbd> Status &bull; <kbd>F</kbd> Fav &bull; <kbd>Space</kbd>/<kbd>→</kbd> Skip &bull; <kbd>←</kbd> Undo/Back
+          </span>
+          <button type="button" id="btn-triage-skip" class="btn btn-secondary" title="Skip / Keep Current (Space or →)">
+            Skip →
+          </button>
+        </div>
+      </footer>
+    </div>
+  </dialog>
+
+  <script src="/static/app.js?v=6"></script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "game-hub": {
+      "url": "http://localhost:8097/mcp",
+      "serverUrl": "http://localhost:8097/mcp"
+    }
+  }
+}

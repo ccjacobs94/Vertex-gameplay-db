@@ -1,0 +1,22 @@
+services:
+  game-hub:
+    build: .
+    container_name: game-hub
+    env_file:
+      - .env
+    ports:
+      - "8095:8090"
+      - "8097:8096"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: game-hub-tunnel
+    profiles:
+      - tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN:-}
