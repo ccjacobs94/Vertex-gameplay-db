@@ -23,3 +23,4 @@ Game Hub is a self-hosted, multi-platform game library tracker and MCP server ru
   curl -X POST http://localhost:8095/api/sync
   ```
 - **Preserve User Edits**: When modifying `db.py` or `sync_engine.py`, never overwrite a game's `completion_status` during automated syncs if `status_locked = 1`, and never overwrite `user_rating`, `notes`, or `favorite`.
+- **Genres & Tags**: Genres are broad categories, tags are mechanics/modes/themes (see `taxonomy.py`). Enrichment and syncs merge, never replace: discovered genres/tags are added to the existing lists, existing entries are never dropped. The `update_game_genres` MCP tool defaults to merge mode for the same reason. Labels outside the controlled taxonomy are ignored, never written silently.

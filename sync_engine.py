@@ -25,6 +25,7 @@ from db import (
     normalize_game_title,
     upsert_synced_game,
 )
+from taxonomy import merge_lists, validate_genres
 
 logger = logging.getLogger("gamehub.sync")
 
@@ -764,6 +765,9 @@ async def enrich_missing_metadata(
       2. Optional RAWG API (if RAWG_API_KEY is set)
       3. Wikidata P136 & Wikipedia API fallback (for console exclusives not on Steam)
     Propagates discovered genres across linked/reconciled games and normalized title siblings.
+    Merge, never replace: discovered genres are added to a game's
+    existing genres (validated against taxonomy.GENRES first).
+    Existing genres are never dropped, even with force=True.
     """
     with get_connection(db_path) as conn:
         all_rows = [dict(r) for r in conn.execute("SELECT * FROM games ORDER BY playtime_hours DESC").fetchall()]
@@ -861,34 +865,52 @@ async def enrich_missing_metadata(
                 await asyncio.sleep(0.1)
 
             if meta and meta.get("genres"):
-                genres = meta["genres"]
+                # Validate against the controlled taxonomy first: Steam
+                # and Wikidata can return labels that are not genres
+                # ("Free To Play", "Casual") or that this library does
+                # not use. Unknown/retired labels are dropped, never
+                # written. See taxonomy.py.
+                discovered = validate_genres(meta["genres"])
+                if not discovered:
+                    continue
                 rel_year = meta.get("release_year")
                 c_score = meta.get("critic_score")
                 if norm:
                     norm_to_meta[norm] = meta
 
+                # Merge, never replace. The discovered genres are added
+                # to whatever the game already has; existing genres are
+                # never dropped. This is the fix for the 2026-10-27
+                # audit, where a force run replaced Portal 2's
+                # Platformer/Puzzle and Blacklist's Stealth with
+                # Steam's coarse Action/Adventure list.
                 with get_connection(db_path) as conn:
                     cid = row.get("canonical_id")
                     if cid is not None:
-                        conn.execute(
-                            """
-                            UPDATE games SET
-                                genres = ?,
-                                release_year = COALESCE(release_year, ?),
-                                critic_score = COALESCE(critic_score, ?),
-                                updated_at = ?
-                            WHERE canonical_id = ? AND (genres IS NULL OR genres = '[]' OR genres = '' OR ? = 1)
-                            """,
-                            (
-                                json.dumps(genres),
-                                rel_year,
-                                c_score,
-                                now,
-                                cid,
-                                1 if force else 0,
-                            ),
-                        )
+                        group_rows = conn.execute(
+                            "SELECT id, genres, release_year, critic_score FROM games WHERE canonical_id = ?",
+                            (cid,),
+                        ).fetchall()
                     else:
+                        group_rows = [
+                            conn.execute(
+                                "SELECT id, genres, release_year, critic_score FROM games WHERE id = ?",
+                                (game_id,),
+                            ).fetchone()
+                        ]
+                    for grow in group_rows:
+                        try:
+                            existing_genres = json.loads(grow["genres"] or "[]")
+                        except Exception:
+                            existing_genres = []
+                        merged = merge_lists(existing_genres, discovered)
+                        changed = (
+                            merged != existing_genres
+                            or (rel_year is not None and grow["release_year"] is None)
+                            or (c_score is not None and grow["critic_score"] is None)
+                        )
+                        if not changed:
+                            continue
                         conn.execute(
                             """
                             UPDATE games SET
@@ -898,9 +920,9 @@ async def enrich_missing_metadata(
                                 updated_at = ?
                             WHERE id = ?
                             """,
-                            (json.dumps(genres), rel_year, c_score, now, game_id),
+                            (json.dumps(merged), rel_year, c_score, now, grow["id"]),
                         )
-                enriched_count += 1
+                        enriched_count += 1
 
     with get_connection(db_path) as conn:
         rem_row = conn.execute(

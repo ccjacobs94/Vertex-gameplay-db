@@ -20,6 +20,12 @@ from db import (
     reconcile_games,
     update_game,
 )
+from taxonomy import (
+    merge_lists,
+    remove_from_list,
+    validate_genres,
+    validate_tags,
+)
 
 from sync_engine import enrich_missing_metadata
 
@@ -44,6 +50,7 @@ def search_game_library(
     platform: Optional[str] = None,
     status: Optional[str] = None,
     genre: Optional[str] = None,
+    tag: Optional[str] = None,
     favorite_only: bool = False,
     sort_by: str = "playtime_desc",
     limit: int = 30,
@@ -53,12 +60,14 @@ def search_game_library(
     - platform: e.g. 'Steam', 'Xbox', 'PlayStation', 'Switch'
     - status: 'Not Played', 'Plan to Play', 'Playing', 'Beaten', 'Completed', 'Dropped'
     - sort_by: 'playtime_desc', 'last_played_desc', 'rating_desc', 'title_asc'
+    - tag: e.g. 'Stealth', 'Open World', 'Co-op'. Matches tags and genres.
     """
     return query_games(
         search=query,
         platform=platform,
         status=status,
         genre=genre,
+        tag=tag,
         favorite_only=favorite_only,
         sort_by=sort_by,
         limit=limit,
@@ -115,6 +124,7 @@ def get_what_to_play_recommendations(
                 "playtime_hours": g["playtime_hours"],
                 "user_rating": g["user_rating"],
                 "genres": g["genres"],
+                "tags": g.get("tags") or [],
                 "favorite": g["favorite"],
             }
             for g in favorites_and_top
@@ -136,10 +146,88 @@ def get_what_to_play_recommendations(
                 "status": g["completion_status"],
                 "critic_score": g["critic_score"],
                 "genres": g["genres"],
+                "tags": g.get("tags") or [],
                 "notes": g["notes"],
             }
             for g in backlog[:max_candidates]
         ],
+    }
+
+
+@mcp.tool()
+def update_game_genres(
+    title: str,
+    genres: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None,
+    mode: str = "merge",
+    remove_genres: Optional[List[str]] = None,
+    remove_tags: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Update a game's genres and/or tags by matching its title.
+    Genres are broad gameplay categories (1-3 per game, e.g. 'Shooter',
+    'RPG', 'Puzzle'). Tags are mechanics, modes, themes, and settings
+    (e.g. 'Stealth', 'Open World', 'Co-op', 'Survival Horror').
+
+    mode defaults to 'merge': the given genres/tags are added to the
+    game's existing lists and nothing is removed. This is the safe
+    default, enrichment and syncs must never drop a manual tag.
+    Use mode='replace' only for an explicit full replacement of the
+    named field. Labels outside the controlled taxonomy in taxonomy.py
+    are ignored and reported in 'ignored'.
+    """
+    matches = query_games(search=title, limit=5)
+    if not matches:
+        return {"error": f"No game found matching '{title}'"}
+
+    # Pick exact match first, otherwise top match
+    target = next((m for m in matches if m["title"].lower() == title.strip().lower()), matches[0])
+
+    if mode not in ("merge", "replace"):
+        return {"error": "mode must be 'merge' or 'replace'"}
+
+    ignored: List[str] = []
+    for label in (genres or []) + (tags or []):
+        if label not in (validate_genres([label]) + validate_tags([label])):
+            ignored.append(label)
+
+    valid_genres = validate_genres(genres)
+    valid_tags = validate_tags(tags)
+    remove_genres_valid = validate_genres(remove_genres)
+    remove_tags_valid = validate_tags(remove_tags)
+
+    updates: Dict[str, Any] = {}
+    if genres is not None:
+        current = target.get("genres") or []
+        if mode == "merge":
+            updates["genres"] = merge_lists(current, valid_genres)
+        else:
+            updates["genres"] = valid_genres
+        if remove_genres_valid:
+            updates["genres"] = remove_from_list(updates["genres"], remove_genres_valid)
+    elif remove_genres_valid:
+        updates["genres"] = remove_from_list(target.get("genres") or [], remove_genres_valid)
+
+    if tags is not None:
+        current_tags = target.get("tags") or []
+        if mode == "merge":
+            updates["tags"] = merge_lists(current_tags, valid_tags)
+        else:
+            updates["tags"] = valid_tags
+        if remove_tags_valid:
+            updates["tags"] = remove_from_list(updates["tags"], remove_tags_valid)
+    elif remove_tags_valid:
+        updates["tags"] = remove_from_list(target.get("tags") or [], remove_tags_valid)
+
+    if not updates:
+        return {"error": "Nothing to update: pass genres, tags, remove_genres, or remove_tags"}
+
+    updated = update_game(target["id"], updates)
+    return {
+        "status": "updated",
+        "mode": mode,
+        "game": updated,
+        "ignored": ignored,
     }
 
 
@@ -183,6 +271,7 @@ def add_game_to_library(
     playtime_hours: float = 0.0,
     user_rating: Optional[int] = None,
     genres: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None,
     notes: str = "",
 ) -> Dict[str, Any]:
     """
@@ -194,7 +283,8 @@ def add_game_to_library(
         completion_status=completion_status,
         playtime_hours=playtime_hours,
         user_rating=user_rating,
-        genres=genres or [],
+        genres=validate_genres(genres),
+        tags=validate_tags(tags),
         notes=notes,
     )
     return {"status": "added", "game": game}
@@ -228,6 +318,8 @@ async def enrich_library_genres(limit: int = 500, force: bool = False) -> Dict[s
     """
     Automatically enrich games missing genres, release years, or critic scores using keyless
     Steam Store appdetails and Wikidata/Wikipedia fallback.
+    Merge, never replace: discovered genres are added to a game's
+    existing genres; existing genres are never dropped, even with force=True.
     """
     return await enrich_missing_metadata(limit=limit, force=force)
 

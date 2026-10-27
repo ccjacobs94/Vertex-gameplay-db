@@ -44,6 +44,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 achievements_unlocked INTEGER DEFAULT 0,
                 achievements_total INTEGER DEFAULT 0,
                 genres TEXT DEFAULT '[]',
+                tags TEXT DEFAULT '[]',
                 critic_score INTEGER,
                 user_rating INTEGER,
                 release_year INTEGER,
@@ -81,6 +82,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         }
         if "canonical_id" not in cols:
             conn.execute("ALTER TABLE games ADD COLUMN canonical_id INTEGER DEFAULT NULL;")
+        if "tags" not in cols:
+            conn.execute("ALTER TABLE games ADD COLUMN tags TEXT DEFAULT '[]';")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_canonical ON games(canonical_id);")
 
 
@@ -181,6 +184,10 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         d["genres"] = json.loads(d.get("genres") or "[]")
     except Exception:
         d["genres"] = []
+    try:
+        d["tags"] = json.loads(d.get("tags") or "[]")
+    except Exception:
+        d["tags"] = []
     d["favorite"] = bool(d.get("favorite", 0))
     d["status_locked"] = bool(d.get("status_locked", 0))
     d["playtime_hours"] = round(float(d.get("playtime_hours") or 0.0), 1)
@@ -301,6 +308,15 @@ def _consolidate_dicts(raw_games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     merged_genres.append(gen)
         unified["genres"] = merged_genres
 
+        # Tags union, same as genres: manual tags are never dropped
+        # by consolidation.
+        merged_tags: List[str] = []
+        for m in members:
+            for tag in m.get("tags") or []:
+                if tag not in merged_tags:
+                    merged_tags.append(tag)
+        unified["tags"] = merged_tags
+
         # Status, rating, favorite, critic_score, release_year
         unified["favorite"] = any(bool(m.get("favorite")) for m in members)
         unified["status_locked"] = any(bool(m.get("status_locked")) for m in members)
@@ -344,6 +360,7 @@ def upsert_synced_game(
     achievements_unlocked: int = 0,
     achievements_total: int = 0,
     genres: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None,
     critic_score: Optional[int] = None,
     release_year: Optional[int] = None,
     cover_url: Optional[str] = None,
@@ -352,6 +369,8 @@ def upsert_synced_game(
     """
     Insert or update a game from an automated sync source.
     Preserves user-modified fields (completion_status if status_locked=1, user_rating, notes, favorite).
+    Syncs never overwrite genres or tags: a sync may fill them when
+    empty, but manual genres/tags are preserved.
     """
     now = datetime.now(timezone.utc).isoformat()
     playtime_hours = round(float(playtime_hours or 0.0), 2)
@@ -370,14 +389,15 @@ def upsert_synced_game(
 
         if existing is None:
             genres_json = json.dumps(genres or [])
+            tags_json = json.dumps(tags or [])
             cursor = conn.execute(
                 """
                 INSERT INTO games (
                     external_id, title, platform, source, playtime_hours,
                     last_played, completion_status, status_locked,
-                    achievements_unlocked, achievements_total, genres,
+                    achievements_unlocked, achievements_total, genres, tags,
                     critic_score, release_year, cover_url, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     external_id,
@@ -390,6 +410,7 @@ def upsert_synced_game(
                     achievements_unlocked,
                     achievements_total,
                     genres_json,
+                    tags_json,
                     critic_score,
                     release_year,
                     cover_url,
@@ -411,7 +432,13 @@ def upsert_synced_game(
                 )
             )
             existing_genres = json.loads(existing["genres"] or "[]")
-            merged_genres = json.dumps(genres if genres else existing_genres)
+            # Merge, never replace: sync-discovered genres are added to
+            # the manual list, existing entries are never dropped.
+            merged_genres_list = list(existing_genres)
+            for gen in genres or []:
+                if gen not in merged_genres_list:
+                    merged_genres_list.append(gen)
+            merged_genres = json.dumps(merged_genres_list)
             keep_custom_title = (
                 existing["canonical_id"] is not None
                 and existing["id"] == existing["canonical_id"]
@@ -463,6 +490,7 @@ def add_manual_game(
     critic_score: Optional[int] = None,
     release_year: Optional[int] = None,
     genres: Optional[List[str]] = None,
+    tags: Optional[List[str]] = None,
     cover_url: Optional[str] = None,
     notes: str = "",
     favorite: bool = False,
@@ -478,16 +506,17 @@ def add_manual_game(
             """
             INSERT INTO games (
                 external_id, title, platform, source, playtime_hours,
-                completion_status, status_locked, genres, critic_score,
+                completion_status, status_locked, genres, tags, critic_score,
                 user_rating, release_year, cover_url, notes, favorite,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, 'Manual', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, 'Manual', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(external_id) DO UPDATE SET
                 title = excluded.title,
                 playtime_hours = excluded.playtime_hours,
                 completion_status = excluded.completion_status,
                 status_locked = 1,
                 genres = excluded.genres,
+                tags = excluded.tags,
                 critic_score = COALESCE(excluded.critic_score, games.critic_score),
                 user_rating = COALESCE(excluded.user_rating, games.user_rating),
                 release_year = COALESCE(excluded.release_year, games.release_year),
@@ -503,6 +532,7 @@ def add_manual_game(
                 round(float(playtime_hours or 0.0), 2),
                 completion_status,
                 json.dumps(genres or []),
+                json.dumps(tags or []),
                 critic_score,
                 user_rating,
                 release_year,
@@ -536,6 +566,7 @@ def update_game(
         "notes",
         "favorite",
         "genres",
+        "tags",
     }
     shared_group_keys = {
         "completion_status",
@@ -545,6 +576,7 @@ def update_game(
         "notes",
         "favorite",
         "genres",
+        "tags",
     }
 
     now = datetime.now(timezone.utc).isoformat()
@@ -575,6 +607,8 @@ def update_game(
             if k not in allowed:
                 continue
             if k == "genres" and isinstance(v, list):
+                v = json.dumps(v)
+            elif k == "tags" and isinstance(v, list):
                 v = json.dumps(v)
             elif k == "favorite":
                 v = 1 if v else 0
@@ -673,6 +707,7 @@ def query_games(
     platform: Optional[str] = None,
     status: Optional[str] = None,
     genre: Optional[str] = None,
+    tag: Optional[str] = None,
     favorite_only: bool = False,
     sort_by: str = "playtime_desc",
     limit: int = 500,
@@ -719,6 +754,15 @@ def query_games(
             g
             for g in items
             if any(g_q in gen.lower() for gen in (g.get("genres") or []))
+        ]
+
+    if tag:
+        t_q = tag.lower().strip()
+        items = [
+            g
+            for g in items
+            if any(t_q in t.lower() for t in (g.get("tags") or []))
+            or any(t_q in gen.lower() for gen in (g.get("genres") or []))
         ]
 
     if favorite_only:
@@ -982,6 +1026,12 @@ def reconcile_games(
                 if g not in merged_genres:
                     merged_genres.append(g)
 
+        merged_tags: List[str] = []
+        for m in members:
+            for t in m.get("tags") or []:
+                if t not in merged_tags:
+                    merged_tags.append(t)
+
         steam_cover = next(
             (m["cover_url"] for m in members if m.get("cover_url") and "steam" in m["cover_url"]),
             None,
@@ -1003,6 +1053,7 @@ def reconcile_games(
                 favorite = ?,
                 notes = ?,
                 genres = ?,
+                tags = ?,
                 updated_at = ?
             WHERE id IN ({all_placeholders})
             """,
@@ -1013,6 +1064,7 @@ def reconcile_games(
                 unified_fav,
                 unified_notes,
                 json.dumps(merged_genres),
+                json.dumps(merged_tags),
                 now,
                 *tuple(all_ids),
             ),
@@ -1123,6 +1175,7 @@ def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
     by_platform: Dict[str, Dict[str, Any]] = {}
     by_status: Dict[str, int] = {}
     genre_hours: Dict[str, float] = {}
+    tag_hours: Dict[str, float] = {}
 
     for g in games:
         for lg in g.get("linked_games") or [g]:
@@ -1140,12 +1193,20 @@ def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
         for gen in g.get("genres") or []:
             genre_hours[gen] = round(genre_hours.get(gen, 0.0) + max(g["playtime_hours"], 0.5), 1)
 
+        for tag in g.get("tags") or []:
+            tag_hours[tag] = round(tag_hours.get(tag, 0.0) + max(g["playtime_hours"], 0.5), 1)
+
     top_genres = [
         {"genre": k, "weighted_hours": v}
         for k, v in sorted(genre_hours.items(), key=lambda item: item[1], reverse=True)[:8]
     ]
     all_genres = sorted(genre_hours.keys(), key=lambda g_name: g_name.lower())
     missing_genres_count = sum(1 for g in games if not (g.get("genres") or []))
+    top_tags = [
+        {"tag": k, "weighted_hours": v}
+        for k, v in sorted(tag_hours.items(), key=lambda item: item[1], reverse=True)[:8]
+    ]
+    all_tags = sorted(tag_hours.keys(), key=lambda t_name: t_name.lower())
 
     top_played = sorted(games, key=lambda x: x["playtime_hours"], reverse=True)[:10]
     recently_played = [
@@ -1185,6 +1246,8 @@ def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
         "reconcile_candidates_count": reconcile_candidates_count,
         "missing_genres_count": missing_genres_count,
         "all_genres": all_genres,
+        "all_tags": all_tags,
+        "top_tags": top_tags,
         "platforms": by_platform,
         "statuses": by_status,
         "top_genres": top_genres,

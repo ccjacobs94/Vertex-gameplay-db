@@ -209,6 +209,7 @@ class ManualGameCreate(BaseModel):
     critic_score: Optional[int] = Field(default=None, ge=0, le=100)
     release_year: Optional[int] = None
     genres: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
     cover_url: Optional[str] = None
     notes: str = ""
     favorite: bool = False
@@ -226,6 +227,7 @@ class GameUpdateRequest(BaseModel):
     notes: Optional[str] = None
     favorite: Optional[bool] = None
     genres: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
 
 
 class ReconcileConfirmRequest(BaseModel):
@@ -274,6 +276,7 @@ async def api_list_games(
     platform: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
     genre: Optional[str] = Query(default=None),
+    tag: Optional[str] = Query(default=None),
     favorite_only: bool = Query(default=False),
     sort_by: str = Query(default="playtime_desc"),
     limit: int = Query(default=500, le=5000),
@@ -284,6 +287,7 @@ async def api_list_games(
         platform=platform,
         status=status,
         genre=genre,
+        tag=tag,
         favorite_only=favorite_only,
         sort_by=sort_by,
         limit=limit,
@@ -332,6 +336,7 @@ async def api_create_game(payload: ManualGameCreate) -> Dict[str, Any]:
         critic_score=payload.critic_score,
         release_year=payload.release_year,
         genres=payload.genres,
+        tags=payload.tags,
         cover_url=payload.cover_url,
         notes=payload.notes,
         favorite=payload.favorite,

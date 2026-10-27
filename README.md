@@ -56,12 +56,17 @@ docker compose up -d --build
 
 Game Hub runs an MCP server on container port `8096` (mapped to `localhost:8097` on the host by default) with the following tools:
 - `get_gaming_profile_and_metrics`: Aggregate playtime, platform breakdown, and top-rated taste profile.
-- `search_game_library`: Filter by title, platform, completion status, genre, or favorites.
+- `search_game_library`: Filter by title, platform, completion status, genre, tag, or favorites.
 - `get_what_to_play_recommendations`: Personalized backlog recommendations tailored to your highest-rated genres.
 - `update_game_progress`: Update completion status, rating (`1–10`), notes, or favorite flag.
+- `update_game_genres`: Update a game's genres and/or tags. Merge is the default: given genres/tags are added and nothing is removed. Use `mode="replace"` only for an explicit full replacement. Labels outside the controlled taxonomy in `taxonomy.py` are ignored.
 - `add_game_to_library`: Add a new game (with automatic cover art lookup).
 - `find_duplicate_cross_platform_games` & `reconcile_cross_platform_games`: Identify and merge duplicate titles across platforms.
-- `enrich_library_genres`: Backfill missing genres across your catalog.
+- `enrich_library_genres`: Backfill missing genres across your catalog. Merge, never replace: discovered genres are added to a game's existing genres, so a Steam-only Action/Adventure list can never drop a manual Platformer, Puzzle, or Stealth tag.
+
+### Genres vs Tags
+
+Genres are broad gameplay categories (1–3 per game, e.g. `Shooter`, `RPG`, `Puzzle`). Tags are mechanics, modes, themes, and settings (e.g. `Stealth`, `Open World`, `Co-op`, `Survival Horror`). The split exists because Steam's official genre list has no Stealth genre, and it lists both Portal 2 and Splinter Cell Blacklist as only Action/Adventure. The controlled lists live in `taxonomy.py`; enrichment only adds labels from those lists, and `Free To Play`, `Casual`, `Utilities`, and `Indie` are tags, not genres.
 
 ### Exposing MCP Publicly (Optional OAuth 2.1 + Cloudflare Tunnel)
 
