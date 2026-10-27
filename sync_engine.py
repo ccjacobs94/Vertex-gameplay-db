@@ -130,23 +130,40 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
             "Accept-Language": "en-US",
         }
         async with _make_async_client(timeout=40.0, extra_headers=headers) as client:
-            resp = await client.get("https://xbl.io/api/v2/titles")
-            resp.raise_for_status()
-            payload = resp.json()
-            
-            # OpenXBL v2 wraps titles and xuid in payload['content']
+            titles: List[Dict[str, Any]] = []
             xuid = None
-            if isinstance(payload, dict):
-                if "content" in payload and isinstance(payload["content"], dict):
-                    xuid = payload["content"].get("xuid")
-                    titles = payload["content"].get("titles", [])
+
+            # OpenXBL v2 /api/v2/achievements provides rich 'images' arrays containing official 2:3 'Poster' box art
+            try:
+                ach_resp = await client.get("https://xbl.io/api/v2/achievements")
+                if ach_resp.status_code == 200:
+                    ach_data = ach_resp.json()
+                    if isinstance(ach_data, dict):
+                        xuid = (ach_data.get("content") or {}).get("xuid") or ach_data.get("xuid")
+                        titles = (ach_data.get("content") or {}).get("titles") or ach_data.get("titles", [])
+                    elif isinstance(ach_data, list):
+                        titles = ach_data
+            except Exception as exc:
+                logger.warning("Could not fetch Xbox achievements endpoint for posters: %s", exc)
+
+            # Fallback to /api/v2/titles if achievements endpoint didn't return titles
+            if not titles:
+                resp = await client.get("https://xbl.io/api/v2/titles")
+                resp.raise_for_status()
+                payload = resp.json()
+                
+                # OpenXBL v2 wraps titles and xuid in payload['content']
+                if isinstance(payload, dict):
+                    if "content" in payload and isinstance(payload["content"], dict):
+                        xuid = payload["content"].get("xuid")
+                        titles = payload["content"].get("titles", [])
+                    else:
+                        xuid = payload.get("xuid")
+                        titles = payload.get("titles", [])
+                elif isinstance(payload, list):
+                    titles = payload
                 else:
-                    xuid = payload.get("xuid")
-                    titles = payload.get("titles", [])
-            elif isinstance(payload, list):
-                titles = payload
-            else:
-                titles = []
+                    titles = []
 
             if not xuid:
                 try:
@@ -222,11 +239,19 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
                 except Exception:
                     last_played = None
 
-            cover_url = t.get("displayImage") or None
+            # Select cover art: Prioritize vertical 2:3 Poster (prevents logo clipping), then BoxArt, then displayImage
+            poster_url = None
+            boxart_url = None
             for img in (t.get("images") or []):
-                if img.get("type") in ("Poster", "BoxArt") and img.get("url"):
-                    cover_url = img["url"]
+                itype = img.get("type")
+                iurl = img.get("url")
+                if itype == "Poster" and iurl:
+                    poster_url = iurl
                     break
+                elif itype == "BoxArt" and iurl and not boxart_url:
+                    boxart_url = iurl
+
+            cover_url = poster_url or boxart_url or t.get("displayImage") or None
             playtime_mins = playtime_map.get(str(title_id), float(t.get("minutesPlayed") or 0.0))
             playtime_hours = round(playtime_mins / 60.0, 2)
 

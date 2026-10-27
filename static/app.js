@@ -61,6 +61,7 @@ const state = {
   search: "",
   sortBy: "playtime_desc",
   favoriteOnly: false,
+  viewMode: localStorage.getItem("vertex_view_mode") || "grid",
   triageQueue: [],
   triageIndex: 0,
   triageScope: "unlocked",
@@ -73,16 +74,22 @@ const state = {
 };
 
 function updateTriageButtonBadge() {
-  const btn = document.getElementById("btn-open-triage");
-  if (!btn) return;
   const untriagedCount = state.games.filter((g) => !g.status_locked).length;
-  btn.innerHTML = "";
-  btn.appendChild(document.createTextNode("⚡ Quick Triage "));
-  if (untriagedCount > 0) {
-    const badge = document.createElement("span");
-    badge.className = "triage-badge-pill";
-    badge.textContent = untriagedCount;
-    btn.appendChild(badge);
+  const btn = document.getElementById("btn-open-triage");
+  if (btn) {
+    btn.innerHTML = "";
+    btn.appendChild(document.createTextNode("⚡ Quick Triage "));
+    if (untriagedCount > 0) {
+      const badge = document.createElement("span");
+      badge.className = "triage-badge-pill";
+      badge.textContent = untriagedCount;
+      btn.appendChild(badge);
+    }
+  }
+  const mBadge = document.getElementById("mnav-triage-badge");
+  if (mBadge) {
+    mBadge.textContent = untriagedCount;
+    mBadge.hidden = untriagedCount <= 0;
   }
 }
 
@@ -91,14 +98,68 @@ function updateReconcileButtonBadge(count) {
     state.reconcileCandidatesCount = count;
   }
   const btn = document.getElementById("btn-open-reconcile");
-  if (!btn) return;
-  btn.innerHTML = "";
-  btn.appendChild(document.createTextNode("🔗 Reconcile "));
-  if (state.reconcileCandidatesCount > 0) {
-    const badge = document.createElement("span");
-    badge.className = "triage-badge-pill";
-    badge.textContent = state.reconcileCandidatesCount;
-    btn.appendChild(badge);
+  if (btn) {
+    btn.innerHTML = "";
+    btn.appendChild(document.createTextNode("🔗 Reconcile "));
+    if (state.reconcileCandidatesCount > 0) {
+      const badge = document.createElement("span");
+      badge.className = "triage-badge-pill";
+      badge.textContent = state.reconcileCandidatesCount;
+      btn.appendChild(badge);
+    }
+  }
+  const mBadge = document.getElementById("mnav-reconcile-badge");
+  if (mBadge) {
+    mBadge.textContent = state.reconcileCandidatesCount;
+    mBadge.hidden = state.reconcileCandidatesCount <= 0;
+  }
+}
+
+function updateActiveFiltersUI() {
+  const count =
+    (state.genre ? 1 : 0) +
+    (state.status ? 1 : 0) +
+    (state.favoriteOnly ? 1 : 0) +
+    (state.sortBy !== "playtime_desc" ? 1 : 0);
+
+  const badge = document.getElementById("active-filter-badge");
+  if (badge) {
+    badge.textContent = count;
+    badge.hidden = count === 0;
+  }
+
+  const resetBtn = document.getElementById("btn-reset-filters");
+  if (resetBtn) {
+    resetBtn.hidden =
+      !state.genre &&
+      !state.status &&
+      !state.favoriteOnly &&
+      !state.platform &&
+      !state.search &&
+      state.sortBy === "playtime_desc";
+  }
+
+  for (const card of document.querySelectorAll(".metric-card.metric-interactive")) {
+    const targetStatus = card.dataset.filterStatus || "";
+    card.classList.toggle("active", state.status === targetStatus);
+  }
+}
+
+function applyViewMode(mode) {
+  state.viewMode = mode === "list" ? "list" : "grid";
+  localStorage.setItem("vertex_view_mode", state.viewMode);
+  const grid = document.getElementById("games-grid");
+  if (grid) {
+    grid.classList.toggle("list-view", state.viewMode === "list");
+  }
+  const gridBtn = document.getElementById("btn-view-grid");
+  const listBtn = document.getElementById("btn-view-list");
+  if (gridBtn && listBtn) {
+    const isList = state.viewMode === "list";
+    gridBtn.classList.toggle("active", !isList);
+    gridBtn.setAttribute("aria-pressed", String(!isList));
+    listBtn.classList.toggle("active", isList);
+    listBtn.setAttribute("aria-pressed", String(isList));
   }
 }
 
@@ -112,6 +173,50 @@ function makeFallbackCover(title, platform) {
     <text x="150" y="235" fill="#f1f5f9" font-family="sans-serif" font-weight="bold" font-size="18" text-anchor="middle">${safeTitle.slice(0, 24)}</text>
   </svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc) {
+  if (!wrapper || !img) return;
+
+  let attemptedFallbackHeader = false;
+
+  const handleRatio = () => {
+    if (img.naturalWidth && img.naturalHeight) {
+      const ratio = img.naturalWidth / img.naturalHeight;
+      // 2:3 aspect ratio is ~0.667. If > 0.72 (e.g. 1.0 square or wide landscape),
+      // standard object-fit: cover would crop the left and right sides.
+      // Switch to ambient blurred contain mode so the entire logo and artwork remain visible.
+      if (ratio > 0.72) {
+        wrapper.classList.add("cover-ambient");
+        wrapper.style.setProperty("--cover-bg", `url("${img.currentSrc || img.src}")`);
+      } else {
+        wrapper.classList.remove("cover-ambient");
+        wrapper.style.removeProperty("--cover-bg");
+      }
+    }
+  };
+
+  img.addEventListener("load", handleRatio);
+
+  img.addEventListener("error", () => {
+    // If a Steam library_600x900.jpg 404s, attempt Steam header.jpg before falling back to SVG
+    if (!attemptedFallbackHeader && img.src && img.src.includes("steamstatic.com") && img.src.includes("library_600x900.jpg")) {
+      attemptedFallbackHeader = true;
+      img.src = img.src.replace("library_600x900.jpg", "header.jpg");
+      return;
+    }
+    wrapper.classList.remove("cover-ambient");
+    wrapper.style.removeProperty("--cover-bg");
+    img.src = fallbackSrc;
+  });
+
+  if (targetSrc) {
+    img.src = targetSrc;
+  }
+
+  if (img.complete && img.naturalWidth) {
+    handleRatio();
+  }
 }
 
 async function fetchStats() {
@@ -218,6 +323,8 @@ function renderGames() {
   const countEl = document.getElementById("results-count");
   countEl.textContent = state.games.length;
   grid.innerHTML = "";
+  grid.classList.toggle("list-view", state.viewMode === "list");
+  updateActiveFiltersUI();
 
   if (state.games.length === 0) {
     const empty = document.createElement("div");
@@ -230,9 +337,10 @@ function renderGames() {
     return;
   }
 
-  for (const game of state.games) {
+  for (let i = 0; i < state.games.length; i++) {
+    const game = state.games[i];
     const card = document.createElement("article");
-    card.className = "game-card";
+    card.className = i >= 12 ? "game-card deferred-card" : "game-card";
     card.tabIndex = 0;
 
     const fallbackSrc = makeFallbackCover(game.title, game.platform);
@@ -242,14 +350,11 @@ function renderGames() {
     wrapper.className = "cover-wrapper";
 
     const img = document.createElement("img");
-    img.src = imgSrc;
     img.alt = `${game.title} cover art`;
     img.width = 300;
     img.height = 450;
-    img.loading = "lazy";
-    img.addEventListener("error", () => {
-      img.src = fallbackSrc;
-    });
+    img.loading = i < 6 ? "eager" : "lazy";
+    attachCoverAspectObserver(wrapper, img, fallbackSrc, imgSrc);
     wrapper.appendChild(img);
 
     const platBadge = document.createElement("span");
@@ -281,11 +386,21 @@ function renderGames() {
     h3.textContent = game.title;
     body.appendChild(h3);
 
+    const subrow = document.createElement("div");
+    subrow.className = "card-list-subrow";
+
+    const listPlat = document.createElement("span");
+    listPlat.className = "card-list-plat";
+    listPlat.textContent = game.platform;
+    subrow.appendChild(listPlat);
+
     const genres = document.createElement("div");
     genres.className = "card-genres";
     const genreText = (game.genres || []).join(", ");
     genres.textContent = genreText || (game.release_year ? `Released ${game.release_year}` : game.source);
-    body.appendChild(genres);
+    subrow.appendChild(genres);
+
+    body.appendChild(subrow);
 
     const footer = document.createElement("div");
     footer.className = "card-footer";
@@ -549,11 +664,9 @@ function openEditModal(game) {
 
   const fallbackSrc = makeFallbackCover(game.title, game.platform);
   const coverPreview = document.getElementById("edit-cover-preview");
-  if (coverPreview) {
-    coverPreview.src = game.cover_url || fallbackSrc;
-    coverPreview.onerror = () => {
-      coverPreview.src = fallbackSrc;
-    };
+  const coverWrap = coverPreview ? coverPreview.closest(".cover-wrapper") : null;
+  if (coverPreview && coverWrap) {
+    attachCoverAspectObserver(coverWrap, coverPreview, fallbackSrc, game.cover_url || fallbackSrc);
   }
 
   const achTile = document.getElementById("edit-ach-tile");
@@ -597,6 +710,7 @@ function openEditModal(game) {
   if (!dialog.open) {
     dialog.showModal();
   }
+  dialog.scrollTop = 0;
 }
 
 let reconcileToastTimer = null;
@@ -619,6 +733,7 @@ async function openReconcileModal() {
   if (!dialog.open) {
     dialog.showModal();
   }
+  dialog.scrollTop = 0;
   await reloadReconcileQueue(state.reconcileScope);
 }
 
@@ -1191,6 +1306,7 @@ async function openTriageModal() {
   if (!dialog.open) {
     dialog.showModal();
   }
+  dialog.scrollTop = 0;
   await reloadTriageQueue(state.triageScope);
 }
 
@@ -1257,10 +1373,10 @@ function renderTriageCard() {
   const game = queue[idx];
   const fallbackSrc = makeFallbackCover(game.title, game.platform);
   const imgEl = document.getElementById("triage-img");
-  imgEl.onerror = () => {
-    imgEl.src = fallbackSrc;
-  };
-  imgEl.src = game.cover_url || fallbackSrc;
+  const triageWrap = imgEl ? imgEl.closest(".cover-wrapper") : null;
+  if (imgEl && triageWrap) {
+    attachCoverAspectObserver(triageWrap, imgEl, fallbackSrc, game.cover_url || fallbackSrc);
+  }
   imgEl.alt = `${game.title} cover art`;
 
   // Preload next game's cover art for instant transition
@@ -1427,14 +1543,173 @@ async function handleCatalogSearch() {
   }
 }
 
+function syncAddFavButton(isFav) {
+  const favCheck = document.getElementById("add-favorite");
+  const favBtn = document.getElementById("btn-add-fav");
+  if (favCheck) favCheck.checked = Boolean(isFav);
+  if (favBtn) {
+    favBtn.setAttribute("aria-pressed", String(Boolean(isFav)));
+    favBtn.textContent = isFav ? "★ Favorited" : "☆ Favorite";
+  }
+}
+
+function attachHorizontalSwipe(el, onSwipeLeft, onSwipeRight) {
+  if (!el) return;
+  let startX = 0;
+  let startY = 0;
+  let tracking = false;
+
+  el.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length !== 1) return;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      tracking = true;
+    },
+    { passive: true }
+  );
+
+  el.addEventListener(
+    "touchend",
+    (e) => {
+      if (!tracking || e.changedTouches.length !== 1) return;
+      tracking = false;
+      const dx = e.changedTouches[0].clientX - startX;
+      const dy = e.changedTouches[0].clientY - startY;
+      if (Math.abs(dx) >= 60 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+        if (dx < 0 && onSwipeLeft) onSwipeLeft();
+        if (dx > 0 && onSwipeRight) onSwipeRight();
+      }
+    },
+    { passive: true }
+  );
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  applyViewMode(state.viewMode);
   fetchStats();
   fetchGames();
+
+  // Register Service Worker for PWA installability & offline resilience
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/sw.js").catch((err) => {
+      console.warn("Service worker registration skipped:", err);
+    });
+  }
+
+  // PWA Install Banner (Android beforeinstallprompt & iOS Safari hint)
+  let deferredInstallPrompt = null;
+  const installBanner = document.getElementById("pwa-install-banner");
+  const installBtn = document.getElementById("btn-pwa-install");
+  const dismissInstallBtn = document.getElementById("btn-pwa-dismiss");
+  const installSubtext = document.getElementById("pwa-install-subtext");
+  const isStandalone =
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true;
+  const installDismissed = localStorage.getItem("vertex_pwa_dismissed") === "1";
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    if (!isStandalone && !installDismissed && installBanner) {
+      installBanner.hidden = false;
+    }
+  });
+
+  // Detect iOS Safari (non-standalone) to show helpful Add to Home Screen instructions
+  const ua = window.navigator.userAgent || "";
+  const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  if (isIOS && !isStandalone && !installDismissed && installBanner && installSubtext && installBtn) {
+    installSubtext.textContent = "Tap Share ⎋ in Safari, then 'Add to Home Screen' for the full-screen app.";
+    installBtn.hidden = true;
+    installBanner.hidden = false;
+  }
+
+  if (installBtn) {
+    installBtn.addEventListener("click", async () => {
+      if (!deferredInstallPrompt) return;
+      deferredInstallPrompt.prompt();
+      await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      if (installBanner) installBanner.hidden = true;
+    });
+  }
+
+  if (dismissInstallBtn) {
+    dismissInstallBtn.addEventListener("click", () => {
+      localStorage.setItem("vertex_pwa_dismissed", "1");
+      if (installBanner) installBanner.hidden = true;
+    });
+  }
 
   // Filter form prevent default submit
   document.getElementById("filter-form").addEventListener("submit", (e) => {
     e.preventDefault();
   });
+
+  // View Mode Switch (Grid / List)
+  const viewGridBtn = document.getElementById("btn-view-grid");
+  const viewListBtn = document.getElementById("btn-view-list");
+  if (viewGridBtn) {
+    viewGridBtn.addEventListener("click", () => applyViewMode("grid"));
+  }
+  if (viewListBtn) {
+    viewListBtn.addEventListener("click", () => applyViewMode("list"));
+  }
+
+  // Mobile Filter Drawer Toggle
+  const toggleFiltersBtn = document.getElementById("btn-toggle-filters");
+  const filterDrawer = document.getElementById("filter-selects-drawer");
+  if (toggleFiltersBtn && filterDrawer) {
+    toggleFiltersBtn.addEventListener("click", () => {
+      const isOpen = filterDrawer.classList.toggle("is-open");
+      toggleFiltersBtn.setAttribute("aria-expanded", String(isOpen));
+    });
+  }
+
+  // Interactive Metric Pills (tap to filter status)
+  for (const card of document.querySelectorAll(".metric-card.metric-interactive")) {
+    const activateMetricFilter = () => {
+      const targetStatus = card.dataset.filterStatus || "";
+      state.status = state.status === targetStatus && targetStatus !== "" ? "" : targetStatus;
+      const statusSelect = document.getElementById("status-filter");
+      if (statusSelect) statusSelect.value = state.status;
+      updateActiveFiltersUI();
+      fetchGames();
+    };
+    card.addEventListener("click", activateMetricFilter);
+    card.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        activateMetricFilter();
+      }
+    });
+  }
+
+  // Reset Filters button
+  const resetFiltersBtn = document.getElementById("btn-reset-filters");
+  if (resetFiltersBtn) {
+    resetFiltersBtn.addEventListener("click", () => {
+      state.platform = "";
+      state.status = "";
+      state.genre = "";
+      state.search = "";
+      state.sortBy = "playtime_desc";
+      state.favoriteOnly = false;
+
+      document.getElementById("search-input").value = "";
+      document.getElementById("status-filter").value = "";
+      document.getElementById("genre-filter").value = "";
+      document.getElementById("sort-select").value = "playtime_desc";
+      document.getElementById("btn-fav-toggle").setAttribute("aria-pressed", "false");
+      for (const p of document.querySelectorAll("#platform-pills .pill")) {
+        p.classList.toggle("active", p.dataset.platform === "");
+      }
+      updateActiveFiltersUI();
+      fetchGames();
+    });
+  }
 
   // Search input
   let searchTimer = null;
@@ -1442,6 +1717,7 @@ document.addEventListener("DOMContentLoaded", () => {
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => {
       state.search = e.target.value.trim();
+      updateActiveFiltersUI();
       fetchGames();
     }, 200);
   });
@@ -1455,6 +1731,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     btn.classList.add("active");
     state.platform = btn.dataset.platform || "";
+    updateActiveFiltersUI();
     fetchGames();
   });
 
@@ -1463,17 +1740,20 @@ document.addEventListener("DOMContentLoaded", () => {
   if (genreFilterEl) {
     genreFilterEl.addEventListener("change", (e) => {
       state.genre = e.target.value;
+      updateActiveFiltersUI();
       fetchGames();
     });
   }
 
   document.getElementById("status-filter").addEventListener("change", (e) => {
     state.status = e.target.value;
+    updateActiveFiltersUI();
     fetchGames();
   });
 
   document.getElementById("sort-select").addEventListener("change", (e) => {
     state.sortBy = e.target.value;
+    updateActiveFiltersUI();
     fetchGames();
   });
 
@@ -1482,33 +1762,63 @@ document.addEventListener("DOMContentLoaded", () => {
   favBtn.addEventListener("click", () => {
     state.favoriteOnly = !state.favoriteOnly;
     favBtn.setAttribute("aria-pressed", String(state.favoriteOnly));
+    updateActiveFiltersUI();
     fetchGames();
   });
 
-  // Trigger Sync
+  // Trigger Sync (Header + Mobile Bottom Nav)
   const syncBtn = document.getElementById("btn-sync");
-  syncBtn.addEventListener("click", async () => {
-    syncBtn.disabled = true;
-    syncBtn.textContent = "Syncing...";
+  const mnavSyncBtn = document.getElementById("mnav-sync");
+  const mnavSyncIcon = document.getElementById("mnav-sync-icon");
+  const mnavSyncLabel = document.getElementById("mnav-sync-label");
+
+  async function triggerLibrarySync() {
+    if (syncBtn) {
+      syncBtn.disabled = true;
+      syncBtn.textContent = "Syncing...";
+    }
+    if (mnavSyncBtn) mnavSyncBtn.disabled = true;
+    if (mnavSyncIcon) mnavSyncIcon.classList.add("spin-anim");
+    if (mnavSyncLabel) mnavSyncLabel.textContent = "Syncing";
     try {
       await fetch("/api/sync", { method: "POST" });
       await fetchStats();
       await fetchGames();
     } finally {
-      syncBtn.disabled = false;
-      syncBtn.textContent = "Sync Libraries";
+      if (syncBtn) {
+        syncBtn.disabled = false;
+        syncBtn.textContent = "Sync Libraries";
+      }
+      if (mnavSyncBtn) mnavSyncBtn.disabled = false;
+      if (mnavSyncIcon) mnavSyncIcon.classList.remove("spin-anim");
+      if (mnavSyncLabel) mnavSyncLabel.textContent = "Sync";
     }
-  });
+  }
+
+  syncBtn.addEventListener("click", triggerLibrarySync);
+  if (mnavSyncBtn) {
+    mnavSyncBtn.addEventListener("click", triggerLibrarySync);
+  }
 
   // Add Game Dialog
   const addDialog = document.getElementById("add-game-dialog");
-  document.getElementById("btn-open-add").addEventListener("click", () => {
+  function openAddGameModal() {
     document.getElementById("add-game-form").reset();
+    syncAddFavButton(false);
     document.getElementById("catalog-results").hidden = true;
     addDialog.showModal();
-  });
+  }
+  document.getElementById("btn-open-add").addEventListener("click", openAddGameModal);
   document.getElementById("btn-close-add").addEventListener("click", () => addDialog.close());
   document.getElementById("btn-cancel-add").addEventListener("click", () => addDialog.close());
+
+  const addFavBtn = document.getElementById("btn-add-fav");
+  if (addFavBtn) {
+    addFavBtn.addEventListener("click", () => {
+      const favCheck = document.getElementById("add-favorite");
+      syncAddFavButton(!favCheck.checked);
+    });
+  }
 
   document.getElementById("btn-catalog-lookup").addEventListener("click", handleCatalogSearch);
   document.getElementById("catalog-search-input").addEventListener("keydown", (e) => {
@@ -1536,6 +1846,7 @@ document.addEventListener("DOMContentLoaded", () => {
       cover_url: document.getElementById("add-cover").value.trim() || null,
       genres,
       notes: document.getElementById("add-notes").value.trim(),
+      favorite: Boolean(document.getElementById("add-favorite")?.checked),
     };
 
     const res = await fetch("/api/games", {
@@ -1807,6 +2118,90 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("btn-triage-fav").addEventListener("click", toggleTriageFavorite);
   document.getElementById("btn-triage-prev").addEventListener("click", () => stepTriage(-1));
   document.getElementById("btn-triage-skip").addEventListener("click", () => stepTriage(1));
+
+  // Touch swipe navigation on Triage & Reconcile cards (swipe left = next/skip, swipe right = previous)
+  attachHorizontalSwipe(
+    document.getElementById("triage-card"),
+    () => stepTriage(1),
+    () => stepTriage(-1)
+  );
+  attachHorizontalSwipe(
+    document.getElementById("reconcile-card"),
+    () => stepReconcile(1),
+    () => stepReconcile(-1)
+  );
+
+  // Mobile Bottom Navigation Bar wiring
+  const mnavLibrary = document.getElementById("mnav-library");
+  const mnavTriage = document.getElementById("mnav-triage");
+  const mnavAdd = document.getElementById("mnav-add");
+  const mnavReconcile = document.getElementById("mnav-reconcile");
+
+  function setMobileNavActive(activeId) {
+    for (const item of document.querySelectorAll(".mobile-bottom-nav .mnav-item")) {
+      item.classList.toggle("active", item.id === activeId);
+    }
+  }
+
+  if (mnavLibrary) {
+    mnavLibrary.addEventListener("click", () => {
+      for (const d of document.querySelectorAll("dialog[open]")) {
+        d.close();
+      }
+      setMobileNavActive("mnav-library");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+  if (mnavTriage) {
+    mnavTriage.addEventListener("click", () => {
+      setMobileNavActive("mnav-triage");
+      openTriageModal();
+    });
+  }
+  if (mnavAdd) {
+    mnavAdd.addEventListener("click", () => {
+      openAddGameModal();
+    });
+  }
+  if (mnavReconcile) {
+    mnavReconcile.addEventListener("click", () => {
+      setMobileNavActive("mnav-reconcile");
+      openReconcileModal();
+    });
+  }
+
+  triageDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
+  reconcileDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
+  addDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
+
+  // Floating Scroll-to-Top Button
+  const scrollTopBtn = document.getElementById("btn-scroll-top");
+  if (scrollTopBtn) {
+    window.addEventListener(
+      "scroll",
+      () => {
+        scrollTopBtn.hidden = window.scrollY < 520;
+      },
+      { passive: true }
+    );
+    scrollTopBtn.addEventListener("click", () => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+  }
+
+  // Handle PWA Home Screen Shortcut URLs (?action=add | ?action=triage | ?action=reconcile)
+  const urlParams = new URLSearchParams(window.location.search);
+  const actionParam = urlParams.get("action");
+  if (actionParam === "add") {
+    openAddGameModal();
+    window.history.replaceState({}, "", "/");
+  } else if (actionParam === "triage") {
+    openTriageModal();
+    window.history.replaceState({}, "", "/");
+  } else if (actionParam === "reconcile") {
+    openReconcileModal();
+    window.history.replaceState({}, "", "/");
+  }
 
   // Global keyboard shortcuts while Quick Triage or Reconcile modal is open
   const keyToStatus = {

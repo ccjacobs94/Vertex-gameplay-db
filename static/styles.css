@@ -388,6 +388,49 @@ textarea:focus {
   inline-size: 100%;
   block-size: 100%;
   object-fit: cover;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), filter 0.25s ease;
+}
+
+.game-card:hover .cover-wrapper:not(.cover-ambient) img {
+  transform: scale(1.03);
+}
+
+/* Ambient backdrop mode for square (1:1) or landscape artwork so logos and titles are never clipped */
+.cover-wrapper.cover-ambient {
+  background-color: #080d19;
+}
+
+.cover-wrapper.cover-ambient::before {
+  content: "";
+  position: absolute;
+  inset: -15px;
+  background-image: var(--cover-bg);
+  background-size: cover;
+  background-position: center;
+  filter: blur(18px) brightness(0.38) saturate(1.35);
+  transform: scale(1.18);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.cover-wrapper.cover-ambient img {
+  position: relative;
+  z-index: 1;
+  object-fit: contain;
+  padding-block: 0.35rem;
+  padding-inline: 0.15rem;
+  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.55));
+}
+
+.game-card:hover .cover-wrapper.cover-ambient img {
+  transform: scale(1.02);
+}
+
+.cover-wrapper .platform-badge,
+.cover-wrapper .fav-star,
+.cover-wrapper .rating-badge,
+.cover-wrapper .triage-fav-btn {
+  z-index: 2;
 }
 
 .platform-badge {
@@ -1803,4 +1846,785 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 
 .edit-advanced-body {
   margin-block-start: 0.65rem;
+}
+
+/* ==========================================================================
+   PWA, View Modes (Grid & List), Interactive Metrics & Mobile Native UX
+   ========================================================================== */
+
+/* PWA Install Banner */
+.pwa-install-banner {
+  background: linear-gradient(90deg, #131b2e 0%, #1e293b 100%);
+  border-block-end: 1px solid rgba(56, 189, 248, 0.35);
+  padding-block: 0.65rem;
+  padding-inline: max(1rem, env(safe-area-inset-left)) max(1rem, env(safe-area-inset-right));
+  display: flex;
+  align-items: safe center;
+  justify-content: space-between;
+  gap: 0.85rem;
+}
+
+.pwa-install-content {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-inline-size: 0;
+}
+
+.pwa-install-icon {
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.pwa-install-text {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.82rem;
+  min-inline-size: 0;
+}
+
+.pwa-install-text strong {
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+
+.pwa-install-text span {
+  color: var(--text-secondary);
+}
+
+.pwa-install-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+/* Interactive Metric Cards */
+.metric-card.metric-interactive {
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.12s ease;
+}
+
+.metric-card.metric-interactive:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-1px);
+}
+
+.metric-card.metric-interactive.active {
+  border-color: var(--accent-primary);
+  background-color: rgba(59, 130, 246, 0.12);
+}
+
+/* Search & Tools Row */
+.search-and-tools-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex: 1 1 280px;
+  min-inline-size: 0;
+}
+
+.mobile-quick-tools {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.mobile-filter-btn {
+  display: none;
+}
+
+.view-mode-switch {
+  display: inline-flex;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+
+.view-mode-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  inline-size: 34px;
+  block-size: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.05rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.view-mode-btn:hover {
+  color: var(--text-primary);
+}
+
+.view-mode-btn.active {
+  background-color: var(--accent-primary);
+  color: #ffffff;
+}
+
+/* Off-screen rendering performance for large libraries (below initial fold) */
+.game-card.deferred-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto none auto 380px;
+}
+
+.games-grid.list-view .game-card.deferred-card {
+  contain-intrinsic-size: auto none auto 88px;
+}
+
+/* Compact List View Mode (Desktop & Mobile) */
+.games-grid.list-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.games-grid.list-view .game-card {
+  display: grid;
+  grid-template-columns: 56px 1fr auto;
+  grid-template-rows: auto;
+  grid-row: auto;
+  align-items: center;
+  gap: 0.85rem;
+  padding-block: 0.5rem;
+  padding-inline: 0.65rem;
+}
+
+.games-grid.list-view .cover-wrapper {
+  inline-size: 56px;
+  block-size: 84px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
+.games-grid.list-view .cover-wrapper .platform-badge,
+.games-grid.list-view .cover-wrapper .rating-badge {
+  display: none;
+}
+
+.games-grid.list-view .cover-wrapper .fav-star {
+  inset-block-start: 2px;
+  inset-inline-end: 2px;
+  padding: 0 3px;
+  font-size: 0.68rem;
+}
+
+.games-grid.list-view .card-body {
+  padding: 0;
+  gap: 0.2rem;
+}
+
+.games-grid.list-view .card-title {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  font-size: 0.96rem;
+}
+
+.games-grid.list-view .card-list-subrow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.card-list-plat {
+  display: none;
+  padding-block: 0.08rem;
+  padding-inline: 0.45rem;
+  border-radius: 4px;
+  background-color: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.7rem;
+}
+
+.games-grid.list-view .card-list-plat {
+  display: inline-block;
+}
+
+.games-grid.list-view .card-footer {
+  padding: 0;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+
+/* Sheet Drag Handle (hidden on desktop, visible on mobile bottom sheets) */
+.sheet-drag-handle {
+  display: none;
+  inline-size: 40px;
+  block-size: 5px;
+  border-radius: 999px;
+  background-color: rgba(148, 163, 184, 0.35);
+  margin-inline: auto;
+  margin-block-end: -0.35rem;
+  flex-shrink: 0;
+}
+
+/* Floating Back-to-Top Button */
+.floating-top-btn {
+  position: fixed;
+  inset-block-end: 1.5rem;
+  inset-inline-end: 1.5rem;
+  z-index: 25;
+  background-color: rgba(19, 27, 46, 0.92);
+  backdrop-filter: blur(10px);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-primary);
+  border-radius: 999px;
+  padding-block: 0.55rem;
+  padding-inline: 1rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.floating-top-btn:hover {
+  background-color: var(--accent-primary);
+  color: #ffffff;
+  transform: translateY(-2px);
+}
+
+/* Mobile Bottom Navigation Bar (Hidden on Desktop) */
+.mobile-bottom-nav {
+  display: none;
+}
+
+@keyframes spin-sync {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin-anim {
+  display: inline-block;
+  animation: spin-sync 0.9s linear infinite;
+}
+
+/* ==========================================================================
+   Mobile & Touch Viewport Adaptations (< 768px) — iOS & Android Guidelines
+   ========================================================================== */
+@media (max-width: 768px) {
+  html,
+  body {
+    overflow-x: clip;
+    max-inline-size: 100%;
+  }
+
+  body {
+    padding-block-end: calc(4.75rem + env(safe-area-inset-bottom, 0px));
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Compact Sticky Top App Bar */
+  .site-header {
+    padding-block: 0.65rem;
+    padding-inline: max(1rem, env(safe-area-inset-left)) max(1rem, env(safe-area-inset-right));
+    padding-block-start: max(0.65rem, env(safe-area-inset-top));
+    background-color: rgba(19, 27, 46, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+
+  .brand-logo {
+    inline-size: 34px;
+    block-size: 34px;
+  }
+
+  .brand-group h1 {
+    font-size: 1.3rem;
+  }
+
+  .brand-text .subtitle {
+    font-size: 0.72rem;
+    white-space: nowrap;
+    overflow: clip;
+    text-overflow: ellipsis;
+    max-inline-size: 72dvw;
+  }
+
+  /* Move primary actions to Bottom Navigation Bar on mobile */
+  .header-actions {
+    display: none;
+  }
+
+  .main-container {
+    padding-block: 0.9rem;
+    padding-inline: max(0.85rem, env(safe-area-inset-left)) max(0.85rem, env(safe-area-inset-right));
+    gap: 0.9rem;
+  }
+
+  /* Horizontal Snap-Scrollable Metrics Pill Strip */
+  .metrics-bar {
+    display: flex;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+    gap: 0.6rem;
+    margin-inline: -0.85rem;
+    padding-inline: 0.85rem;
+    padding-block-end: 0.15rem;
+  }
+
+  .metrics-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .metric-card {
+    flex: 0 0 auto;
+    min-inline-size: 122px;
+    padding-block: 0.65rem;
+    padding-inline: 0.9rem;
+    scroll-snap-align: start;
+    border-radius: var(--radius-md);
+  }
+
+  .metric-label {
+    font-size: 0.68rem;
+    white-space: nowrap;
+  }
+
+  .metric-value {
+    font-size: 1.25rem;
+  }
+
+  /* Sticky Search & Collapsible Filter Drawer */
+  .controls-bar {
+    padding: 0.75rem;
+    border-radius: var(--radius-md);
+  }
+
+  .filter-form {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.65rem;
+  }
+
+  .search-and-tools-row {
+    flex: 1 1 auto;
+    inline-size: 100%;
+  }
+
+  /* Prevent iOS Safari auto-zoom by enforcing 16px (1rem) font-size on inputs */
+  input[type="search"],
+  input[type="text"],
+  input[type="url"],
+  input[type="number"],
+  select,
+  textarea {
+    font-size: 1rem;
+    min-block-size: 42px;
+  }
+
+  .mobile-filter-btn {
+    display: inline-flex;
+    min-block-size: 42px;
+    padding-inline: 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .view-mode-btn {
+    inline-size: 38px;
+    block-size: 38px;
+  }
+
+  /* Single-line Horizontal Momentum Scroll for Platform Pills */
+  .platform-pills {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+    margin-inline: -0.75rem;
+    padding-inline: 0.75rem;
+    padding-block-end: 0.1rem;
+  }
+
+  .platform-pills::-webkit-scrollbar {
+    display: none;
+  }
+
+  .pill {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    padding-block: 0.48rem;
+    padding-inline: 0.9rem;
+    font-size: 0.84rem;
+  }
+
+  /* Collapsible Filter Tray on Mobile */
+  .filter-selects {
+    display: none;
+    margin-inline-start: 0;
+    padding-block-start: 0.65rem;
+    border-block-start: 1px solid var(--border-subtle);
+    grid-template-columns: 1fr 1fr;
+    gap: 0.55rem;
+  }
+
+  .filter-selects.is-open {
+    display: grid;
+  }
+
+  .filter-selects select,
+  .filter-selects .btn-chip {
+    inline-size: 100%;
+    justify-content: center;
+  }
+
+  #sort-select {
+    grid-column: 1 / -1;
+  }
+
+  #btn-fav-toggle {
+    grid-column: 1 / -1;
+    min-block-size: 42px;
+  }
+
+  #btn-reset-filters {
+    grid-column: 1 / -1;
+    padding-block: 0.35rem;
+    text-align: center;
+  }
+
+  /* Section Header */
+  .section-header {
+    margin-block-end: 0.65rem;
+    gap: 0.5rem;
+  }
+
+  .section-header h2 {
+    font-size: 1.08rem;
+  }
+
+  .source-indicators {
+    font-size: 0.72rem;
+    gap: 0.35rem;
+  }
+
+  /* 2-Column Poster Grid on Phones */
+  .games-grid:not(.list-view) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .games-grid:not(.list-view) .platform-badge {
+    font-size: 0.66rem;
+    padding-block: 0.14rem;
+    padding-inline: 0.42rem;
+    inset-block-start: 0.35rem;
+    inset-inline-start: 0.35rem;
+  }
+
+  .games-grid:not(.list-view) .rating-badge {
+    font-size: 0.68rem;
+    padding-block: 0.1rem;
+    padding-inline: 0.35rem;
+    inset-block-end: 0.35rem;
+    inset-inline-end: 0.35rem;
+  }
+
+  .games-grid:not(.list-view) .card-body {
+    padding-block: 0.55rem 0.15rem;
+    padding-inline: 0.65rem;
+    gap: 0.2rem;
+  }
+
+  .games-grid:not(.list-view) .card-title {
+    font-size: 0.88rem;
+    line-height: 1.3;
+  }
+
+  .games-grid:not(.list-view) .card-genres {
+    font-size: 0.72rem;
+  }
+
+  .games-grid:not(.list-view) .card-footer {
+    padding-block: 0.35rem 0.65rem;
+    padding-inline: 0.65rem;
+    font-size: 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .card-quick-status {
+    min-block-size: 30px;
+    font-size: 0.72rem;
+    padding-block: 0.2rem;
+    padding-inline: 0.4rem;
+    max-inline-size: 100%;
+  }
+
+  /* Bottom Sheet / Full-Height Mobile Modals */
+  .modal-dialog {
+    position: fixed;
+    left: 0;
+    right: 0;
+    inline-size: 100dvw;
+    min-inline-size: 0;
+    max-inline-size: 100dvw;
+    overflow-x: hidden;
+    block-size: auto;
+    max-block-size: 92dvh;
+    inset-inline: 0;
+    inset-block-start: auto;
+    inset-block-end: 0;
+    margin: 0;
+    border-radius: 20px 20px 0 0;
+    border-inline: none;
+    border-block-end: none;
+    box-shadow: 0 -10px 35px rgba(0, 0, 0, 0.65);
+  }
+
+  .edit-game-modal,
+  .triage-modal,
+  .reconcile-modal {
+    inset-block-start: 6dvh;
+    inset-block-end: 0;
+    block-size: auto;
+    max-block-size: 94dvh;
+  }
+
+  .modal-content {
+    padding-block: 0.75rem calc(1.25rem + env(safe-area-inset-bottom, 0px));
+    padding-inline: 1rem;
+    gap: 0.9rem;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  /* Prevent any child from forcing the sheet wider than the phone screen */
+  .modal-dialog form,
+  .modal-dialog .form-group,
+  .modal-dialog .form-row,
+  .edit-hero-layout,
+  .edit-hero-layout > *,
+  .edit-main-fields,
+  .edit-primary-row,
+  .edit-cover-sidebar > *,
+  .linked-copies-panel,
+  .catalog-lookup {
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  .edit-status-group,
+  .edit-rating-group {
+    flex: 1 1 100%;
+  }
+
+  .edit-modal-header {
+    flex-wrap: wrap;
+  }
+
+  .edit-header-left {
+    flex: 1 1 0;
+  }
+
+  .edit-header-left h2 {
+    overflow-wrap: anywhere;
+  }
+
+  .sheet-drag-handle {
+    display: block;
+  }
+
+  .modal-header {
+    position: sticky;
+    inset-block-start: 0;
+    background-color: var(--bg-surface);
+    z-index: 5;
+    padding-block: 0.45rem 0.65rem;
+  }
+
+  .modal-header h2 {
+    font-size: 1.12rem;
+  }
+
+  /* Compact side-by-side cover + stats header inside Edit Game on mobile */
+  .edit-hero-layout {
+    grid-template-columns: 1fr;
+    gap: 1rem;
+  }
+
+  .edit-cover-sidebar {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    gap: 0.85rem;
+    align-items: start;
+  }
+
+  .edit-readonly-stats {
+    gap: 0.45rem;
+  }
+
+  .edit-stat-tile {
+    padding-block: 0.4rem;
+    padding-inline: 0.6rem;
+  }
+
+  .edit-stat-value {
+    font-size: 0.88rem;
+  }
+
+  .modal-footer {
+    position: sticky;
+    inset-block-end: 0;
+    background-color: var(--bg-surface);
+    z-index: 5;
+    padding-block: 0.75rem 0.25rem;
+    flex-wrap: wrap;
+  }
+
+  /* Touch-Friendly 5x2 Grid for 1-10 Rating Pills on Mobile */
+  .triage-rating-pills,
+  .edit-rating-pills {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.4rem;
+    inline-size: 100%;
+  }
+
+  .rating-pill,
+  .edit-rating-pills .rating-pill {
+    inline-size: 100%;
+    block-size: 40px;
+    font-size: 0.9rem;
+  }
+
+  .triage-action-btn {
+    min-block-size: 46px;
+    padding-block: 0.65rem;
+  }
+
+  .triage-action-btn kbd {
+    display: none;
+  }
+
+  .lookup-row {
+    flex-direction: column;
+  }
+
+  .lookup-row .btn {
+    inline-size: 100%;
+    justify-content: center;
+    min-block-size: 42px;
+  }
+
+  /* Floating Top Button above Bottom Nav */
+  .floating-top-btn {
+    inset-block-end: calc(5.1rem + env(safe-area-inset-bottom, 0px));
+    inset-inline-end: 1rem;
+    padding-block: 0.5rem;
+    padding-inline: 0.85rem;
+  }
+
+  /* Native-Style Bottom Navigation Bar */
+  .mobile-bottom-nav {
+    position: fixed;
+    inset-block-end: 0;
+    inset-inline: 0;
+    z-index: 30;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    align-items: center;
+    background-color: rgba(15, 22, 38, 0.92);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border-block-start: 1px solid var(--border-subtle);
+    padding-block-start: 0.35rem;
+    padding-block-end: max(0.4rem, env(safe-area-inset-bottom, 0px));
+    padding-inline: env(safe-area-inset-left, 0px) env(safe-area-inset-right, 0px);
+  }
+
+  .mnav-item {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.18rem;
+    padding-block: 0.25rem;
+    padding-inline: 0.2rem;
+    cursor: pointer;
+    font-family: inherit;
+    min-block-size: 48px;
+    transition: color 0.15s ease, transform 0.1s ease;
+  }
+
+  .mnav-item:active {
+    transform: scale(0.94);
+  }
+
+  .mnav-item.active {
+    color: #38bdf8;
+  }
+
+  .mnav-icon-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .mnav-icon {
+    font-size: 1.2rem;
+    line-height: 1;
+  }
+
+  .mnav-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+  }
+
+  .mnav-badge {
+    position: absolute;
+    inset-block-start: -5px;
+    inset-inline-end: -12px;
+    background-color: var(--warning);
+    color: #0b0f19;
+    font-size: 0.62rem;
+    font-weight: 800;
+    padding-block: 0.05rem;
+    padding-inline: 0.32rem;
+    border-radius: 999px;
+    line-height: 1.2;
+  }
+
+  .mnav-item-primary .mnav-fab {
+    inline-size: 36px;
+    block-size: 36px;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #38bdf8, #2563eb);
+    color: #ffffff;
+    font-size: 1.25rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.45);
+    margin-block-start: -0.35rem;
+  }
+
+  .mnav-item-primary .mnav-label {
+    color: var(--text-primary);
+  }
 }
