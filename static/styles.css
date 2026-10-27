@@ -77,10 +77,39 @@ body {
   gap: 1rem;
 }
 
+.brand-group {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.brand-logo {
+  inline-size: 40px;
+  block-size: 40px;
+  border-radius: var(--radius-sm);
+  filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.25));
+  transition: transform 0.2s ease, filter 0.2s ease;
+  flex-shrink: 0;
+}
+
+.brand-logo:hover {
+  transform: scale(1.06);
+  filter: drop-shadow(0 0 16px rgba(139, 92, 246, 0.45));
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+}
+
 .brand-group h1 {
   margin: 0;
-  font-size: 1.5rem;
-  letter-spacing: -0.02em;
+  font-size: 1.55rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 45%, #38bdf8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .subtitle {
