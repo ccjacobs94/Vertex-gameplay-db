@@ -1,13 +1,16 @@
 {
+  "id": "/",
   "name": "Vertex | Unified Game Nexus",
   "short_name": "Vertex",
   "description": "The Apex of Your Gaming Universe — Steam, Xbox, PlayStation & Nintendo Switch library tracker.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
   "orientation": "portrait-primary",
   "background_color": "#0b0f19",
   "theme_color": "#0b0f19",
+  "prefer_related_applications": false,
   "categories": ["games", "entertainment", "utilities"],
   "icons": [
     {
@@ -54,6 +57,19 @@
       "short_name": "Triage",
       "description": "Rapidly organize and rate your untriaged games",
       "url": "/?action=triage",
+      "icons": [
+        {
+          "src": "/static/icons/icon-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    },
+    {
+      "name": "Reconcile Library",
+      "short_name": "Reconcile",
+      "description": "Merge duplicate cross-platform games",
+      "url": "/?action=reconcile",
       "icons": [
         {
           "src": "/static/icons/icon-192.png",

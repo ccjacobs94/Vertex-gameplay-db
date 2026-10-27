@@ -1,12 +1,12 @@
 "use strict";
 
-const CACHE_NAME = "vertex-pwa-v6";
+const CACHE_NAME = "vertex-pwa-v7";
 const STATIC_ASSETS = [
-  "/",
   "/manifest.webmanifest",
   "/static/vertex_logo.svg",
   "/static/icons/icon-192.png",
   "/static/icons/icon-512.png",
+  "/static/icons/icon-maskable-512.png",
   "/static/icons/apple-touch-icon.png",
 ];
 
@@ -42,6 +42,15 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
 
+  // Never cache login/logout or OAuth endpoints
+  if (
+    url.pathname.startsWith("/login") ||
+    url.pathname.startsWith("/logout") ||
+    url.pathname.startsWith("/oauth/")
+  ) {
+    return;
+  }
+
   // Network-first with cache fallback for GET API calls (/api/games, /api/stats)
   if (url.pathname.startsWith("/api/")) {
     event.respondWith(
@@ -62,7 +71,7 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(
     fetch(request)
       .then((response) => {
-        if (response && response.ok) {
+        if (response && response.ok && !response.redirected) {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         }

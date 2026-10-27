@@ -10,14 +10,23 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from urllib.parse import quote
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import mcp_server
+from web_auth import (
+    handle_login_get,
+    handle_login_post,
+    handle_logout,
+    is_public_path,
+    is_request_authenticated,
+    is_web_auth_enabled,
+)
 from db import (
     add_manual_game,
     delete_game,
@@ -188,15 +197,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-class NoCacheStaticMiddleware(BaseHTTPMiddleware):
+class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if request.method != "OPTIONS" and not is_public_path(path):
+            if not is_request_authenticated(request):
+                if path.startswith("/api/"):
+                    return JSONResponse(
+                        {"error": "unauthorized", "detail": "Authentication required"},
+                        status_code=401,
+                    )
+                next_target = path
+                if request.url.query:
+                    next_target = f"{path}?{request.url.query}"
+                return RedirectResponse(url=f"/login?next={quote(next_target)}", status_code=303)
+
         response = await call_next(request)
-        if request.url.path.startswith("/static/"):
+        if path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache"
         return response
 
 
-app.add_middleware(NoCacheStaticMiddleware)
+app.add_middleware(WebAuthAndCacheMiddleware)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -239,6 +261,22 @@ class ReconcileConfirmRequest(BaseModel):
 
 class ReconcileDismissRequest(BaseModel):
     game_ids: List[int] = Field(..., min_length=2)
+
+
+@app.get("/login")
+async def login_page(request: Request) -> Response:
+    return await handle_login_get(request)
+
+
+@app.post("/login")
+async def login_submit(request: Request) -> Response:
+    return await handle_login_post(request)
+
+
+@app.get("/logout")
+@app.post("/logout")
+async def logout_action(request: Request) -> Response:
+    return await handle_logout(request)
 
 
 @app.get("/")
@@ -305,6 +343,7 @@ async def api_get_stats() -> Dict[str, Any]:
         "psn": bool(os.environ.get("PSN_NPSSO")),
     }
     stats["sync_interval_hours"] = SYNC_INTERVAL_HOURS
+    stats["auth_enabled"] = is_web_auth_enabled()
     return stats
 
 

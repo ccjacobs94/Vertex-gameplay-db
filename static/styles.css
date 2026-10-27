@@ -124,6 +124,12 @@ body {
   gap: 0.75rem;
 }
 
+.btn-logout {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
 /* Main Container */
 .main-container {
   max-inline-size: 1400px;

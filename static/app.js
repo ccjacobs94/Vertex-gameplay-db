@@ -768,8 +768,17 @@ function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc) {
 async function fetchStats() {
   try {
     const res = await fetch("/api/stats");
+    if (res.status === 401) {
+      window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+      return;
+    }
     if (!res.ok) return;
     const stats = await res.json();
+
+    const logoutBtn = document.getElementById("btn-logout");
+    if (logoutBtn) {
+      logoutBtn.hidden = !stats.auth_enabled;
+    }
 
     document.getElementById("stat-total-games").textContent = stats.total_games || 0;
     document.getElementById("stat-total-hours").textContent = `${stats.total_playtime_hours || 0} hrs`;
@@ -850,6 +859,10 @@ async function fetchGames() {
 
   try {
     const res = await fetch(`/api/games?${params.toString()}`);
+    if (res.status === 401) {
+      window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+      return;
+    }
     if (!res.ok) return;
     const data = await res.json();
     state.games = data.games || [];
@@ -2297,6 +2310,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const installBanner = document.getElementById("pwa-install-banner");
   const installBtn = document.getElementById("btn-pwa-install");
   const dismissInstallBtn = document.getElementById("btn-pwa-dismiss");
+  const installTitle = document.getElementById("pwa-install-title");
   const installSubtext = document.getElementById("pwa-install-subtext");
   const isStandalone =
     window.matchMedia("(display-mode: standalone)").matches ||
@@ -2307,15 +2321,40 @@ document.addEventListener("DOMContentLoaded", () => {
     e.preventDefault();
     deferredInstallPrompt = e;
     if (!isStandalone && !installDismissed && installBanner) {
+      if (installTitle) installTitle.textContent = "Install Vertex App";
+      if (installSubtext) {
+        installSubtext.textContent = "Add to your home screen for quick full-screen library access.";
+      }
+      if (installBtn) installBtn.hidden = false;
       installBanner.hidden = false;
     }
   });
 
-  // Detect iOS Safari (non-standalone) to show helpful Add to Home Screen instructions
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    if (installBanner) installBanner.hidden = true;
+  });
+
+  // Detect iOS Safari (non-standalone) or Android plain-HTTP (insecure context) to show helpful hint
   const ua = window.navigator.userAgent || "";
   const isIOS = /iPhone|iPad|iPod/i.test(ua);
+  const isAndroid = /Android/i.test(ua);
   if (isIOS && !isStandalone && !installDismissed && installBanner && installSubtext && installBtn) {
     installSubtext.textContent = "Tap Share ⎋ in Safari, then 'Add to Home Screen' for the full-screen app.";
+    installBtn.hidden = true;
+    installBanner.hidden = false;
+  } else if (
+    isAndroid &&
+    !window.isSecureContext &&
+    !isStandalone &&
+    !installDismissed &&
+    installBanner &&
+    installSubtext &&
+    installBtn
+  ) {
+    if (installTitle) installTitle.textContent = "HTTPS Required for Full App Install";
+    installSubtext.textContent =
+      "Open https://vertex.crjacobs.cc in Chrome to install Vertex as a standalone Android app.";
     installBtn.hidden = true;
     installBanner.hidden = false;
   }

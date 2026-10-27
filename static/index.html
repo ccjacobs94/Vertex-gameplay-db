@@ -12,14 +12,14 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=14">
+  <link rel="stylesheet" href="/static/styles.css?v=15">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
     <div class="pwa-install-content">
       <img src="/static/icons/icon-192.png" alt="" width="36" height="36" class="pwa-install-icon">
       <div class="pwa-install-text">
-        <strong>Install Vertex App</strong>
+        <strong id="pwa-install-title">Install Vertex App</strong>
         <span id="pwa-install-subtext">Add to your home screen for quick full-screen library access.</span>
       </div>
     </div>
@@ -51,6 +51,9 @@
         <button type="button" id="btn-open-add" class="btn btn-primary">
           + Add Game
         </button>
+        <a href="/logout" id="btn-logout" class="btn btn-secondary btn-logout" title="Sign Out" hidden>
+          Sign Out
+        </a>
       </div>
     </div>
   </header>
@@ -909,6 +912,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=14"></script>
+  <script src="/static/app.js?v=15"></script>
 </body>
 </html>
