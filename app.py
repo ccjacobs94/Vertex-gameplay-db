@@ -23,6 +23,7 @@ from db import (
     delete_game,
     dismiss_reconcile_group,
     get_game_by_id,
+    get_habits_analytics,
     get_library_stats,
     get_reconcile_candidates,
     init_db,
@@ -301,6 +302,23 @@ async def api_get_stats() -> Dict[str, Any]:
     }
     stats["sync_interval_hours"] = SYNC_INTERVAL_HOURS
     return stats
+
+
+@app.get("/api/analytics")
+async def api_get_analytics(
+    search: Optional[str] = Query(default=None),
+    platform: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    genre: Optional[str] = Query(default=None),
+    favorite_only: bool = Query(default=False),
+) -> Dict[str, Any]:
+    return get_habits_analytics(
+        search=search,
+        platform=platform,
+        status=status,
+        genre=genre,
+        favorite_only=favorite_only,
+    )
 
 
 @app.post("/api/games")

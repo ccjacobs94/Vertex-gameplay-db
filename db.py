@@ -1210,3 +1210,286 @@ def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
         ],
         "last_syncs": last_syncs,
     }
+
+
+def _platform_family(platform: str) -> str:
+    p = (platform or "").lower()
+    if "steam" in p:
+        return "Steam"
+    if "xbox" in p:
+        return "Xbox"
+    if "playstation" in p or "ps4" in p or "ps5" in p or "psn" in p:
+        return "PlayStation"
+    if "switch" in p or "nintendo" in p:
+        return "Nintendo Switch"
+    return platform or "Other"
+
+
+def get_habits_analytics(
+    search: Optional[str] = None,
+    platform: Optional[str] = None,
+    status: Optional[str] = None,
+    genre: Optional[str] = None,
+    favorite_only: bool = False,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Dict[str, Any]:
+    """
+    Compute comprehensive gaming habits analytics, system distributions, genre breakdowns,
+    completion health, eras, and playtime commitment tiers for filtered library subsets.
+    """
+    games = query_games(
+        search=search,
+        platform=platform,
+        status=status,
+        genre=genre,
+        favorite_only=favorite_only,
+        limit=10000,
+        db_path=db_path,
+    )
+    total_games = len(games)
+    total_hours = round(sum(float(g.get("playtime_hours") or 0.0) for g in games), 1)
+
+    played_games = [g for g in games if float(g.get("playtime_hours") or 0.0) > 0]
+    played_count = len(played_games)
+
+    beaten_games = [g for g in games if g.get("completion_status") in ("Beaten", "Completed")]
+    beaten_count = len(beaten_games)
+    dropped_games = [g for g in games if g.get("completion_status") == "Dropped"]
+    dropped_count = len(dropped_games)
+    shelf_of_shame = [g for g in games if g.get("completion_status") in ("Not Played", "Plan to Play")]
+
+    completion_rate = round((beaten_count / max(played_count, 1)) * 100, 1) if played_count > 0 else 0.0
+    drop_rate = round((dropped_count / max(played_count, 1)) * 100, 1) if played_count > 0 else 0.0
+
+    avg_hours = round(total_hours / max(total_games, 1), 1)
+    avg_played_hours = round(total_hours / max(played_count, 1), 1) if played_count > 0 else 0.0
+
+    beaten_hours_sum = sum(float(g.get("playtime_hours") or 0.0) for g in beaten_games)
+    avg_beaten_hours = round(beaten_hours_sum / max(beaten_count, 1), 1) if beaten_count > 0 else 0.0
+
+    dropped_hours_sum = sum(float(g.get("playtime_hours") or 0.0) for g in dropped_games)
+    avg_dropped_hours = round(dropped_hours_sum / max(dropped_count, 1), 1) if dropped_count > 0 else 0.0
+
+    # Platform family breakdown
+    plat_stats: Dict[str, Dict[str, Any]] = {}
+    for g in games:
+        linked = g.get("linked_games") or [g]
+        seen_families = set()
+        for lg in linked:
+            fam = _platform_family(lg.get("platform") or "")
+            if fam not in plat_stats:
+                plat_stats[fam] = {
+                    "name": fam,
+                    "hours": 0.0,
+                    "count": 0,
+                    "beaten_count": 0,
+                    "top_game": None,
+                    "top_game_hours": -1.0,
+                }
+            lg_hours = float(lg.get("playtime_hours") or 0.0)
+            plat_stats[fam]["hours"] = round(plat_stats[fam]["hours"] + lg_hours, 1)
+            if fam not in seen_families:
+                plat_stats[fam]["count"] += 1
+                seen_families.add(fam)
+                if g.get("completion_status") in ("Beaten", "Completed"):
+                    plat_stats[fam]["beaten_count"] += 1
+            if lg_hours > plat_stats[fam]["top_game_hours"]:
+                plat_stats[fam]["top_game_hours"] = lg_hours
+                plat_stats[fam]["top_game"] = {
+                    "id": g["id"],
+                    "title": g["title"],
+                    "hours": lg_hours,
+                    "cover_url": g.get("cover_url"),
+                }
+
+    platform_list: List[Dict[str, Any]] = []
+    for fam, st in sorted(plat_stats.items(), key=lambda x: x[1]["hours"], reverse=True):
+        st["playtime_pct"] = round((st["hours"] / max(total_hours, 0.1)) * 100, 1)
+        st["library_pct"] = round((st["count"] / max(total_games, 1)) * 100, 1)
+        st["completion_rate"] = round((st["beaten_count"] / max(st["count"], 1)) * 100, 1)
+        del st["top_game_hours"]
+        platform_list.append(st)
+
+    # Genre breakdown
+    genre_data: Dict[str, Dict[str, Any]] = {}
+    for g in games:
+        g_hours = float(g.get("playtime_hours") or 0.0)
+        st = g.get("completion_status") or "Not Played"
+        for gen in (g.get("genres") or []):
+            if gen not in genre_data:
+                genre_data[gen] = {
+                    "genre": gen,
+                    "hours": 0.0,
+                    "count": 0,
+                    "beaten_count": 0,
+                    "playing_count": 0,
+                    "backlog_count": 0,
+                    "dropped_count": 0,
+                }
+            genre_data[gen]["hours"] = round(genre_data[gen]["hours"] + g_hours, 1)
+            genre_data[gen]["count"] += 1
+            if st in ("Beaten", "Completed"):
+                genre_data[gen]["beaten_count"] += 1
+            elif st == "Playing":
+                genre_data[gen]["playing_count"] += 1
+            elif st == "Dropped":
+                genre_data[gen]["dropped_count"] += 1
+            else:
+                genre_data[gen]["backlog_count"] += 1
+
+    sorted_genres = sorted(genre_data.values(), key=lambda item: item["hours"], reverse=True)
+    for gd in sorted_genres:
+        gd["playtime_pct"] = round((gd["hours"] / max(total_hours, 0.1)) * 100, 1)
+        gd["completion_rate"] = round((gd["beaten_count"] / max(gd["count"], 1)) * 100, 1)
+
+    # Status breakdown
+    statuses_data: Dict[str, Dict[str, Any]] = {}
+    for st_name in ("Completed", "Beaten", "Playing", "Plan to Play", "Not Played", "Dropped"):
+        matching = [g for g in games if (g.get("completion_status") or "Not Played") == st_name]
+        st_hours = round(sum(float(g.get("playtime_hours") or 0.0) for g in matching), 1)
+        statuses_data[st_name] = {
+            "name": st_name,
+            "count": len(matching),
+            "count_pct": round((len(matching) / max(total_games, 1)) * 100, 1),
+            "hours": st_hours,
+            "hours_pct": round((st_hours / max(total_hours, 0.1)) * 100, 1),
+        }
+
+    # Commitment Tiers
+    tiers: List[Dict[str, Any]] = [
+        {"key": "bite", "label": "Bite-Sized (< 5 hrs)", "min": 0.0, "max": 5.0, "count": 0, "hours": 0.0},
+        {"key": "medium", "label": "Medium (5–20 hrs)", "min": 5.0, "max": 20.0, "count": 0, "hours": 0.0},
+        {"key": "deep", "label": "Deep Dives (20–50 hrs)", "min": 20.0, "max": 50.0, "count": 0, "hours": 0.0},
+        {"key": "marathon", "label": "Marathons (50+ hrs)", "min": 50.0, "max": 999999.0, "count": 0, "hours": 0.0},
+    ]
+    for g in games:
+        h = float(g.get("playtime_hours") or 0.0)
+        for t in tiers:
+            if t["min"] <= h < t["max"]:
+                t["count"] += 1
+                t["hours"] = round(t["hours"] + h, 1)
+                break
+    for t in tiers:
+        t["hours_pct"] = round((t["hours"] / max(total_hours, 0.1)) * 100, 1)
+        t["count_pct"] = round((t["count"] / max(total_games, 1)) * 100, 1)
+
+    # Eras & Decades
+    eras: List[Dict[str, Any]] = [
+        {"key": "modern", "label": "Modern (2020+)", "count": 0, "hours": 0.0},
+        {"key": "golden", "label": "2010s (2010–2019)", "count": 0, "hours": 0.0},
+        {"key": "classics", "label": "2000s (2000–2009)", "count": 0, "hours": 0.0},
+        {"key": "retro", "label": "Retro (Pre-2000)", "count": 0, "hours": 0.0},
+        {"key": "unknown", "label": "Unknown Era", "count": 0, "hours": 0.0},
+    ]
+    era_map = {e["key"]: e for e in eras}
+    for g in games:
+        yr = g.get("release_year")
+        h = float(g.get("playtime_hours") or 0.0)
+        if not yr:
+            era_map["unknown"]["count"] += 1
+            era_map["unknown"]["hours"] = round(era_map["unknown"]["hours"] + h, 1)
+        elif yr >= 2020:
+            era_map["modern"]["count"] += 1
+            era_map["modern"]["hours"] = round(era_map["modern"]["hours"] + h, 1)
+        elif yr >= 2010:
+            era_map["golden"]["count"] += 1
+            era_map["golden"]["hours"] = round(era_map["golden"]["hours"] + h, 1)
+        elif yr >= 2000:
+            era_map["classics"]["count"] += 1
+            era_map["classics"]["hours"] = round(era_map["classics"]["hours"] + h, 1)
+        else:
+            era_map["retro"]["count"] += 1
+            era_map["retro"]["hours"] = round(era_map["retro"]["hours"] + h, 1)
+    for e in eras:
+        e["hours_pct"] = round((e["hours"] / max(total_hours, 0.1)) * 100, 1)
+        e["count_pct"] = round((e["count"] / max(total_games, 1)) * 100, 1)
+
+    # Ratings & gems
+    ratings_with_val = [int(g["user_rating"]) for g in games if g.get("user_rating")]
+    avg_user_rating = round(sum(ratings_with_val) / len(ratings_with_val), 1) if ratings_with_val else None
+
+    critics_with_val = [int(g["critic_score"]) for g in games if g.get("critic_score")]
+    avg_critic_score = round(sum(critics_with_val) / len(critics_with_val), 1) if critics_with_val else None
+
+    backlog_candidates = [
+        {
+            "id": g["id"],
+            "title": g["title"],
+            "critic_score": g["critic_score"],
+            "platform": g["platform"],
+            "cover_url": g.get("cover_url"),
+            "completion_status": g["completion_status"],
+            "release_year": g.get("release_year"),
+        }
+        for g in games
+        if g.get("completion_status") in ("Plan to Play", "Not Played") and g.get("critic_score")
+    ]
+    backlog_gems = sorted(backlog_candidates, key=lambda x: x["critic_score"], reverse=True)[:5]
+
+    # Achievements
+    ach_unlocked = sum(int(g.get("achievements_unlocked") or 0) for g in games)
+    ach_total = sum(int(g.get("achievements_total") or 0) for g in games)
+    perfect_count = sum(
+        1
+        for g in games
+        if int(g.get("achievements_total") or 0) > 0
+        and int(g.get("achievements_unlocked") or 0) >= int(g.get("achievements_total") or 0)
+    )
+    ach_rate = round((ach_unlocked / max(ach_total, 1)) * 100, 1) if ach_total > 0 else 0.0
+
+    # Hall of fame (top played)
+    hall_of_fame = [
+        {
+            "id": g["id"],
+            "title": g["title"],
+            "platform": g["platform"],
+            "playtime_hours": float(g.get("playtime_hours") or 0.0),
+            "completion_status": g["completion_status"],
+            "cover_url": g.get("cover_url"),
+            "release_year": g.get("release_year"),
+            "user_rating": g.get("user_rating"),
+        }
+        for g in sorted(games, key=lambda x: float(x.get("playtime_hours") or 0.0), reverse=True)[:6]
+    ]
+
+    dominant_system = platform_list[0]["name"] if platform_list else "None"
+    dominant_genre = sorted_genres[0]["genre"] if sorted_genres else "None"
+
+    return {
+        "summary": {
+            "total_games": total_games,
+            "total_hours": total_hours,
+            "played_games": played_count,
+            "average_hours_per_game": avg_hours,
+            "average_hours_per_played_game": avg_played_hours,
+            "completion_rate": completion_rate,
+            "drop_rate": drop_rate,
+            "beaten_count": beaten_count,
+            "dropped_count": dropped_count,
+            "shelf_of_shame_count": len(shelf_of_shame),
+            "avg_beaten_hours": avg_beaten_hours,
+            "avg_dropped_hours": avg_dropped_hours,
+            "dominant_system": dominant_system,
+            "dominant_genre": dominant_genre,
+            "gaming_days": round(total_hours / 24.0, 1),
+        },
+        "platforms": platform_list,
+        "genres": sorted_genres[:12],
+        "all_genres_count": len(sorted_genres),
+        "statuses": statuses_data,
+        "commitments": tiers,
+        "eras": eras,
+        "achievements": {
+            "unlocked": ach_unlocked,
+            "total": ach_total,
+            "rate": ach_rate,
+            "perfect_games_count": perfect_count,
+        },
+        "ratings": {
+            "avg_user_rating": avg_user_rating,
+            "avg_critic_score": avg_critic_score,
+            "rated_games_count": len(ratings_with_val),
+            "backlog_gems": backlog_gems,
+        },
+        "hall_of_fame": hall_of_fame,
+    }

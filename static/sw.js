@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "vertex-pwa-v4";
+const CACHE_NAME = "vertex-pwa-v6";
 const STATIC_ASSETS = [
   "/",
   "/manifest.webmanifest",

@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=12">
+  <link rel="stylesheet" href="/static/styles.css?v=14">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -56,6 +56,31 @@
   </header>
 
   <main class="main-container">
+    <nav class="view-tabs-bar" aria-label="Main Views" role="tablist">
+      <button
+        type="button"
+        id="tab-library"
+        class="view-tab-btn active"
+        role="tab"
+        aria-selected="true"
+        aria-controls="library-view-section"
+      >
+        <span class="tab-icon" aria-hidden="true">🎮</span>
+        <span>Games Library</span>
+      </button>
+      <button
+        type="button"
+        id="tab-habits"
+        class="view-tab-btn"
+        role="tab"
+        aria-selected="false"
+        aria-controls="habits-view-section"
+      >
+        <span class="tab-icon" aria-hidden="true">📊</span>
+        <span>Play Habits &amp; Insights</span>
+      </button>
+    </nav>
+
     <section class="metrics-bar" aria-label="Library overview metrics" id="metrics-bar">
       <article class="metric-card metric-interactive active" data-filter-status="" role="button" tabindex="0" title="Show all games">
         <span class="metric-label">Total Games</span>
@@ -173,13 +198,172 @@
       </form>
     </search>
 
-    <section aria-labelledby="library-heading">
+    <section aria-labelledby="library-heading" id="library-view-section">
       <div class="section-header">
         <h2 id="library-heading">Library (<span id="results-count">0</span>)</h2>
         <div id="source-indicators" class="source-indicators"></div>
       </div>
 
       <div id="games-grid" class="games-grid"></div>
+    </section>
+
+    <!-- Play Habits & Gaming Insights Dashboard Section -->
+    <section aria-labelledby="habits-heading" id="habits-view-section" class="habits-view-section" hidden>
+      <div class="section-header habits-section-header">
+        <div>
+          <h2 id="habits-heading">Play Habits &amp; Gaming Insights</h2>
+          <p class="section-subtitle" id="habits-subtitle">
+            Analyzing your library across Steam, Xbox, PlayStation, and Switch.
+          </p>
+        </div>
+        <div id="habits-active-filters-summary" class="habits-filters-summary"></div>
+      </div>
+
+      <!-- Habits KPI Pulse Strip -->
+      <div class="habits-pulse-grid" id="habits-pulse-grid" aria-label="Key gaming metrics">
+        <article class="habits-kpi-card">
+          <span class="habits-kpi-label">Total Filtered Playtime</span>
+          <strong class="habits-kpi-value" id="hkpi-hours">0 hrs</strong>
+          <span class="habits-kpi-sub" id="hkpi-days">~0.0 days of gameplay</span>
+        </article>
+        <article class="habits-kpi-card">
+          <span class="habits-kpi-label">Dominant System</span>
+          <strong class="habits-kpi-value text-accent" id="hkpi-system">—</strong>
+          <span class="habits-kpi-sub" id="hkpi-system-detail">Most played platform</span>
+        </article>
+        <article class="habits-kpi-card">
+          <span class="habits-kpi-label">Top Genre Taste</span>
+          <strong class="habits-kpi-value text-purple" id="hkpi-genre">—</strong>
+          <span class="habits-kpi-sub" id="hkpi-genre-detail">Favorite game category</span>
+        </article>
+        <article class="habits-kpi-card">
+          <span class="habits-kpi-label">Completion Velocity</span>
+          <strong class="habits-kpi-value text-emerald" id="hkpi-completion">0%</strong>
+          <span class="habits-kpi-sub" id="hkpi-completion-detail">0 finished titles</span>
+        </article>
+        <article class="habits-kpi-card">
+          <span class="habits-kpi-label">Bailout Point vs Finish</span>
+          <strong class="habits-kpi-value text-amber" id="hkpi-bailout">—</strong>
+          <span class="habits-kpi-sub" id="hkpi-bailout-detail">Avg drop time vs beaten time</span>
+        </article>
+        <article class="habits-kpi-card">
+          <span class="habits-kpi-label">Shelf of Shame</span>
+          <strong class="habits-kpi-value text-rose" id="hkpi-shame">0 games</strong>
+          <span class="habits-kpi-sub" id="hkpi-shame-detail">Unplayed backlog titles</span>
+        </article>
+      </div>
+
+      <!-- Habits Detailed Sections Grid -->
+      <div class="habits-main-grid">
+        <!-- Systems & Ecosystem Usage -->
+        <article class="habits-panel habits-panel-systems" aria-labelledby="systems-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="systems-panel-title">Systems &amp; Platform Ecosystem</h3>
+              <p class="panel-sub">Playtime share vs. library ownership share across platforms</p>
+            </div>
+            <span class="badge-subtle">Click platform to filter</span>
+          </div>
+
+          <div id="systems-comparison-list" class="systems-comparison-list">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Backlog Health & Status Distribution -->
+        <article class="habits-panel habits-panel-status" aria-labelledby="status-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="status-panel-title">Completion &amp; Backlog Velocity</h3>
+              <p class="panel-sub">Breakdown of current status and follow-through habits</p>
+            </div>
+          </div>
+
+          <div class="status-donut-layout">
+            <div class="donut-chart-container">
+              <div id="status-donut-chart" class="conic-donut" role="img" aria-label="Status distribution chart"></div>
+              <div class="donut-center-label">
+                <span class="donut-center-num" id="donut-center-rate">0%</span>
+                <span class="donut-center-text">Finished</span>
+              </div>
+            </div>
+            <div id="status-legend-list" class="status-legend-list">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+        </article>
+
+        <!-- Genre Taste Profile -->
+        <article class="habits-panel habits-panel-genres habits-full-width" aria-labelledby="genres-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="genres-panel-title">Genre Taste Profile</h3>
+              <p class="panel-sub">Playtime hours, game counts, and completion rates by genre</p>
+            </div>
+            <span class="badge-subtle">Click genre to drill down</span>
+          </div>
+
+          <div id="genres-bars-container" class="genres-bars-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Playtime Commitment Tiers -->
+        <article class="habits-panel" aria-labelledby="commitments-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="commitments-panel-title">Playtime Commitment Tiers</h3>
+              <p class="panel-sub">Quick bites vs. deep marathon investments</p>
+            </div>
+          </div>
+
+          <div id="commitments-list" class="commitments-list">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Gaming Eras & Decades -->
+        <article class="habits-panel" aria-labelledby="eras-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="eras-panel-title">Gaming Eras &amp; Decades</h3>
+              <p class="panel-sub">Modern releases vs. nostalgic classics</p>
+            </div>
+          </div>
+
+          <div id="eras-list" class="eras-list">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Hall of Fame: Top Played Titles -->
+        <article class="habits-panel habits-panel-hall-of-fame habits-full-width" aria-labelledby="hof-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="hof-panel-title">Hall of Fame: Most Played Games</h3>
+              <p class="panel-sub">Your biggest gaming commitments in the current selection</p>
+            </div>
+          </div>
+
+          <div id="hof-games-row" class="hof-games-row">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Unplayed Backlog Gems -->
+        <article class="habits-panel habits-panel-gems habits-full-width" aria-labelledby="gems-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="gems-panel-title">Hidden Backlog Gems (Top Critic Rated)</h3>
+              <p class="panel-sub">Acclaimed titles waiting in your backlog with top scores</p>
+            </div>
+          </div>
+
+          <div id="gems-games-row" class="hof-games-row">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+      </div>
     </section>
   </main>
 
@@ -680,16 +864,16 @@
       <span class="mnav-icon" aria-hidden="true">📚</span>
       <span class="mnav-label">Library</span>
     </button>
+    <button type="button" id="mnav-habits" class="mnav-item" aria-label="Play Habits Dashboard">
+      <span class="mnav-icon" aria-hidden="true">📊</span>
+      <span class="mnav-label">Habits</span>
+    </button>
     <button type="button" id="mnav-triage" class="mnav-item" aria-label="Quick Triage">
       <span class="mnav-icon-wrap">
         <span class="mnav-icon" aria-hidden="true">⚡</span>
         <span id="mnav-triage-badge" class="mnav-badge" hidden>0</span>
       </span>
       <span class="mnav-label">Triage</span>
-    </button>
-    <button type="button" id="mnav-add" class="mnav-item mnav-item-primary" aria-label="Add Game">
-      <span class="mnav-fab" aria-hidden="true">＋</span>
-      <span class="mnav-label">Add Game</span>
     </button>
     <button type="button" id="mnav-reconcile" class="mnav-item" aria-label="Reconcile Cross-Platform">
       <span class="mnav-icon-wrap">
@@ -698,12 +882,12 @@
       </span>
       <span class="mnav-label">Reconcile</span>
     </button>
-    <button type="button" id="mnav-sync" class="mnav-item" aria-label="Sync Libraries">
-      <span class="mnav-icon" id="mnav-sync-icon" aria-hidden="true">🔄</span>
-      <span class="mnav-label" id="mnav-sync-label">Sync</span>
+    <button type="button" id="mnav-add" class="mnav-item mnav-item-primary" aria-label="Add Game">
+      <span class="mnav-fab" aria-hidden="true">＋</span>
+      <span class="mnav-label">Add</span>
     </button>
   </nav>
 
-  <script src="/static/app.js?v=12"></script>
+  <script src="/static/app.js?v=14"></script>
 </body>
 </html>
