@@ -91,6 +91,7 @@ TAGS = [
 # Enrichment must never add these as genres. "Indie", "Free To Play",
 # and "Casual" are valid Tags; "Utilities" is neither.
 RETIRED_GENRES = ["Free To Play", "Utilities", "Casual", "Indie"]
+_RETIRED_GENRES_SET = {r.lower() for r in RETIRED_GENRES}
 
 # Case-insensitive lookup so "stealth", "Stealth", and "STEALTH" agree.
 _GENRE_LOOKUP = {g.lower(): g for g in GENRES}
@@ -99,19 +100,19 @@ _TAG_LOOKUP = {t.lower(): t for t in TAGS}
 
 def normalize_genre(raw_label: Optional[str]) -> Optional[str]:
     """Return the canonical Genre for a label, or None if unknown/retired."""
-    if not raw_label:
+    if not raw_label or not isinstance(raw_label, str):
         return None
     label = raw_label.strip()
     if not label:
         return None
-    if label.lower() in {r.lower() for r in RETIRED_GENRES}:
+    if label.lower() in _RETIRED_GENRES_SET:
         return None
     return _GENRE_LOOKUP.get(label.lower())
 
 
 def normalize_tag(raw_label: Optional[str]) -> Optional[str]:
     """Return the canonical Tag for a label, or None if unknown."""
-    if not raw_label:
+    if not raw_label or not isinstance(raw_label, str):
         return None
     label = raw_label.strip()
     if not label:
@@ -122,9 +123,11 @@ def normalize_tag(raw_label: Optional[str]) -> Optional[str]:
 def validate_genres(labels: Optional[List[str]]) -> List[str]:
     """Deduplicate (order preserved) and keep only known Genres."""
     valid: List[str] = []
+    seen = set()
     for label in labels or []:
         canon = normalize_genre(label)
-        if canon and canon not in valid:
+        if canon and canon.lower() not in seen:
+            seen.add(canon.lower())
             valid.append(canon)
     return valid
 
@@ -132,23 +135,27 @@ def validate_genres(labels: Optional[List[str]]) -> List[str]:
 def validate_tags(labels: Optional[List[str]]) -> List[str]:
     """Deduplicate (order preserved) and keep only known Tags."""
     valid: List[str] = []
+    seen = set()
     for label in labels or []:
         canon = normalize_tag(label)
-        if canon and canon not in valid:
+        if canon and canon.lower() not in seen:
+            seen.add(canon.lower())
             valid.append(canon)
     return valid
 
 
 def merge_lists(existing: Optional[List[str]], additions: Optional[List[str]]) -> List[str]:
-    """Order-preserving union: existing items first, then new ones."""
+    """Order-preserving, case-insensitive union: existing items first, then new ones."""
     merged: List[str] = list(existing or [])
+    seen = {str(x).strip().lower() for x in merged}
     for item in additions or []:
-        if item not in merged:
+        if item and str(item).strip().lower() not in seen:
+            seen.add(str(item).strip().lower())
             merged.append(item)
     return merged
 
 
 def remove_from_list(existing: Optional[List[str]], removals: Optional[List[str]]) -> List[str]:
     """Return existing with every removal dropped, order preserved."""
-    drop = {str(r).strip().lower() for r in removals or []}
-    return [item for item in (existing or []) if item.strip().lower() not in drop]
+    drop = {str(r).strip().lower() for r in removals or [] if r}
+    return [item for item in (existing or []) if str(item).strip().lower() not in drop]

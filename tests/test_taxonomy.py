@@ -187,6 +187,145 @@ class TestGenreTagsInDb(unittest.TestCase):
         self.assertIn("Co-op", stats["all_tags"])
         self.assertEqual(stats["top_tags"][0]["tag"], "Puzzle")
 
+    def test_upsert_synced_game_merges_tags(self):
+        g = db.add_manual_game(
+            title="Cyberpunk 2077",
+            platform="Steam",
+            genres=["Action RPG"],
+            tags=["Sci-Fi", "Open World"],
+            db_path=self.db_path,
+        )
+        db.upsert_synced_game(
+            external_id=g["external_id"],
+            title="Cyberpunk 2077",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_hours=50.0,
+            genres=["Action RPG", "FPS"],
+            tags=["Cyberpunk", "Dark"],
+            db_path=self.db_path,
+        )
+        updated = db.get_game_by_id(g["id"], db_path=self.db_path)
+        self.assertIn("Sci-Fi", updated["tags"])
+        self.assertIn("Open World", updated["tags"])
+        self.assertIn("Dark", updated["tags"])
+        self.assertIn("FPS", updated["genres"])
+
+    def test_habits_analytics_with_tag_filter(self):
+        db.add_manual_game(
+            title="Dishonored",
+            platform="Steam",
+            genres=["Action-Adventure"],
+            tags=["Stealth"],
+            playtime_hours=12.0,
+            completion_status="Beaten",
+            db_path=self.db_path,
+        )
+        db.add_manual_game(
+            title="Doom Eternal",
+            platform="Steam",
+            genres=["FPS"],
+            tags=["Shooter"],
+            playtime_hours=15.0,
+            completion_status="Beaten",
+            db_path=self.db_path,
+        )
+        analytics = db.get_habits_analytics(tag="Stealth", db_path=self.db_path)
+        self.assertEqual(analytics["summary"]["total_games"], 1)
+        self.assertEqual(analytics["summary"]["total_hours"], 12.0)
+
+
+try:
+    import functools
+    import mcp_server
+    HAS_MCP = True
+except ImportError:
+    HAS_MCP = False
+
+
+class TestMcpTools(unittest.TestCase):
+    def setUp(self):
+        if not HAS_MCP:
+            self.skipTest("mcp library not available")
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = str(Path(self.temp_dir.name) / "test_mcp.db")
+        db.init_db(self.db_path)
+
+        self._orig_query = mcp_server.query_games
+        self._orig_update = mcp_server.update_game
+        self._orig_add = mcp_server.add_manual_game
+        mcp_server.query_games = functools.partial(db.query_games, db_path=self.db_path)
+        mcp_server.update_game = functools.partial(db.update_game, db_path=self.db_path)
+        mcp_server.add_manual_game = functools.partial(db.add_manual_game, db_path=self.db_path)
+
+    def tearDown(self):
+        if hasattr(self, "_orig_query"):
+            mcp_server.query_games = self._orig_query
+            mcp_server.update_game = self._orig_update
+            mcp_server.add_manual_game = self._orig_add
+        if hasattr(self, "temp_dir"):
+            self.temp_dir.cleanup()
+
+    def test_update_game_genres_separate_ignored(self):
+        db.add_manual_game(
+            title="Hitman 3",
+            platform="Steam",
+            genres=["Action"],
+            tags=["Stealth"],
+            db_path=self.db_path,
+        )
+        # Passing 'Stealth' as a genre must report it in ignored, because Stealth is a tag
+        res = mcp_server.update_game_genres(
+            title="Hitman 3",
+            genres=["Stealth"],
+            tags=["Dark"],
+        )
+        self.assertEqual(res["status"], "updated")
+        self.assertIn("Stealth", res["ignored"])
+        self.assertIn("Dark", res["game"]["tags"])
+        # Action remains unchanged
+        self.assertEqual(res["game"]["genres"], ["Action"])
+
+    def test_update_game_genres_removes_retired_genre(self):
+        # A game in legacy DB had 'Casual' in genres
+        db.add_manual_game(
+            title="Peggle",
+            platform="Steam",
+            genres=["Puzzle", "Casual"],
+            db_path=self.db_path,
+        )
+        res = mcp_server.update_game_genres(
+            title="Peggle",
+            remove_genres=["Casual"],
+        )
+        self.assertEqual(res["status"], "updated")
+        self.assertNotIn("Casual", res["game"]["genres"])
+        self.assertEqual(res["game"]["genres"], ["Puzzle"])
+
+    def test_recommendations_with_tag_filter(self):
+        db.add_manual_game(
+            title="Metal Gear Solid V",
+            platform="Steam",
+            completion_status="Plan to Play",
+            genres=["Action-Adventure"],
+            tags=["Stealth", "Open World"],
+            critic_score=93,
+            db_path=self.db_path,
+        )
+        db.add_manual_game(
+            title="Forza Horizon 5",
+            platform="Xbox",
+            completion_status="Plan to Play",
+            genres=["Racing"],
+            tags=["Open World"],
+            critic_score=92,
+            db_path=self.db_path,
+        )
+        recs = mcp_server.get_what_to_play_recommendations(tag="Stealth")
+        titles = [c["title"] for c in recs["backlog_candidates"]]
+        self.assertIn("Metal Gear Solid V", titles)
+        self.assertNotIn("Forza Horizon 5", titles)
+
 
 if __name__ == "__main__":
     unittest.main()

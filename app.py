@@ -314,6 +314,7 @@ async def api_get_analytics(
     platform: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
     genre: Optional[str] = Query(default=None),
+    tag: Optional[str] = Query(default=None),
     favorite_only: bool = Query(default=False),
 ) -> Dict[str, Any]:
     return get_habits_analytics(
@@ -321,6 +322,7 @@ async def api_get_analytics(
         platform=platform,
         status=status,
         genre=genre,
+        tag=tag,
         favorite_only=favorite_only,
     )
 

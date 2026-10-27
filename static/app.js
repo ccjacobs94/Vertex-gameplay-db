@@ -14,26 +14,16 @@ const COMMON_GENRES = [
   "Action RPG",
   "Action-Adventure",
   "Adventure",
-  "Card & Board",
-  "Casual",
-  "Fighting",
   "FPS",
-  "Free To Play",
   "Hack and Slash",
   "Horror",
   "Immersive Sim",
-  "Indie",
   "Interactive Drama",
-  "JRPG",
   "Metroidvania",
-  "MMORPG",
-  "Open World",
-  "Party",
   "Platformer",
   "Puzzle",
   "Puzzle Platformer",
   "Racing",
-  "Rhythm",
   "Roguelike",
   "RPG",
   "Sandbox",
@@ -41,23 +31,53 @@ const COMMON_GENRES = [
   "Simulation",
   "Soulslike",
   "Sports",
-  "Stealth",
   "Strategy",
   "Survival",
   "Tactical",
   "Tactical RPG",
   "Third-Person Shooter",
-  "Tower Defense",
   "Turn-Based Strategy",
   "Visual Novel",
+];
+
+const COMMON_TAGS = [
+  "Casual",
+  "Co-op",
+  "Comedy",
+  "Crafting",
+  "Dark",
+  "Detective",
+  "Exploration",
+  "Fantasy",
+  "Free To Play",
+  "Horror",
+  "Indie",
+  "Multiplayer",
+  "Open World",
+  "Post-Apocalyptic",
+  "Psychological",
+  "Puzzle",
+  "Real-Time",
+  "Rhythm",
+  "Sci-Fi",
+  "Space",
+  "Stealth",
+  "Story-Rich",
+  "Superhero",
+  "Supernatural",
+  "Survival Horror",
+  "Tower Defense",
+  "Turn-Based",
 ];
 
 const state = {
   games: [],
   allGenres: [...COMMON_GENRES],
+  allTags: [...COMMON_TAGS],
   platform: "",
   status: "",
   genre: "",
+  tag: "",
   search: "",
   sortBy: "playtime_desc",
   favoriteOnly: false,
@@ -120,6 +140,7 @@ function updateReconcileButtonBadge(count) {
 function updateActiveFiltersUI() {
   const count =
     (state.genre ? 1 : 0) +
+    (state.tag ? 1 : 0) +
     (state.status ? 1 : 0) +
     (state.favoriteOnly ? 1 : 0) +
     (state.sortBy !== "playtime_desc" ? 1 : 0);
@@ -134,6 +155,7 @@ function updateActiveFiltersUI() {
   if (resetBtn) {
     resetBtn.hidden =
       !state.genre &&
+      !state.tag &&
       !state.status &&
       !state.favoriteOnly &&
       !state.platform &&
@@ -165,6 +187,8 @@ function syncFilterInputs() {
   if (stSelect) stSelect.value = state.status;
   const gnSelect = document.getElementById("genre-filter");
   if (gnSelect) gnSelect.value = state.genre;
+  const tgSelect = document.getElementById("tag-filter");
+  if (tgSelect) tgSelect.value = state.tag;
   const qInput = document.getElementById("search-input");
   if (qInput) qInput.value = state.search;
   const favBtn = document.getElementById("btn-fav-toggle");
@@ -230,6 +254,7 @@ async function fetchHabitsAnalytics() {
   if (state.platform) params.set("platform", state.platform);
   if (state.status) params.set("status", state.status);
   if (state.genre) params.set("genre", state.genre);
+  if (state.tag) params.set("tag", state.tag);
   if (state.favoriteOnly) params.set("favorite_only", "true");
 
   try {
@@ -333,6 +358,7 @@ function renderHabitsDashboard(data) {
     const chips = [];
     if (state.platform) chips.push({ label: `Platform: ${state.platform}`, key: "platform" });
     if (state.genre) chips.push({ label: `Genre: ${state.genre}`, key: "genre" });
+    if (state.tag) chips.push({ label: `Tag: ${state.tag}`, key: "tag" });
     if (state.status) chips.push({ label: `Status: ${state.status}`, key: "status" });
     if (state.favoriteOnly) chips.push({ label: "★ Favorites", key: "favoriteOnly" });
     if (state.search) chips.push({ label: `Search: "${state.search}"`, key: "search" });
@@ -344,6 +370,7 @@ function renderHabitsDashboard(data) {
       span.querySelector("button").addEventListener("click", () => {
         if (chip.key === "platform") state.platform = "";
         else if (chip.key === "genre") state.genre = "";
+        else if (chip.key === "tag") state.tag = "";
         else if (chip.key === "status") state.status = "";
         else if (chip.key === "favoriteOnly") state.favoriteOnly = false;
         else if (chip.key === "search") state.search = "";
@@ -772,6 +799,26 @@ async function fetchStats() {
       }
     }
 
+    const tagSelect = document.getElementById("tag-filter");
+    if (tagSelect && Array.isArray(stats.all_tags)) {
+      const mergedTags = new Set([...COMMON_TAGS, ...stats.all_tags]);
+      state.allTags = Array.from(mergedTags).sort((a, b) => a.localeCompare(b));
+      const prevTag = state.tag || tagSelect.value || "";
+      tagSelect.innerHTML = "";
+      const allOpt = document.createElement("option");
+      allOpt.value = "";
+      allOpt.textContent = "All Tags";
+      tagSelect.appendChild(allOpt);
+      const tagList = stats.all_tags.length ? stats.all_tags : state.allTags;
+      for (const tName of tagList) {
+        const opt = document.createElement("option");
+        opt.value = tName;
+        opt.textContent = tName;
+        if (tName === prevTag) opt.selected = true;
+        tagSelect.appendChild(opt);
+      }
+    }
+
     const srcEl = document.getElementById("source-indicators");
     srcEl.innerHTML = "";
     const cfg = stats.configured_sources || {};
@@ -797,6 +844,7 @@ async function fetchGames() {
   if (state.platform) params.set("platform", state.platform);
   if (state.status) params.set("status", state.status);
   if (state.genre) params.set("genre", state.genre);
+  if (state.tag) params.set("tag", state.tag);
   if (state.favoriteOnly) params.set("favorite_only", "true");
   params.set("sort_by", state.sortBy);
 
@@ -916,7 +964,20 @@ function renderGames() {
     const genres = document.createElement("div");
     genres.className = "card-genres";
     const genreText = (game.genres || []).join(", ");
-    genres.textContent = genreText || (game.release_year ? `Released ${game.release_year}` : game.source);
+    const tagText = (game.tags || []).slice(0, 3).map((t) => `#${t}`).join(" ");
+    if (genreText && tagText) {
+      genres.textContent = `${genreText} • ${tagText}`;
+    } else if (genreText) {
+      genres.textContent = genreText;
+    } else if (tagText) {
+      genres.textContent = tagText;
+    } else {
+      genres.textContent = game.release_year ? `Released ${game.release_year}` : game.source;
+    }
+    genres.title = [
+      ...(game.genres || []),
+      ...(game.tags || []).map((t) => `#${t}`),
+    ].join(", ");
     subrow.appendChild(genres);
 
     body.appendChild(subrow);
@@ -1022,6 +1083,54 @@ function renderEditGenreChips() {
       const opt = document.createElement("option");
       opt.value = gOption;
       opt.textContent = gOption;
+      pickerEl.appendChild(opt);
+    }
+    pickerEl.value = "";
+  }
+}
+
+function renderEditTagChips() {
+  const chipsEl = document.getElementById("edit-tag-chips");
+  const inputEl = document.getElementById("edit-tags");
+  const pickerEl = document.getElementById("edit-tag-picker");
+  if (!chipsEl || !inputEl) return;
+  chipsEl.innerHTML = "";
+  const list = inputEl.value
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  for (const tName of list) {
+    const chip = document.createElement("span");
+    chip.className = "edit-genre-chip";
+    chip.textContent = tName;
+
+    const rmBtn = document.createElement("button");
+    rmBtn.type = "button";
+    rmBtn.textContent = "✕";
+    rmBtn.setAttribute("aria-label", `Remove ${tName}`);
+    rmBtn.addEventListener("click", () => {
+      const updated = list.filter((item) => item.toLowerCase() !== tName.toLowerCase());
+      inputEl.value = updated.join(", ");
+      renderEditTagChips();
+    });
+    chip.appendChild(rmBtn);
+    chipsEl.appendChild(chip);
+  }
+
+  if (pickerEl) {
+    const existingLower = new Set(list.map((t) => t.toLowerCase()));
+    pickerEl.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = "+ Add tag...";
+    pickerEl.appendChild(placeholder);
+
+    for (const tOption of state.allTags || COMMON_TAGS) {
+      if (existingLower.has(tOption.toLowerCase())) continue;
+      const opt = document.createElement("option");
+      opt.value = tOption;
+      opt.textContent = tOption;
       pickerEl.appendChild(opt);
     }
     pickerEl.value = "";
@@ -1222,6 +1331,11 @@ function openEditModal(game) {
   renderEditRatingPills(game.user_rating);
   document.getElementById("edit-genres").value = (game.genres || []).join(", ");
   renderEditGenreChips();
+  const editTagsEl = document.getElementById("edit-tags");
+  if (editTagsEl) {
+    editTagsEl.value = (game.tags || []).join(", ");
+    renderEditTagChips();
+  }
   document.getElementById("edit-cover").value = game.cover_url || "";
   document.getElementById("edit-notes").value = game.notes || "";
   syncEditFavButton(game.favorite);
@@ -2274,6 +2388,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.platform = "";
       state.status = "";
       state.genre = "";
+      state.tag = "";
       state.search = "";
       state.sortBy = "playtime_desc";
       state.favoriteOnly = false;
@@ -2281,6 +2396,8 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("search-input").value = "";
       document.getElementById("status-filter").value = "";
       document.getElementById("genre-filter").value = "";
+      const tf = document.getElementById("tag-filter");
+      if (tf) tf.value = "";
       document.getElementById("sort-select").value = "playtime_desc";
       document.getElementById("btn-fav-toggle").setAttribute("aria-pressed", "false");
       for (const p of document.querySelectorAll("#platform-pills .pill")) {
@@ -2319,6 +2436,14 @@ document.addEventListener("DOMContentLoaded", () => {
   if (genreFilterEl) {
     genreFilterEl.addEventListener("change", (e) => {
       state.genre = e.target.value;
+      refreshActiveView();
+    });
+  }
+
+  const tagFilterEl = document.getElementById("tag-filter");
+  if (tagFilterEl) {
+    tagFilterEl.addEventListener("change", (e) => {
+      state.tag = e.target.value;
       refreshActiveView();
     });
   }
@@ -2410,6 +2535,11 @@ document.addEventListener("DOMContentLoaded", () => {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const tagsRaw = document.getElementById("add-tags")?.value || "";
+    const tags = tagsRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const ratingVal = document.getElementById("add-rating").value;
 
     const payload = {
@@ -2420,6 +2550,7 @@ document.addEventListener("DOMContentLoaded", () => {
       user_rating: ratingVal ? parseInt(ratingVal, 10) : null,
       cover_url: document.getElementById("add-cover").value.trim() || null,
       genres,
+      tags,
       notes: document.getElementById("add-notes").value.trim(),
       favorite: Boolean(document.getElementById("add-favorite")?.checked),
     };
@@ -2475,6 +2606,24 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  const editTagPicker = document.getElementById("edit-tag-picker");
+  if (editTagPicker) {
+    editTagPicker.addEventListener("change", (e) => {
+      const chosen = e.target.value;
+      if (!chosen) return;
+      const inputEl = document.getElementById("edit-tags");
+      const current = inputEl.value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!current.some((t) => t.toLowerCase() === chosen.toLowerCase())) {
+        current.push(chosen);
+        inputEl.value = current.join(", ");
+      }
+      renderEditTagChips();
+    });
+  }
+
   const editCoverInput = document.getElementById("edit-cover");
   if (editCoverInput) {
     editCoverInput.addEventListener("input", (e) => {
@@ -2520,6 +2669,11 @@ document.addEventListener("DOMContentLoaded", () => {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
+    const tagsRaw = document.getElementById("edit-tags")?.value || "";
+    const tags = tagsRaw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
     const ratingVal = document.getElementById("edit-rating").value;
     const hoursInput = document.getElementById("edit-hours");
 
@@ -2527,6 +2681,7 @@ document.addEventListener("DOMContentLoaded", () => {
       completion_status: document.getElementById("edit-status").value,
       user_rating: ratingVal ? parseInt(ratingVal, 10) : null,
       genres,
+      tags,
       cover_url: document.getElementById("edit-cover").value.trim() || null,
       notes: document.getElementById("edit-notes").value.trim(),
       favorite: document.getElementById("edit-favorite").checked,

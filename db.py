@@ -439,6 +439,14 @@ def upsert_synced_game(
                 if gen not in merged_genres_list:
                     merged_genres_list.append(gen)
             merged_genres = json.dumps(merged_genres_list)
+
+            existing_tags = json.loads(existing["tags"] or "[]")
+            merged_tags_list = list(existing_tags)
+            for tag in tags or []:
+                if tag not in merged_tags_list:
+                    merged_tags_list.append(tag)
+            merged_tags = json.dumps(merged_tags_list)
+
             keep_custom_title = (
                 existing["canonical_id"] is not None
                 and existing["id"] == existing["canonical_id"]
@@ -455,6 +463,7 @@ def upsert_synced_game(
                     achievements_unlocked = MAX(achievements_unlocked, ?),
                     achievements_total = MAX(achievements_total, ?),
                     genres = ?,
+                    tags = ?,
                     critic_score = COALESCE(?, critic_score),
                     release_year = COALESCE(?, release_year),
                     cover_url = COALESCE(?, cover_url),
@@ -469,6 +478,7 @@ def upsert_synced_game(
                     achievements_unlocked,
                     achievements_total,
                     merged_genres,
+                    merged_tags,
                     critic_score,
                     release_year,
                     cover_url,
@@ -1293,6 +1303,7 @@ def get_habits_analytics(
     platform: Optional[str] = None,
     status: Optional[str] = None,
     genre: Optional[str] = None,
+    tag: Optional[str] = None,
     favorite_only: bool = False,
     db_path: str = DEFAULT_DB_PATH,
 ) -> Dict[str, Any]:
@@ -1305,6 +1316,7 @@ def get_habits_analytics(
         platform=platform,
         status=status,
         genre=genre,
+        tag=tag,
         favorite_only=favorite_only,
         limit=10000,
         db_path=db_path,

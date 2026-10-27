@@ -167,6 +167,11 @@
             <option value="">All Genres</option>
           </select>
 
+          <label for="tag-filter" class="sr-only">Tag</label>
+          <select id="tag-filter" name="tag">
+            <option value="">All Tags</option>
+          </select>
+
           <label for="status-filter" class="sr-only">Completion status</label>
           <select id="status-filter" name="status">
             <option value="">All Statuses</option>
@@ -449,6 +454,11 @@
         </div>
 
         <div class="form-group">
+          <label for="add-tags">Tags <span class="label-muted">(Stealth, Open World, Co-op, etc.)</span></label>
+          <input type="text" id="add-tags" name="tags" placeholder="Stealth, Open World, Co-op">
+        </div>
+
+        <div class="form-group">
           <label for="add-notes">Personal Notes (visible to AI / MCP)</label>
           <textarea id="add-notes" name="notes" rows="2" placeholder="What you liked, who lent it to you, or why it's in your backlog..."></textarea>
         </div>
@@ -546,6 +556,17 @@
                 <div id="edit-genre-chips" class="edit-genre-chips"></div>
                 <select id="edit-genre-picker" class="edit-genre-select" aria-label="Add a genre">
                   <option value="">+ Add genre...</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="edit-tag-picker">Tags <span class="label-muted">(mechanics, themes, modes)</span></label>
+              <input type="hidden" id="edit-tags" name="tags">
+              <div class="edit-genre-bar">
+                <div id="edit-tag-chips" class="edit-genre-chips"></div>
+                <select id="edit-tag-picker" class="edit-genre-select" aria-label="Add a tag">
+                  <option value="">+ Add tag...</option>
                 </select>
               </div>
             </div>

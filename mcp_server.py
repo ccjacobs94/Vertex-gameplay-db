@@ -78,12 +78,16 @@ def search_game_library(
 def get_what_to_play_recommendations(
     platform: Optional[str] = None,
     genre: Optional[str] = None,
+    tag: Optional[str] = None,
     max_candidates: int = 20,
 ) -> Dict[str, Any]:
     """
     Returns taste-profile context (the user's highest-played and favorite games) alongside
-    candidate games from their backlog ('Plan to Play' or 'Not Played' with < 1.5h playtime)
+    candidate games from their backlog ('Plan to Play' or 'Not Played' with < 2.0h playtime)
     and currently 'Playing' games so the AI can recommend what to play next.
+    - platform: e.g. 'Steam', 'Xbox', 'PlayStation', 'Switch'
+    - genre: filter backlog by broad category (e.g. 'RPG', 'Shooter')
+    - tag: filter backlog by mechanic/mode/theme (e.g. 'Stealth', 'Co-op', 'Open World')
     """
     all_games = query_games(limit=2000)
 
@@ -99,12 +103,20 @@ def get_what_to_play_recommendations(
         and (not platform or platform.lower() in g.get("platform", "").lower())
     ]
 
+    t_q = tag.lower().strip() if tag else None
+    g_q = genre.lower().strip() if genre else None
+
     backlog = [
         g for g in all_games
         if g.get("completion_status") in ("Plan to Play", "Not Played")
         and (g.get("playtime_hours") or 0) < 2.0
         and (not platform or platform.lower() in g.get("platform", "").lower())
-        and (not genre or any(genre.lower() in gen.lower() for gen in (g.get("genres") or [])))
+        and (not g_q or any(g_q in gen.lower() for gen in (g.get("genres") or [])))
+        and (
+            not t_q
+            or any(t_q in t.lower() for t in (g.get("tags") or []))
+            or any(t_q in gen.lower() for gen in (g.get("genres") or []))
+        )
     ]
 
     # Prioritize 'Plan to Play' and higher critic scores
@@ -187,14 +199,19 @@ def update_game_genres(
         return {"error": "mode must be 'merge' or 'replace'"}
 
     ignored: List[str] = []
-    for label in (genres or []) + (tags or []):
-        if label not in (validate_genres([label]) + validate_tags([label])):
+    for label in genres or []:
+        if not validate_genres([label]):
+            ignored.append(label)
+    for label in tags or []:
+        if not validate_tags([label]):
             ignored.append(label)
 
     valid_genres = validate_genres(genres)
     valid_tags = validate_tags(tags)
-    remove_genres_valid = validate_genres(remove_genres)
-    remove_tags_valid = validate_tags(remove_tags)
+    # For removals, allow any string so users/agents can clean up
+    # retired, legacy, or custom labels without taxonomy restriction
+    remove_genres_to_apply = [str(r).strip() for r in (remove_genres or []) if r]
+    remove_tags_to_apply = [str(r).strip() for r in (remove_tags or []) if r]
 
     updates: Dict[str, Any] = {}
     if genres is not None:
@@ -203,10 +220,10 @@ def update_game_genres(
             updates["genres"] = merge_lists(current, valid_genres)
         else:
             updates["genres"] = valid_genres
-        if remove_genres_valid:
-            updates["genres"] = remove_from_list(updates["genres"], remove_genres_valid)
-    elif remove_genres_valid:
-        updates["genres"] = remove_from_list(target.get("genres") or [], remove_genres_valid)
+        if remove_genres_to_apply:
+            updates["genres"] = remove_from_list(updates["genres"], remove_genres_to_apply)
+    elif remove_genres_to_apply:
+        updates["genres"] = remove_from_list(target.get("genres") or [], remove_genres_to_apply)
 
     if tags is not None:
         current_tags = target.get("tags") or []
@@ -214,10 +231,10 @@ def update_game_genres(
             updates["tags"] = merge_lists(current_tags, valid_tags)
         else:
             updates["tags"] = valid_tags
-        if remove_tags_valid:
-            updates["tags"] = remove_from_list(updates["tags"], remove_tags_valid)
-    elif remove_tags_valid:
-        updates["tags"] = remove_from_list(target.get("tags") or [], remove_tags_valid)
+        if remove_tags_to_apply:
+            updates["tags"] = remove_from_list(updates["tags"], remove_tags_to_apply)
+    elif remove_tags_to_apply:
+        updates["tags"] = remove_from_list(target.get("tags") or [], remove_tags_to_apply)
 
     if not updates:
         return {"error": "Nothing to update: pass genres, tags, remove_genres, or remove_tags"}
@@ -277,6 +294,14 @@ def add_game_to_library(
     """
     Add a new game (such as a Nintendo Switch, PS4, Xbox, or PC title) to the library.
     """
+    ignored: List[str] = []
+    for label in genres or []:
+        if not validate_genres([label]):
+            ignored.append(label)
+    for label in tags or []:
+        if not validate_tags([label]):
+            ignored.append(label)
+
     game = add_manual_game(
         title=title,
         platform=platform,
@@ -287,7 +312,10 @@ def add_game_to_library(
         tags=validate_tags(tags),
         notes=notes,
     )
-    return {"status": "added", "game": game}
+    res: Dict[str, Any] = {"status": "added", "game": game}
+    if ignored:
+        res["ignored"] = ignored
+    return res
 
 
 @mcp.tool()

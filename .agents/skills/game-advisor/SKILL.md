@@ -12,7 +12,9 @@ Follow these steps to analyze the user's gaming library, make data-driven recomm
 
 ## 1. Querying the Library & Metrics
 
-Prefer using the `game-hub` MCP server tools if active (`get_gaming_profile_and_metrics`, `search_game_library`, `get_what_to_play_recommendations`, `update_game_progress`, `add_game_to_library`).
+Prefer using the `game-hub` MCP server tools if active (`get_gaming_profile_and_metrics`, `search_game_library`, `get_what_to_play_recommendations`, `update_game_progress`, `update_game_genres`, `add_game_to_library`).
+
+- **Genres vs Tags**: Genres are broad categories (e.g. `RPG`, `Shooter`, `Puzzle`); tags are mechanics, modes, themes (e.g. `Stealth`, `Open World`, `Co-op`, `Sci-Fi`). Use `update_game_genres` to curate labels (defaults to safe `mode="merge"`).
 
 If MCP tools are not loaded in the current session, query the local REST API on `http://localhost:8095`:
 
