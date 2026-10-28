@@ -21,8 +21,11 @@ import httpx
 from db import (
     DEFAULT_DB_PATH,
     get_connection,
+    get_game_achievements,
+    get_game_by_id,
     log_sync_event,
     normalize_game_title,
+    upsert_game_achievements,
     upsert_synced_game,
 )
 from taxonomy import merge_lists, validate_genres
@@ -55,6 +58,194 @@ async def resolve_steam_vanity(client: httpx.AsyncClient, api_key: str, steam_id
     raise ValueError(f"Could not resolve Steam vanity URL '{val}' to a 64-bit SteamID.")
 
 
+_steam_schema_cache: Dict[int, Dict[str, Any]] = {}
+
+
+async def fetch_steam_game_schema(client: httpx.AsyncClient, api_key: str, appid: int) -> Dict[str, Dict[str, Any]]:
+    if appid in _steam_schema_cache:
+        return _steam_schema_cache[appid]
+    try:
+        r = await client.get(
+            "https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/",
+            params={"key": api_key, "appid": str(appid), "l": "english"},
+            timeout=15.0,
+        )
+        if r.status_code == 200:
+            schema_achs = r.json().get("game", {}).get("availableGameStats", {}).get("achievements", [])
+            schema_map = {
+                a["name"]: {
+                    "displayName": a.get("displayName") or a["name"],
+                    "description": a.get("description") or "",
+                    "icon": a.get("icon"),
+                    "icongray": a.get("icongray"),
+                    "hidden": a.get("hidden", 0),
+                }
+                for a in schema_achs
+                if a.get("name")
+            }
+            _steam_schema_cache[appid] = schema_map
+            return schema_map
+    except Exception as exc:
+        logger.debug("Could not fetch Steam schema for appid %s: %s", appid, exc)
+    _steam_schema_cache[appid] = {}
+    return {}
+
+
+async def sync_steam_achievements_for_game(
+    client: httpx.AsyncClient,
+    api_key: str,
+    steam_id: str,
+    game_id: int,
+    appid: int,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[Dict[str, Any]]:
+    try:
+        r = await client.get(
+            "https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v1/",
+            params={"key": api_key, "steamid": steam_id, "appid": str(appid), "l": "english"},
+            timeout=15.0,
+        )
+        if r.status_code != 200:
+            return None
+        payload = r.json()
+        playerstats = payload.get("playerstats", {})
+        if not playerstats.get("success"):
+            return None
+        raw_achs = playerstats.get("achievements", [])
+        if not raw_achs:
+            return None
+
+        schema_map = await fetch_steam_game_schema(client, api_key, appid)
+
+        formatted = []
+        for a in raw_achs:
+            api_name = a.get("apiname")
+            if not api_name:
+                continue
+            sch = schema_map.get(api_name, {})
+            name = a.get("name") or sch.get("displayName") or api_name
+            desc = a.get("description") or sch.get("description") or ""
+            icon_url = sch.get("icon")
+            icon_gray_url = sch.get("icongray")
+            unlocked = 1 if a.get("achieved") == 1 else 0
+            utime = a.get("unlocktime")
+            unlock_time = (
+                datetime.fromtimestamp(utime, tz=timezone.utc).isoformat()
+                if utime and utime > 0
+                else None
+            )
+            formatted.append({
+                "external_ach_id": api_name,
+                "name": name,
+                "description": desc,
+                "icon_url": icon_url,
+                "icon_gray_url": icon_gray_url,
+                "unlocked": unlocked,
+                "unlock_time": unlock_time,
+                "reward_type": None,
+                "reward_value": None,
+                "rarity_pct": None,
+                "is_hidden": sch.get("hidden", 0),
+            })
+
+        if formatted:
+            return upsert_game_achievements(
+                game_id=game_id,
+                source="Steam",
+                platform="PC (Steam)",
+                achievements=formatted,
+                db_path=db_path,
+            )
+    except Exception as exc:
+        logger.debug("Steam achievement fetch error for appid %s: %s", appid, exc)
+    return None
+
+
+async def sync_xbox_achievements_for_game(
+    client: httpx.AsyncClient,
+    xbl_key: str,
+    game_id: int,
+    title_id: str,
+    platform: str = "Xbox",
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[Dict[str, Any]]:
+    try:
+        r = await client.get(
+            f"https://xbl.io/api/v2/achievements/title/{title_id}",
+            headers={"X-Authorization": xbl_key, "Accept": "application/json"},
+            timeout=20.0,
+        )
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        raw_achs = (data.get("content") or {}).get("achievements") or data.get("achievements", [])
+        if not raw_achs:
+            return None
+
+        formatted = []
+        for a in raw_achs:
+            ach_id = str(a.get("id") or "")
+            name = a.get("name") or ach_id
+            desc = a.get("description") or a.get("lockedDescription") or ""
+
+            icon_url = None
+            for m in a.get("mediaAssets") or []:
+                if m.get("type") == "Icon" and m.get("url"):
+                    icon_url = m["url"]
+                    break
+
+            unlocked = 1 if str(a.get("progressState") or "").lower() == "achieved" else 0
+
+            prog = a.get("progression") or {}
+            time_unl = prog.get("timeUnlocked")
+            unlock_time = None
+            if time_unl:
+                try:
+                    unlock_time = datetime.fromisoformat(time_unl.replace("Z", "+00:00")).isoformat()
+                except Exception:
+                    unlock_time = time_unl
+
+            gamerscore = None
+            for rew in a.get("rewards") or []:
+                if rew.get("type") == "Gamerscore" and rew.get("value") is not None:
+                    gamerscore = str(rew["value"])
+                    break
+
+            rarity_obj = a.get("rarity") or {}
+            rarity_pct = None
+            if rarity_obj.get("currentPercentage") is not None:
+                try:
+                    rarity_pct = float(rarity_obj["currentPercentage"])
+                except Exception:
+                    pass
+
+            formatted.append({
+                "external_ach_id": ach_id,
+                "name": name,
+                "description": desc,
+                "icon_url": icon_url,
+                "icon_gray_url": None,
+                "unlocked": unlocked,
+                "unlock_time": unlock_time,
+                "reward_type": "Gamerscore" if gamerscore is not None else None,
+                "reward_value": gamerscore,
+                "rarity_pct": rarity_pct,
+                "is_hidden": 1 if a.get("isSecret") else 0,
+            })
+
+        if formatted:
+            return upsert_game_achievements(
+                game_id=game_id,
+                source="Xbox",
+                platform=platform,
+                achievements=formatted,
+                db_path=db_path,
+            )
+    except Exception as exc:
+        logger.debug("Xbox achievement fetch error for title %s: %s", title_id, exc)
+    return None
+
+
 async def sync_steam(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
     api_key = os.environ.get("STEAM_API_KEY", "").strip()
     steam_id_raw = os.environ.get("STEAM_ID", "").strip()
@@ -78,36 +269,54 @@ async def sync_steam(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
             resp.raise_for_status()
             games = resp.json().get("response", {}).get("games", [])
 
-        count = 0
-        for g in games:
-            appid = g.get("appid")
-            name = g.get("name")
-            if not appid or not name:
-                continue
+            count = 0
+            upserted_steam_games = []
+            for g in games:
+                appid = g.get("appid")
+                name = g.get("name")
+                if not appid or not name:
+                    continue
 
-            playtime_mins = g.get("playtime_forever", 0)
-            playtime_hours = round(playtime_mins / 60.0, 2)
+                playtime_mins = g.get("playtime_forever", 0)
+                playtime_hours = round(playtime_mins / 60.0, 2)
 
-            rtime = g.get("rtime_last_played", 0)
-            last_played = (
-                datetime.fromtimestamp(rtime, tz=timezone.utc).isoformat()
-                if rtime and rtime > 0
-                else None
-            )
+                rtime = g.get("rtime_last_played", 0)
+                last_played = (
+                    datetime.fromtimestamp(rtime, tz=timezone.utc).isoformat()
+                    if rtime and rtime > 0
+                    else None
+                )
 
-            cover_url = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{appid}/library_600x900.jpg"
+                cover_url = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{appid}/library_600x900.jpg"
 
-            upsert_synced_game(
-                external_id=f"steam:{appid}",
-                title=name,
-                platform="PC (Steam)",
-                source="Steam",
-                playtime_hours=playtime_hours,
-                last_played=last_played,
-                cover_url=cover_url,
-                db_path=db_path,
-            )
-            count += 1
+                saved_game = upsert_synced_game(
+                    external_id=f"steam:{appid}",
+                    title=name,
+                    platform="PC (Steam)",
+                    source="Steam",
+                    playtime_hours=playtime_hours,
+                    last_played=last_played,
+                    cover_url=cover_url,
+                    db_path=db_path,
+                )
+                upserted_steam_games.append((saved_game["id"], appid, playtime_hours))
+                count += 1
+
+            # Fetch achievements for Steam games with playtime or that have not synced achievements
+            sem = asyncio.Semaphore(6)
+            async def _fetch_ach(g_db_id: int, a_id: int):
+                async with sem:
+                    await sync_steam_achievements_for_game(
+                        client, api_key, steam_id, g_db_id, a_id, db_path=db_path
+                    )
+
+            ach_tasks = [
+                _fetch_ach(gid, aid)
+                for gid, aid, p_hours in upserted_steam_games
+                if p_hours > 0
+            ]
+            if ach_tasks:
+                await asyncio.gather(*ach_tasks, return_exceptions=True)
 
         log_sync_event("Steam", "success", count, f"Synced {count} Steam games", db_path=db_path)
         return {"source": "Steam", "status": "success", "games_synced": count, "message": f"Synced {count} Steam games"}
@@ -207,68 +416,88 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
                     except Exception as exc:
                         logger.warning("Could not fetch Xbox playtime stats for chunk: %s", exc)
 
-        count = 0
-        for t in titles:
-            title_id = t.get("titleId")
-            name = t.get("name")
-            if not title_id or not name:
-                continue
+            count = 0
+            upserted_xbox_games = []
+            for t in titles:
+                title_id = t.get("titleId")
+                name = t.get("name")
+                if not title_id or not name:
+                    continue
 
-            # Filter out non-game media apps if type is specified
-            title_type = (t.get("type") or "Game").lower()
-            if title_type not in ("game", "dvr", ""):
-                continue
+                # Filter out non-game media apps if type is specified
+                title_type = (t.get("type") or "Game").lower()
+                if title_type not in ("game", "dvr", ""):
+                    continue
 
-            devices = t.get("devices") or []
-            if "Win32" in devices or "PC" in devices:
-                if any(x in devices for x in ("XboxSeries", "XboxOne", "Xbox360")):
-                    platform = "Xbox / PC"
+                devices = t.get("devices") or []
+                if "Win32" in devices or "PC" in devices:
+                    if any(x in devices for x in ("XboxSeries", "XboxOne", "Xbox360")):
+                        platform = "Xbox / PC"
+                    else:
+                        platform = "PC (Xbox)"
                 else:
-                    platform = "PC (Xbox)"
-            else:
-                platform = "Xbox"
+                    platform = "Xbox"
 
-            ach = t.get("achievement") or {}
-            unlocked = int(ach.get("currentAchievements") or 0)
-            total_ach = int(ach.get("totalAchievements") or 0)
+                ach = t.get("achievement") or {}
+                unlocked = int(ach.get("currentAchievements") or 0)
+                total_ach = int(ach.get("totalAchievements") or 0)
 
-            last_played_raw = t.get("titleHistory", {}).get("lastTimePlayed") or t.get("lastTimePlayed")
-            last_played = None
-            if last_played_raw:
-                try:
-                    last_played = datetime.fromisoformat(last_played_raw.replace("Z", "+00:00")).isoformat()
-                except Exception:
-                    last_played = None
+                last_played_raw = t.get("titleHistory", {}).get("lastTimePlayed") or t.get("lastTimePlayed")
+                last_played = None
+                if last_played_raw:
+                    try:
+                        last_played = datetime.fromisoformat(last_played_raw.replace("Z", "+00:00")).isoformat()
+                    except Exception:
+                        last_played = None
 
-            # Select cover art: Prioritize vertical 2:3 Poster (prevents logo clipping), then BoxArt, then displayImage
-            poster_url = None
-            boxart_url = None
-            for img in (t.get("images") or []):
-                itype = img.get("type")
-                iurl = img.get("url")
-                if itype == "Poster" and iurl:
-                    poster_url = iurl
-                    break
-                elif itype == "BoxArt" and iurl and not boxart_url:
-                    boxart_url = iurl
+                # Select cover art: Prioritize vertical 2:3 Poster (prevents logo clipping), then BoxArt, then displayImage
+                poster_url = None
+                boxart_url = None
+                for img in (t.get("images") or []):
+                    itype = img.get("type")
+                    iurl = img.get("url")
+                    if itype == "Poster" and iurl:
+                        poster_url = iurl
+                        break
+                    elif itype == "BoxArt" and iurl and not boxart_url:
+                        boxart_url = iurl
 
-            cover_url = poster_url or boxart_url or t.get("displayImage") or None
-            playtime_mins = playtime_map.get(str(title_id), float(t.get("minutesPlayed") or 0.0))
-            playtime_hours = round(playtime_mins / 60.0, 2)
+                cover_url = poster_url or boxart_url or t.get("displayImage") or None
+                playtime_mins = playtime_map.get(str(title_id), float(t.get("minutesPlayed") or 0.0))
+                playtime_hours = round(playtime_mins / 60.0, 2)
 
-            upsert_synced_game(
-                external_id=f"xbox:{title_id}",
-                title=name,
-                platform=platform,
-                source="Xbox",
-                playtime_hours=playtime_hours,
-                last_played=last_played,
-                achievements_unlocked=unlocked,
-                achievements_total=total_ach,
-                cover_url=cover_url,
-                db_path=db_path,
-            )
-            count += 1
+                saved_game = upsert_synced_game(
+                    external_id=f"xbox:{title_id}",
+                    title=name,
+                    platform=platform,
+                    source="Xbox",
+                    playtime_hours=playtime_hours,
+                    last_played=last_played,
+                    achievements_unlocked=unlocked,
+                    achievements_total=total_ach,
+                    cover_url=cover_url,
+                    db_path=db_path,
+                )
+                upserted_xbox_games.append((saved_game["id"], str(title_id), platform, playtime_hours, total_ach))
+                count += 1
+
+            # Sync detailed achievements for top played titles where totalAchievements is 0 or unpopulated (rate-limited)
+            xbox_needing_ach = sorted(
+                [g for g in upserted_xbox_games if g[4] == 0 and g[3] > 0],
+                key=lambda x: x[3],
+                reverse=True,
+            )[:25]
+            if xbox_needing_ach:
+                sem_x = asyncio.Semaphore(4)
+                async def _fetch_x_ach(g_id: int, t_id: str, p_form: str):
+                    async with sem_x:
+                        await sync_xbox_achievements_for_game(
+                            client, xbl_key, g_id, t_id, platform=p_form, db_path=db_path
+                        )
+                await asyncio.gather(
+                    *[_fetch_x_ach(g[0], g[1], g[2]) for g in xbox_needing_ach],
+                    return_exceptions=True,
+                )
 
         log_sync_event("Xbox", "success", count, f"Synced {count} Xbox / PC Game Pass titles", db_path=db_path)
         return {"source": "Xbox", "status": "success", "games_synced": count, "message": f"Synced {count} Xbox titles"}
@@ -286,6 +515,7 @@ def _sync_psn_blocking(npsso: str, db_path: str = DEFAULT_DB_PATH) -> int:
     psnawp = PSNAWP(npsso)
     client = psnawp.me()
 
+    trophy_title_map: Dict[str, Any] = {}
     trophy_map: Dict[str, Dict[str, int]] = {}
     try:
         for tr in client.trophy_titles():
@@ -296,6 +526,7 @@ def _sync_psn_blocking(npsso: str, db_path: str = DEFAULT_DB_PATH) -> int:
                 tot = sum(getattr(defined, k, 0) for k in ("bronze", "silver", "gold", "platinum"))
                 unl = sum(getattr(earned, k, 0) for k in ("bronze", "silver", "gold", "platinum"))
                 trophy_map[t_name] = {"unlocked": unl, "total": tot}
+                trophy_title_map[t_name] = tr
     except Exception as exc:
         logger.warning("Could not fetch PSN trophy summary: %s", exc)
 
@@ -318,7 +549,7 @@ def _sync_psn_blocking(npsso: str, db_path: str = DEFAULT_DB_PATH) -> int:
         cover_url = getattr(item, "image_url", None)
         tr_info = trophy_map.get(name.strip().lower(), {"unlocked": 0, "total": 0})
 
-        upsert_synced_game(
+        game_dict = upsert_synced_game(
             external_id=f"psn:{title_id}",
             title=name,
             platform=platform,
@@ -332,7 +563,180 @@ def _sync_psn_blocking(npsso: str, db_path: str = DEFAULT_DB_PATH) -> int:
         )
         count += 1
 
+        tr_obj = trophy_title_map.get(name.strip().lower())
+        if tr_obj and tr_info["total"] > 0:
+            np_comm_id = getattr(tr_obj, "np_communication_id", None)
+            plat_set = getattr(tr_obj, "title_platform", None) or []
+            target_plat = next(iter(plat_set)) if plat_set else None
+            if np_comm_id and target_plat:
+                try:
+                    trophies = list(client.trophies(np_comm_id, target_plat, include_progress=True))
+                    formatted_trophies = []
+                    for t in trophies:
+                        tid = str(getattr(t, "trophy_id", ""))
+                        tname = getattr(t, "trophy_name", "") or f"Trophy {tid}"
+                        tdetail = getattr(t, "trophy_detail", "") or ""
+                        ticon = getattr(t, "trophy_icon_url", None)
+                        earned = bool(getattr(t, "earned", False))
+                        edt = getattr(t, "earned_date_time", None)
+                        unl_time = edt.isoformat() if edt else None
+                        ttype = getattr(t, "trophy_type", None)
+                        ttype_str = str(ttype).split(".")[-1].capitalize() if ttype else "Trophy"
+                        earn_rate = getattr(t, "trophy_earn_rate", None)
+                        rarity = float(earn_rate) if earn_rate is not None else None
+                        formatted_trophies.append({
+                            "external_ach_id": tid,
+                            "name": tname,
+                            "description": tdetail,
+                            "icon_url": ticon,
+                            "icon_gray_url": None,
+                            "unlocked": 1 if earned else 0,
+                            "unlock_time": unl_time,
+                            "reward_type": ttype_str,
+                            "reward_value": ttype_str.lower(),
+                            "rarity_pct": rarity,
+                            "is_hidden": 0,
+                        })
+                    if formatted_trophies:
+                        upsert_game_achievements(
+                            game_id=game_dict["id"],
+                            source="PSN",
+                            platform=platform,
+                            achievements=formatted_trophies,
+                            db_path=db_path,
+                        )
+                except Exception as exc:
+                    logger.debug("Could not fetch detailed PSN trophies for %s: %s", name, exc)
+
     return count
+
+
+def _sync_psn_achievements_for_single_game(
+    npsso: str,
+    game_id: int,
+    ext_id: str,
+    title: str,
+    platform: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[Dict[str, Any]]:
+    from psnawp_api import PSNAWP
+    psnawp = PSNAWP(npsso)
+    client = psnawp.me()
+
+    target_name = (title or "").strip().lower()
+    target_norm = normalize_game_title(target_name)
+
+    for tr in client.trophy_titles():
+        tr_name = (getattr(tr, "title_name", None) or "").strip().lower()
+        if tr_name == target_name or (target_norm and normalize_game_title(tr_name) == target_norm):
+            np_comm_id = getattr(tr, "np_communication_id", None)
+            plat_set = getattr(tr, "title_platform", None) or []
+            target_plat = next(iter(plat_set)) if plat_set else None
+            if np_comm_id and target_plat:
+                try:
+                    trophies = list(client.trophies(np_comm_id, target_plat, include_progress=True))
+                    formatted_trophies = []
+                    for t in trophies:
+                        tid = str(getattr(t, "trophy_id", ""))
+                        tname = getattr(t, "trophy_name", "") or f"Trophy {tid}"
+                        tdetail = getattr(t, "trophy_detail", "") or ""
+                        ticon = getattr(t, "trophy_icon_url", None)
+                        earned = bool(getattr(t, "earned", False))
+                        edt = getattr(t, "earned_date_time", None)
+                        unl_time = edt.isoformat() if edt else None
+                        ttype = getattr(t, "trophy_type", None)
+                        ttype_str = str(ttype).split(".")[-1].capitalize() if ttype else "Trophy"
+                        earn_rate = getattr(t, "trophy_earn_rate", None)
+                        rarity = float(earn_rate) if earn_rate is not None else None
+                        formatted_trophies.append({
+                            "external_ach_id": tid,
+                            "name": tname,
+                            "description": tdetail,
+                            "icon_url": ticon,
+                            "icon_gray_url": None,
+                            "unlocked": 1 if earned else 0,
+                            "unlock_time": unl_time,
+                            "reward_type": ttype_str,
+                            "reward_value": ttype_str.lower(),
+                            "rarity_pct": rarity,
+                            "is_hidden": 0,
+                        })
+                    if formatted_trophies:
+                        return upsert_game_achievements(
+                            game_id=game_id,
+                            source="PSN",
+                            platform=platform,
+                            achievements=formatted_trophies,
+                            db_path=db_path,
+                        )
+                except Exception as exc:
+                    logger.debug("PSN trophy fetch error for %s: %s", title, exc)
+            break
+    return None
+
+
+async def sync_game_achievements_on_demand(
+    game_id: int,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Dict[str, Any]:
+    """
+    On-demand live achievement sync for a game and its cross-platform linked copies.
+    Fetches the latest achievements from Steam, Xbox, and/or PSN APIs and returns get_game_achievements().
+    """
+    game = get_game_by_id(game_id, db_path=db_path)
+    if not game:
+        return {
+            "unified_summary": {"unlocked": 0, "total": 0, "percentage": 0.0, "overlap_count": 0},
+            "per_platform_summary": [],
+            "achievements": [],
+        }
+
+    linked_copies = game.get("linked_games") or [game]
+    steam_key = os.environ.get("STEAM_API_KEY", "").strip()
+    steam_id_raw = os.environ.get("STEAM_ID", "").strip()
+    xbl_key = os.environ.get("XBL_API_KEY", "").strip()
+    npsso = os.environ.get("PSN_NPSSO", "").strip()
+
+    steam_id = None
+    async with _make_async_client(timeout=25.0) as client:
+        if steam_key and steam_id_raw:
+            try:
+                steam_id = await resolve_steam_vanity(client, steam_key, steam_id_raw)
+            except Exception as exc:
+                logger.debug("Steam vanity resolution error: %s", exc)
+
+        for copy in linked_copies:
+            ext_id = str(copy.get("external_id") or "")
+            c_id = copy["id"]
+
+            if ext_id.startswith("steam:") and steam_key and steam_id:
+                appid_str = ext_id.split(":", 1)[1]
+                if appid_str.isdigit():
+                    await sync_steam_achievements_for_game(
+                        client, steam_key, steam_id, c_id, int(appid_str), db_path=db_path
+                    )
+
+            elif ext_id.startswith("xbox:") and xbl_key:
+                title_id = ext_id.split(":", 1)[1]
+                await sync_xbox_achievements_for_game(
+                    client, xbl_key, c_id, title_id, platform=copy.get("platform", "Xbox"), db_path=db_path
+                )
+
+            elif ext_id.startswith("psn:") and npsso:
+                try:
+                    await asyncio.to_thread(
+                        _sync_psn_achievements_for_single_game,
+                        npsso,
+                        c_id,
+                        ext_id,
+                        copy.get("title", ""),
+                        copy.get("platform", "PlayStation 5"),
+                        db_path,
+                    )
+                except Exception as exc:
+                    logger.debug("PSN on-demand achievement sync error: %s", exc)
+
+    return get_game_achievements(game_id, db_path=db_path)
 
 
 async def sync_psn(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:

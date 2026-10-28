@@ -27,7 +27,7 @@ from taxonomy import (
     validate_tags,
 )
 
-from sync_engine import enrich_missing_metadata
+from sync_engine import enrich_missing_metadata, sync_game_achievements_on_demand
 
 init_db()
 
@@ -350,6 +350,23 @@ async def enrich_library_genres(limit: int = 500, force: bool = False) -> Dict[s
     existing genres; existing genres are never dropped, even with force=True.
     """
     return await enrich_missing_metadata(limit=limit, force=force)
+
+
+@mcp.tool()
+async def get_game_achievements_detail(title: str) -> Dict[str, Any]:
+    """
+    Retrieve full achievement and trophy details for a game, including cross-platform non-overlapping
+    unlocked counts and which platform each individual achievement was unlocked on (Steam, Xbox, PSN).
+    """
+    matches = query_games(search=title, limit=5)
+    if not matches:
+        return {"error": f"No game found matching '{title}'"}
+    target = next((m for m in matches if m["title"].lower() == title.strip().lower()), matches[0])
+    res = await sync_game_achievements_on_demand(target["id"])
+    res["game_title"] = target["title"]
+    res["game_id"] = target["id"]
+    res["platform"] = target["platform"]
+    return res
 
 
 if __name__ == "__main__":

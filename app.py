@@ -31,6 +31,7 @@ from db import (
     add_manual_game,
     delete_game,
     dismiss_reconcile_group,
+    get_game_achievements,
     get_game_by_id,
     get_habits_analytics,
     get_library_stats,
@@ -42,7 +43,12 @@ from db import (
     unlink_game,
     update_game,
 )
-from sync_engine import enrich_missing_metadata, search_external_metadata, sync_all_platforms
+from sync_engine import (
+    enrich_missing_metadata,
+    search_external_metadata,
+    sync_all_platforms,
+    sync_game_achievements_on_demand,
+)
 
 load_dotenv()
 
@@ -242,6 +248,8 @@ class GameUpdateRequest(BaseModel):
     platform: Optional[str] = None
     playtime_hours: Optional[float] = Field(default=None, ge=0.0)
     completion_status: Optional[str] = None
+    achievements_unlocked: Optional[int] = Field(default=None, ge=0)
+    achievements_total: Optional[int] = Field(default=None, ge=0)
     user_rating: Optional[int] = Field(default=None, ge=1, le=10)
     critic_score: Optional[int] = Field(default=None, ge=0, le=100)
     release_year: Optional[int] = None
@@ -402,6 +410,39 @@ async def api_delete_game(game_id: int) -> Dict[str, Any]:
     if not deleted:
         raise HTTPException(status_code=404, detail="Game not found")
     return {"status": "ok", "deleted_id": game_id}
+
+
+@app.get("/api/games/{game_id}/achievements")
+async def api_get_game_achievements(
+    game_id: int,
+    auto_sync: bool = Query(default=True),
+) -> Dict[str, Any]:
+    existing = get_game_by_id(game_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    linked_copies = existing.get("linked_games") or [existing]
+    needs_sync = any(
+        c.get("source") in ("Steam", "Xbox", "PSN") and not c.get("achievements_synced_at")
+        for c in linked_copies
+    )
+    if auto_sync and needs_sync:
+        try:
+            return await sync_game_achievements_on_demand(game_id)
+        except Exception as exc:
+            logger.warning("Auto-sync achievements error for game %s: %s", game_id, exc)
+
+    return get_game_achievements(game_id)
+
+
+@app.post("/api/games/{game_id}/achievements/sync")
+async def api_sync_game_achievements(game_id: int) -> Dict[str, Any]:
+    existing = get_game_by_id(game_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Game not found")
+    data = await sync_game_achievements_on_demand(game_id)
+    refreshed_game = get_game_by_id(game_id)
+    return {"status": "ok", "game": refreshed_game, "achievements": data}
 
 
 @app.post("/api/sync")

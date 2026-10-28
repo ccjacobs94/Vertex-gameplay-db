@@ -93,7 +93,20 @@ const state = {
   reconcileCheckedIds: new Set(),
   manualSelectedGames: [],
   reconcileCandidatesCount: 0,
+  currentGameAchievements: null,
+  currentAchFilter: "all",
+  currentAchPlatform: "all",
+  currentAchSearch: "",
 };
+
+function makeFallbackAchIcon(name) {
+  const char = (name || "A").trim().charAt(0).toUpperCase() || "🏆";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
+    <rect width="44" height="44" rx="6" fill="#1e293b"/>
+    <text x="22" y="27" fill="#94a3b8" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">${char}</text>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
 
 function updateTriageButtonBadge() {
   const untriagedCount = state.games.filter((g) => !g.status_locked).length;
@@ -958,6 +971,26 @@ function renderGames() {
       wrapper.appendChild(ratingBadge);
     }
 
+    const achTot = game.achievements_total || 0;
+    const achUnl = game.achievements_unlocked || 0;
+    if (achTot > 0 || achUnl > 0) {
+      const achBadge = document.createElement("span");
+      achBadge.className = "card-ach-badge";
+      if (achTot > 0 && achUnl >= achTot) {
+        achBadge.classList.add("ach-complete");
+      }
+      achBadge.textContent = achTot > 0 ? `🏆 ${achUnl}/${achTot}` : `🏆 ${achUnl}`;
+      if (game.is_reconciled && Array.isArray(game.linked_games) && game.linked_games.length > 1) {
+        const platDetails = game.linked_games
+          .map((lg) => `${lg.platform}: ${lg.achievements_unlocked || 0}/${lg.achievements_total || 0}`)
+          .join(" • ");
+        achBadge.title = `Unique non-overlapping: ${achUnl}/${achTot} (${platDetails})`;
+      } else {
+        achBadge.title = `Achievements: ${achUnl}/${achTot}`;
+      }
+      wrapper.appendChild(achBadge);
+    }
+
     const body = document.createElement("div");
     body.className = "card-body";
 
@@ -973,6 +1006,14 @@ function renderGames() {
     listPlat.className = "card-list-plat";
     listPlat.textContent = game.platform;
     subrow.appendChild(listPlat);
+
+    if (achTot > 0 || achUnl > 0) {
+      const listAch = document.createElement("span");
+      listAch.className = "card-list-ach";
+      if (achTot > 0 && achUnl >= achTot) listAch.classList.add("ach-complete");
+      listAch.textContent = achTot > 0 ? `🏆 ${achUnl}/${achTot}` : `🏆 ${achUnl}`;
+      subrow.appendChild(listAch);
+    }
 
     const genres = document.createElement("div");
     genres.className = "card-genres";
@@ -1257,6 +1298,19 @@ function renderEditLinkedCopies(game) {
     hrs.textContent = `⏱ ${copy.playtime_hours || 0}h`;
     right.appendChild(hrs);
 
+    const copyTot = copy.achievements_total || 0;
+    const copyUnl = copy.achievements_unlocked || 0;
+    if (copyTot > 0 || copyUnl > 0) {
+      const copyAch = document.createElement("span");
+      copyAch.className = "linked-copy-ach-badge";
+      if (copyTot > 0 && copyUnl >= copyTot) {
+        copyAch.classList.add("ach-complete");
+      }
+      copyAch.textContent = copyTot > 0 ? `🏆 ${copyUnl}/${copyTot}` : `🏆 ${copyUnl}`;
+      copyAch.title = `${copy.platform} achievements: ${copyUnl}/${copyTot}`;
+      right.appendChild(copyAch);
+    }
+
     if (linked.length > 1) {
       const unlinkBtn = document.createElement("button");
       unlinkBtn.type = "button";
@@ -1277,6 +1331,326 @@ function renderEditLinkedCopies(game) {
     li.appendChild(left);
     li.appendChild(right);
     listEl.appendChild(li);
+  }
+}
+
+function shortPlatformLabel(platform) {
+  const p = (platform || "").trim();
+  const mapping = {
+    "PC (Steam)": "Steam",
+    "PC (Xbox)": "PC (Xbox)",
+    "Xbox / PC": "Xbox/PC",
+    "Xbox": "Xbox",
+    "PlayStation 4": "PS4",
+    "PlayStation 5": "PS5",
+    "Nintendo Switch": "Switch",
+    "PC (Other)": "PC",
+  };
+  return mapping[p] || p;
+}
+
+function renderAchievementsList() {
+  const payload = state.currentGameAchievements || {};
+  const listEl = document.getElementById("edit-achievements-list");
+  const countBadge = document.getElementById("ach-explorer-count-badge");
+  const overlapBadge = document.getElementById("ach-explorer-overlap-badge");
+  const emptyEl = document.getElementById("ach-empty-state");
+  const platPillsWrap = document.getElementById("ach-platform-filter-pills");
+
+  if (!listEl) return;
+  listEl.innerHTML = "";
+
+  const unified = payload.unified_summary || { unlocked: 0, total: 0, percentage: 0, overlap_count: 0 };
+  const perPlatform = payload.per_platform_summary || [];
+  const achievements = payload.achievements || [];
+
+  if (countBadge) {
+    countBadge.textContent = `${unified.unlocked} / ${unified.total} (${unified.percentage}%)`;
+  }
+
+  if (overlapBadge) {
+    if (unified.overlap_count > 0) {
+      overlapBadge.hidden = false;
+      overlapBadge.textContent = `★ ${unified.overlap_count} overlapping on multiple platforms`;
+    } else {
+      overlapBadge.hidden = true;
+    }
+  }
+
+  const allCountEl = document.getElementById("ach-pill-all-count");
+  const unlCountEl = document.getElementById("ach-pill-unl-count");
+  const lckCountEl = document.getElementById("ach-pill-lck-count");
+  if (allCountEl) allCountEl.textContent = achievements.length;
+  if (unlCountEl) unlCountEl.textContent = achievements.filter((a) => a.unlocked).length;
+  if (lckCountEl) lckCountEl.textContent = achievements.filter((a) => !a.unlocked).length;
+
+  if (platPillsWrap) {
+    if (perPlatform.length > 1) {
+      platPillsWrap.hidden = false;
+      platPillsWrap.innerHTML = "";
+
+      const allPlatBtn = document.createElement("button");
+      allPlatBtn.type = "button";
+      allPlatBtn.className = `ach-pill ${state.currentAchPlatform === "all" ? "active" : ""}`;
+      allPlatBtn.textContent = "All Platforms";
+      allPlatBtn.addEventListener("click", () => {
+        state.currentAchPlatform = "all";
+        renderAchievementsList();
+      });
+      platPillsWrap.appendChild(allPlatBtn);
+
+      for (const p of perPlatform) {
+        const pBtn = document.createElement("button");
+        pBtn.type = "button";
+        pBtn.className = `ach-pill ${state.currentAchPlatform === p.platform ? "active" : ""}`;
+        pBtn.textContent = `${p.short_platform} (${p.unlocked}/${p.total})`;
+        pBtn.addEventListener("click", () => {
+          state.currentAchPlatform = p.platform;
+          renderAchievementsList();
+        });
+        platPillsWrap.appendChild(pBtn);
+      }
+    } else {
+      platPillsWrap.hidden = true;
+      platPillsWrap.innerHTML = "";
+    }
+  }
+
+  const filterStatus = state.currentAchFilter || "all";
+  const filterPlat = state.currentAchPlatform || "all";
+  const searchQ = (state.currentAchSearch || "").toLowerCase().trim();
+
+  const filtered = achievements.filter((a) => {
+    if (filterStatus === "unlocked" && !a.unlocked) return false;
+    if (filterStatus === "locked" && a.unlocked) return false;
+
+    if (filterPlat !== "all") {
+      const matchPlat = (a.platforms || []).some(
+        (p) => p.platform === filterPlat || p.short_platform === filterPlat
+      );
+      if (!matchPlat) return false;
+    }
+
+    if (searchQ) {
+      const nameMatch = (a.name || "").toLowerCase().includes(searchQ);
+      const descMatch = (a.description || "").toLowerCase().includes(searchQ);
+      if (!nameMatch && !descMatch) return false;
+    }
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    if (emptyEl) {
+      emptyEl.hidden = false;
+      if (achievements.length === 0) {
+        emptyEl.textContent = "No achievements synced yet. Click '↻ Sync Achievements' above to check platform APIs.";
+      } else {
+        emptyEl.textContent = "No achievements match your filter.";
+      }
+    }
+    return;
+  }
+
+  if (emptyEl) emptyEl.hidden = true;
+
+  for (const a of filtered) {
+    const li = document.createElement("li");
+    li.className = `ach-card-item ${a.unlocked ? "unlocked" : "locked"}`;
+
+    const iconWrap = document.createElement("div");
+    iconWrap.className = "ach-card-icon";
+
+    const iconImg = document.createElement("img");
+    iconImg.className = "ach-icon-img";
+    const fallbackSrc = makeFallbackAchIcon(a.name);
+    const targetSrc = a.unlocked
+      ? a.icon_url || a.icon_gray_url || fallbackSrc
+      : a.icon_gray_url || a.icon_url || fallbackSrc;
+    iconImg.src = targetSrc;
+    iconImg.alt = "";
+    iconImg.width = 48;
+    iconImg.height = 48;
+    iconImg.loading = "lazy";
+    iconImg.onerror = () => {
+      iconImg.src = fallbackSrc;
+    };
+    iconWrap.appendChild(iconImg);
+    li.appendChild(iconWrap);
+
+    const body = document.createElement("div");
+    body.className = "ach-card-body";
+
+    const topRow = document.createElement("div");
+    topRow.className = "ach-card-top";
+
+    const nameEl = document.createElement("strong");
+    nameEl.className = "ach-card-name";
+    nameEl.textContent = a.name;
+    topRow.appendChild(nameEl);
+
+    const metaTags = document.createElement("div");
+    metaTags.className = "ach-meta-tags";
+
+    if (a.reward_type && a.reward_value) {
+      const rewTag = document.createElement("span");
+      const rewClass = (a.reward_type || "").toLowerCase();
+      rewTag.className = `ach-reward-tag ${rewClass}`;
+      rewTag.textContent = a.reward_type === "Gamerscore" ? `${a.reward_value}G` : `🏆 ${a.reward_type}`;
+      metaTags.appendChild(rewTag);
+    }
+    if (a.rarity_pct != null) {
+      const rarTag = document.createElement("span");
+      rarTag.className = "ach-rarity-tag";
+      rarTag.textContent = `${Math.round(a.rarity_pct * 10) / 10}%`;
+      rarTag.title = `Global unlock rate: ${a.rarity_pct}%`;
+      metaTags.appendChild(rarTag);
+    }
+    topRow.appendChild(metaTags);
+    body.appendChild(topRow);
+
+    const descEl = document.createElement("p");
+    descEl.className = "ach-card-desc";
+    const descText = a.description || (a.is_hidden && !a.unlocked ? "Hidden secret achievement" : "No description provided");
+    descEl.textContent = descText;
+    body.appendChild(descEl);
+
+    if (Array.isArray(a.platforms) && a.platforms.length > 0) {
+      const platRow = document.createElement("div");
+      platRow.className = "ach-platform-badges";
+      for (const p of a.platforms) {
+        const pBadge = document.createElement("span");
+        pBadge.className = `ach-plat-badge ${p.unlocked ? "unlocked" : "locked"}`;
+        const check = p.unlocked ? "✓" : "🔒";
+        pBadge.textContent = `${check} ${p.short_platform}`;
+        if (p.unlocked && p.unlock_time) {
+          const uDate = new Date(p.unlock_time);
+          const dateStr = !Number.isNaN(uDate.getTime())
+            ? uDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+            : p.unlock_time;
+          pBadge.title = `Unlocked on ${p.platform}: ${dateStr}`;
+        } else {
+          pBadge.title = p.unlocked ? `Unlocked on ${p.platform}` : `Locked on ${p.platform}`;
+        }
+        platRow.appendChild(pBadge);
+      }
+      body.appendChild(platRow);
+    }
+
+    li.appendChild(body);
+    listEl.appendChild(li);
+  }
+}
+
+async function loadAndRenderGameAchievements(gameId, forceSync = false) {
+  const section = document.getElementById("edit-achievements-section");
+  const listEl = document.getElementById("edit-achievements-list");
+  const countBadge = document.getElementById("ach-explorer-count-badge");
+  const overlapBadge = document.getElementById("ach-explorer-overlap-badge");
+  const loadingEl = document.getElementById("ach-loading-indicator");
+  const emptyEl = document.getElementById("ach-empty-state");
+  const platPillsWrap = document.getElementById("ach-platform-filter-pills");
+  const refreshBtn = document.getElementById("btn-refresh-game-ach");
+
+  if (!section || !listEl) return;
+
+  state.currentAchFilter = "all";
+  state.currentAchPlatform = "all";
+  state.currentAchSearch = "";
+  const searchInput = document.getElementById("ach-search-input");
+  if (searchInput) searchInput.value = "";
+
+  for (const pill of document.querySelectorAll(".ach-pill[data-ach-filter]")) {
+    pill.classList.toggle("active", pill.dataset.achFilter === "all");
+  }
+
+  listEl.innerHTML = "";
+  if (loadingEl) loadingEl.hidden = false;
+  if (emptyEl) emptyEl.hidden = true;
+  if (refreshBtn) {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = "Syncing...";
+  }
+
+  try {
+    const url = forceSync
+      ? `/api/games/${gameId}/achievements/sync`
+      : `/api/games/${gameId}/achievements?auto_sync=true`;
+    const res = await fetch(url, { method: forceSync ? "POST" : "GET" });
+    if (!res.ok) {
+      if (emptyEl) {
+        emptyEl.textContent = "Failed to load achievements.";
+        emptyEl.hidden = false;
+      }
+      return;
+    }
+    const data = await res.json();
+    const payload = forceSync ? (data.achievements || {}) : data;
+
+    if (payload && payload.unified_summary) {
+      const u = payload.unified_summary.unlocked || 0;
+      const t = payload.unified_summary.total || 0;
+      const pct = payload.unified_summary.percentage != null
+        ? payload.unified_summary.percentage
+        : (t > 0 ? Math.round((u / t) * 100) : 0);
+
+      const achDisplay = document.getElementById("edit-ach-display");
+      if (achDisplay) {
+        if (t > 0) {
+          achDisplay.textContent = `🏆 ${u} / ${t} (${pct}%)`;
+        } else if (u > 0) {
+          achDisplay.textContent = `🏆 ${u} unlocked`;
+        } else {
+          achDisplay.textContent = "—";
+        }
+      }
+
+      const editAchUnlInput = document.getElementById("edit-ach-unlocked");
+      const editAchTotInput = document.getElementById("edit-ach-total");
+      const editAchWrap = document.getElementById("edit-ach-edit-wrap");
+      if (editAchUnlInput && editAchWrap && editAchWrap.hidden) {
+        editAchUnlInput.value = u;
+      }
+      if (editAchTotInput && editAchWrap && editAchWrap.hidden) {
+        editAchTotInput.value = t;
+      }
+
+      const achPills = document.getElementById("edit-ach-breakdown-pills");
+      if (achPills && Array.isArray(payload.per_platform_summary) && payload.per_platform_summary.length > 1) {
+        achPills.innerHTML = "";
+        for (const p of payload.per_platform_summary) {
+          const pill = document.createElement("span");
+          pill.className = "edit-ach-pill";
+          pill.textContent = `${p.short_platform}: ${p.unlocked}/${p.total}`;
+          achPills.appendChild(pill);
+        }
+      }
+
+      const gIdx = state.games.findIndex((g) => g.id === gameId);
+      if (gIdx !== -1) {
+        const prevUnl = state.games[gIdx].achievements_unlocked;
+        const prevTot = state.games[gIdx].achievements_total;
+        if (prevUnl !== u || prevTot !== t) {
+          state.games[gIdx].achievements_unlocked = u;
+          state.games[gIdx].achievements_total = t;
+          renderGames();
+        }
+      }
+    }
+
+    state.currentGameAchievements = payload;
+    renderAchievementsList();
+  } catch (err) {
+    console.error("Achievements load error:", err);
+    if (emptyEl) {
+      emptyEl.textContent = "Could not load achievements.";
+      emptyEl.hidden = false;
+    }
+  } finally {
+    if (loadingEl) loadingEl.hidden = true;
+    if (refreshBtn) {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = "↻ Sync Achievements";
+    }
   }
 }
 
@@ -1312,6 +1686,7 @@ function openEditModal(game) {
 
   const achTile = document.getElementById("edit-ach-tile");
   const achDisplay = document.getElementById("edit-ach-display");
+  const achPills = document.getElementById("edit-ach-breakdown-pills");
   if (achTile && achDisplay) {
     const unl = game.achievements_unlocked || 0;
     const tot = game.achievements_total || 0;
@@ -1319,10 +1694,36 @@ function openEditModal(game) {
       const pct = Math.round((unl / tot) * 100);
       achDisplay.textContent = `🏆 ${unl} / ${tot} (${pct}%)`;
       achTile.hidden = false;
+    } else if (unl > 0) {
+      achDisplay.textContent = `🏆 ${unl} unlocked`;
+      achTile.hidden = false;
     } else {
-      achTile.hidden = true;
+      achDisplay.textContent = "—";
+      achTile.hidden = false;
+    }
+
+    if (achPills) {
+      achPills.innerHTML = "";
+      if (game.is_reconciled && Array.isArray(game.linked_games) && game.linked_games.length > 1) {
+        for (const lg of game.linked_games) {
+          const pill = document.createElement("span");
+          pill.className = "edit-ach-pill";
+          pill.textContent = `${shortPlatformLabel(lg.platform)}: ${lg.achievements_unlocked || 0}/${lg.achievements_total || 0}`;
+          achPills.appendChild(pill);
+        }
+      }
     }
   }
+
+  const editAchUnlInput = document.getElementById("edit-ach-unlocked");
+  const editAchTotInput = document.getElementById("edit-ach-total");
+  const editAchWrap = document.getElementById("edit-ach-edit-wrap");
+  const toggleAchBtn = document.getElementById("btn-toggle-edit-ach");
+  if (editAchUnlInput) editAchUnlInput.value = game.achievements_unlocked ?? 0;
+  if (editAchTotInput) editAchTotInput.value = game.achievements_total ?? 0;
+  if (editAchWrap) editAchWrap.hidden = true;
+  if (achDisplay) achDisplay.hidden = false;
+  if (toggleAchBtn) toggleAchBtn.textContent = "Edit";
 
   const metaTile = document.getElementById("edit-meta-tile");
   const metaDisplay = document.getElementById("edit-meta-display");
@@ -1353,6 +1754,7 @@ function openEditModal(game) {
   document.getElementById("edit-notes").value = game.notes || "";
   syncEditFavButton(game.favorite);
   renderEditLinkedCopies(game);
+  loadAndRenderGameAchievements(game.id, false);
   if (!dialog.open) {
     dialog.showModal();
   }
@@ -2700,6 +3102,29 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  const toggleAchBtn = document.getElementById("btn-toggle-edit-ach");
+  if (toggleAchBtn) {
+    toggleAchBtn.addEventListener("click", () => {
+      const achWrap = document.getElementById("edit-ach-edit-wrap");
+      const achDisplay = document.getElementById("edit-ach-display");
+      const isEditing = achWrap && !achWrap.hidden;
+      if (!isEditing) {
+        if (achWrap) achWrap.hidden = false;
+        if (achDisplay) achDisplay.hidden = true;
+        toggleAchBtn.textContent = "Cancel";
+        const unlInput = document.getElementById("edit-ach-unlocked");
+        if (unlInput) {
+          unlInput.focus();
+          unlInput.select();
+        }
+      } else {
+        if (achWrap) achWrap.hidden = true;
+        if (achDisplay) achDisplay.hidden = false;
+        toggleAchBtn.textContent = "Edit";
+      }
+    });
+  }
+
   document.getElementById("edit-game-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const gameId = document.getElementById("edit-id").value;
@@ -2728,6 +3153,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (hoursInput && hoursInput.dataset.unlocked === "true") {
       payload.playtime_hours = parseFloat(hoursInput.value || "0");
+    }
+
+    const achWrap = document.getElementById("edit-ach-edit-wrap");
+    const achUnlInput = document.getElementById("edit-ach-unlocked");
+    const achTotInput = document.getElementById("edit-ach-total");
+    if (achWrap && !achWrap.hidden && achUnlInput && achTotInput) {
+      const u = parseInt(achUnlInput.value, 10);
+      const t = parseInt(achTotInput.value, 10);
+      if (!Number.isNaN(u)) payload.achievements_unlocked = Math.max(0, u);
+      if (!Number.isNaN(t)) payload.achievements_total = Math.max(0, t);
     }
 
     const res = await fetch(`/api/games/${gameId}`, {
@@ -2816,6 +3251,38 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }, 180);
   });
+
+  // Achievements Explorer Listeners inside Edit Game Modal
+  const refreshGameAchBtn = document.getElementById("btn-refresh-game-ach");
+  if (refreshGameAchBtn) {
+    refreshGameAchBtn.addEventListener("click", () => {
+      const idVal = parseInt(document.getElementById("edit-id").value, 10);
+      if (idVal) {
+        loadAndRenderGameAchievements(idVal, true);
+      }
+    });
+  }
+
+  document.querySelectorAll(".ach-pill[data-ach-filter]").forEach((pill) => {
+    pill.addEventListener("click", () => {
+      document.querySelectorAll(".ach-pill[data-ach-filter]").forEach((p) => p.classList.remove("active"));
+      pill.classList.add("active");
+      state.currentAchFilter = pill.dataset.achFilter;
+      renderAchievementsList();
+    });
+  });
+
+  const achSearchInput = document.getElementById("ach-search-input");
+  let achSearchTimer = null;
+  if (achSearchInput) {
+    achSearchInput.addEventListener("input", (e) => {
+      clearTimeout(achSearchTimer);
+      achSearchTimer = setTimeout(() => {
+        state.currentAchSearch = (e.target.value || "").trim().toLowerCase();
+        renderAchievementsList();
+      }, 150);
+    });
+  }
 
   // Cross-Platform Reconcile Dialog & Hotkeys
   const reconcileDialog = document.getElementById("reconcile-dialog");

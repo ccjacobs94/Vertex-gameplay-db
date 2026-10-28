@@ -74,6 +74,29 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 pair_key TEXT UNIQUE NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS game_achievements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL,
+                external_ach_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                icon_url TEXT,
+                icon_gray_url TEXT,
+                unlocked INTEGER DEFAULT 0,
+                unlock_time TEXT,
+                reward_type TEXT,
+                reward_value TEXT,
+                rarity_pct REAL,
+                is_hidden INTEGER DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                UNIQUE(game_id, external_ach_id),
+                FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_game_achievements_game ON game_achievements(game_id);
             """
         )
         cols = {
@@ -84,6 +107,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             conn.execute("ALTER TABLE games ADD COLUMN canonical_id INTEGER DEFAULT NULL;")
         if "tags" not in cols:
             conn.execute("ALTER TABLE games ADD COLUMN tags TEXT DEFAULT '[]';")
+        if "achievements_synced_at" not in cols:
+            conn.execute("ALTER TABLE games ADD COLUMN achievements_synced_at TEXT DEFAULT NULL;")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_canonical ON games(canonical_id);")
 
 
@@ -143,6 +168,17 @@ def normalize_game_title(title: str) -> str:
     return " ".join(words)
 
 
+def normalize_achievement_text(text: str) -> str:
+    """
+    Normalize achievement titles or descriptions for cross-platform matching.
+    Strips trademark/copyright symbols, quotes, punctuation, and collapses whitespace.
+    """
+    t = (text or "").lower()
+    t = re.sub(r"[™®©]", " ", t)
+    t = re.sub(r"[^a-z0-9]+", " ", t).strip()
+    return re.sub(r"\s{2,}", " ", t)
+
+
 def _clean_display_title(title: str) -> str:
     t = (title or "").strip().strip('"').strip("'")
     t = re.sub(r"[™®©]", "", t)
@@ -192,6 +228,7 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
     d["status_locked"] = bool(d.get("status_locked", 0))
     d["playtime_hours"] = round(float(d.get("playtime_hours") or 0.0), 1)
     d["canonical_id"] = d.get("canonical_id")
+    d["achievements_synced_at"] = d.get("achievements_synced_at")
     d["is_reconciled"] = False
     d["linked_count"] = 1
     d["platforms"] = [d["platform"]]
@@ -207,22 +244,47 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
             "last_played": d.get("last_played"),
             "achievements_unlocked": d.get("achievements_unlocked") or 0,
             "achievements_total": d.get("achievements_total") or 0,
+            "achievements_synced_at": d.get("achievements_synced_at"),
             "cover_url": d.get("cover_url"),
         }
     ]
     return d
 
 
-def _consolidate_dicts(raw_games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _consolidate_dicts(
+    raw_games: List[Dict[str, Any]],
+    db_path: str = DEFAULT_DB_PATH,
+) -> List[Dict[str, Any]]:
     """
     Consolidate raw game dicts sharing a canonical_id into unified cross-platform entries.
     Sums playtime_hours across all linked copies and aggregates platforms, achievements, and metadata.
+    For achievements: computes non-overlapping deduplicated totals and unlocked counts across platforms.
     """
     groups: Dict[Any, List[Dict[str, Any]]] = {}
     for g in raw_games:
         cid = g.get("canonical_id")
         key = f"canon:{cid}" if cid is not None else f"single:{g['id']}"
         groups.setdefault(key, []).append(g)
+
+    # Collect member IDs for multi-game groups to query individual achievements
+    multi_member_ids = []
+    for members in groups.values():
+        if len(members) > 1:
+            multi_member_ids.extend([m["id"] for m in members])
+
+    ach_by_game: Dict[int, List[Dict[str, Any]]] = {}
+    if multi_member_ids:
+        try:
+            with get_connection(db_path) as conn:
+                placeholders = ",".join("?" for _ in multi_member_ids)
+                rows = conn.execute(
+                    f"SELECT game_id, name, description, unlocked, unlock_time FROM game_achievements WHERE game_id IN ({placeholders})",
+                    tuple(multi_member_ids),
+                ).fetchall()
+                for r in rows:
+                    ach_by_game.setdefault(r["game_id"], []).append(dict(r))
+        except Exception:
+            ach_by_game = {}
 
     consolidated: List[Dict[str, Any]] = []
     for key, members in groups.items():
@@ -243,6 +305,7 @@ def _consolidate_dicts(raw_games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     "last_played": single.get("last_played"),
                     "achievements_unlocked": single.get("achievements_unlocked") or 0,
                     "achievements_total": single.get("achievements_total") or 0,
+                    "achievements_synced_at": single.get("achievements_synced_at"),
                     "cover_url": single.get("cover_url"),
                 }
             ]
@@ -283,13 +346,54 @@ def _consolidate_dicts(raw_games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         last_played_vals = [m["last_played"] for m in members if m.get("last_played")]
         unified["last_played"] = max(last_played_vals) if last_played_vals else None
 
-        # Achievements: sum across platforms
-        unified["achievements_unlocked"] = sum(
-            int(m.get("achievements_unlocked") or 0) for m in members
-        )
-        unified["achievements_total"] = sum(
-            int(m.get("achievements_total") or 0) for m in members
-        )
+        # Achievements: compute cross-platform deduplicated union
+        has_detailed_achs = any(m["id"] in ach_by_game for m in members)
+        if has_detailed_achs:
+            dedup_achs: Dict[str, Dict[str, Any]] = {}
+            desc_to_key: Dict[str, str] = {}
+            for m in members:
+                for a in ach_by_game.get(m["id"], []):
+                    name_key = normalize_achievement_text(a.get("name") or "")
+                    desc_key = normalize_achievement_text(a.get("description") or "")
+                    m_key = None
+                    if name_key:
+                        m_key = f"n:{name_key}"
+                    elif desc_key and len(desc_key) >= 10:
+                        m_key = f"d:{desc_key}"
+
+                    if desc_key and len(desc_key) >= 15 and desc_key in desc_to_key:
+                        m_key = desc_to_key[desc_key]
+                    if not m_key:
+                        continue
+                    if desc_key and len(desc_key) >= 15 and desc_key not in desc_to_key:
+                        desc_to_key[desc_key] = m_key
+
+                    if m_key not in dedup_achs:
+                        dedup_achs[m_key] = {
+                            "unlocked": bool(a.get("unlocked")),
+                            "unlock_time": a.get("unlock_time"),
+                        }
+                    else:
+                        if a.get("unlocked"):
+                            dedup_achs[m_key]["unlocked"] = True
+                            if not dedup_achs[m_key]["unlock_time"] or (a.get("unlock_time") and a["unlock_time"] < dedup_achs[m_key]["unlock_time"]):
+                                dedup_achs[m_key]["unlock_time"] = a["unlock_time"]
+
+            unique_unlocked = sum(1 for a in dedup_achs.values() if a["unlocked"])
+            unique_total = len(dedup_achs)
+            summary_max_tot = max((int(m.get("achievements_total") or 0) for m in members), default=0)
+            summary_max_unl = max((int(m.get("achievements_unlocked") or 0) for m in members), default=0)
+            unified["achievements_unlocked"] = max(unique_unlocked, summary_max_unl)
+            unified["achievements_total"] = max(unique_total, summary_max_tot)
+        else:
+            # Fallback when detailed achievement rows are not yet synced:
+            # take the maximum across platforms so duplicate 80-achievement sets aren't doubled to 160
+            unified["achievements_unlocked"] = max(
+                (int(m.get("achievements_unlocked") or 0) for m in members), default=0
+            )
+            unified["achievements_total"] = max(
+                (int(m.get("achievements_total") or 0) for m in members), default=0
+            )
 
         # Cover URL: prefer primary, or Steam vertical cover, or any non-empty cover
         if not unified.get("cover_url"):
@@ -308,8 +412,7 @@ def _consolidate_dicts(raw_games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     merged_genres.append(gen)
         unified["genres"] = merged_genres
 
-        # Tags union, same as genres: manual tags are never dropped
-        # by consolidation.
+        # Tags union
         merged_tags: List[str] = []
         for m in members:
             for tag in m.get("tags") or []:
@@ -341,11 +444,14 @@ def _consolidate_dicts(raw_games: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 "last_played": m.get("last_played"),
                 "achievements_unlocked": int(m.get("achievements_unlocked") or 0),
                 "achievements_total": int(m.get("achievements_total") or 0),
+                "achievements_synced_at": m.get("achievements_synced_at"),
                 "cover_url": m.get("cover_url"),
             }
             for m in members_sorted
         ]
         consolidated.append(unified)
+
+    return consolidated
 
     return consolidated
 
@@ -569,6 +675,8 @@ def update_game(
         "platform",
         "playtime_hours",
         "completion_status",
+        "achievements_unlocked",
+        "achievements_total",
         "user_rating",
         "critic_score",
         "release_year",
@@ -707,7 +815,7 @@ def get_game_by_id(game_id: int, db_path: str = DEFAULT_DB_PATH) -> Optional[Dic
             rows = conn.execute(
                 "SELECT * FROM games WHERE canonical_id = ?", (cid,)
             ).fetchall()
-            consolidated = _consolidate_dicts([_row_to_dict(r) for r in rows])
+            consolidated = _consolidate_dicts([_row_to_dict(r) for r in rows], db_path=db_path)
             return consolidated[0] if consolidated else _row_to_dict(row)
         return _row_to_dict(row)
 
@@ -728,7 +836,7 @@ def query_games(
         rows = conn.execute("SELECT * FROM games").fetchall()
         raw_dicts = [_row_to_dict(r) for r in rows]
 
-    items = raw_dicts if include_unconsolidated else _consolidate_dicts(raw_dicts)
+    items = raw_dicts if include_unconsolidated else _consolidate_dicts(raw_dicts, db_path=db_path)
 
     if search:
         q = search.lower().strip()
@@ -799,6 +907,15 @@ def query_games(
         )
     elif sort_by == "recent_added":
         items.sort(key=lambda g: g.get("updated_at") or "", reverse=True)
+    elif sort_by == "achievements_desc":
+        items.sort(
+            key=lambda g: (
+                int(g.get("achievements_unlocked") or 0),
+                round((int(g.get("achievements_unlocked") or 0) / max(int(g.get("achievements_total") or 0), 1)) * 100, 1) if int(g.get("achievements_total") or 0) > 0 else 0.0,
+                float(g.get("playtime_hours") or 0.0),
+            ),
+            reverse=True,
+        )
     else:
         # Default: playtime_desc, then title_asc
         items.sort(key=lambda g: (g.get("title") or "").lower())
@@ -1567,4 +1684,259 @@ def get_habits_analytics(
             "backlog_gems": backlog_gems,
         },
         "hall_of_fame": hall_of_fame,
+    }
+
+
+def upsert_game_achievements(
+    game_id: int,
+    source: str,
+    platform: str,
+    achievements: List[Dict[str, Any]],
+    db_path: str = DEFAULT_DB_PATH,
+) -> Dict[str, Any]:
+    """
+    Insert or update individual achievements for a game and update the summary counts on games.
+    Preserves completion_status if status_locked = 1.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    unlocked_count = 0
+    total_count = len(achievements)
+
+    with get_connection(db_path) as conn:
+        for a in achievements:
+            ext_id = str(a.get("external_ach_id") or a.get("id") or a.get("apiname") or "")
+            name = str(a.get("name") or "").strip()
+            desc = str(a.get("description") or "").strip()
+            icon_url = a.get("icon_url")
+            icon_gray_url = a.get("icon_gray_url")
+            unlocked = 1 if a.get("unlocked") else 0
+            if unlocked:
+                unlocked_count += 1
+            unlock_time = a.get("unlock_time")
+            reward_type = a.get("reward_type")
+            reward_value = str(a.get("reward_value")) if a.get("reward_value") is not None else None
+            rarity_pct = float(a["rarity_pct"]) if a.get("rarity_pct") is not None else None
+            is_hidden = 1 if a.get("is_hidden") else 0
+
+            conn.execute(
+                """
+                INSERT INTO game_achievements (
+                    game_id, external_ach_id, source, platform, name, description,
+                    icon_url, icon_gray_url, unlocked, unlock_time, reward_type,
+                    reward_value, rarity_pct, is_hidden, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(game_id, external_ach_id) DO UPDATE SET
+                    name = excluded.name,
+                    description = CASE WHEN excluded.description != '' THEN excluded.description ELSE game_achievements.description END,
+                    icon_url = COALESCE(excluded.icon_url, game_achievements.icon_url),
+                    icon_gray_url = COALESCE(excluded.icon_gray_url, game_achievements.icon_gray_url),
+                    unlocked = excluded.unlocked,
+                    unlock_time = COALESCE(excluded.unlock_time, game_achievements.unlock_time),
+                    reward_type = COALESCE(excluded.reward_type, game_achievements.reward_type),
+                    reward_value = COALESCE(excluded.reward_value, game_achievements.reward_value),
+                    rarity_pct = COALESCE(excluded.rarity_pct, game_achievements.rarity_pct),
+                    is_hidden = excluded.is_hidden,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    game_id, ext_id, source, platform, name, desc,
+                    icon_url, icon_gray_url, unlocked, unlock_time, reward_type,
+                    reward_value, rarity_pct, is_hidden, now,
+                ),
+            )
+
+        existing = conn.execute("SELECT status_locked, completion_status FROM games WHERE id = ?", (game_id,)).fetchone()
+        inferred_completion = None
+        if existing and not existing["status_locked"]:
+            if total_count > 0 and unlocked_count >= total_count:
+                inferred_completion = "Completed"
+
+        if inferred_completion:
+            conn.execute(
+                """
+                UPDATE games SET
+                    achievements_unlocked = ?,
+                    achievements_total = ?,
+                    achievements_synced_at = ?,
+                    completion_status = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (unlocked_count, total_count, now, inferred_completion, now, game_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE games SET
+                    achievements_unlocked = ?,
+                    achievements_total = ?,
+                    achievements_synced_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (unlocked_count, total_count, now, now, game_id),
+            )
+
+    return {"unlocked": unlocked_count, "total": total_count}
+
+
+def get_game_achievements(game_id: int, db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
+    """
+    Retrieve achievements for a game, merging across cross-platform linked copies if reconciled.
+    Returns:
+      - unified_summary: {"unlocked": int, "total": int, "percentage": float, "overlap_count": int}
+      - per_platform_summary: list of {"game_id": int, "platform": str, "short_platform": str, "source": str, "unlocked": int, "total": int, "percentage": float}
+      - achievements: list of deduplicated achievement items
+    """
+    with get_connection(db_path) as conn:
+        target = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+        if not target:
+            return {
+                "unified_summary": {"unlocked": 0, "total": 0, "percentage": 0.0, "overlap_count": 0},
+                "per_platform_summary": [],
+                "achievements": [],
+            }
+
+        cid = target["canonical_id"]
+        if cid is not None:
+            members = [dict(r) for r in conn.execute(
+                "SELECT * FROM games WHERE canonical_id = ? ORDER BY playtime_hours DESC, id ASC",
+                (cid,)
+            ).fetchall()]
+        else:
+            members = [dict(target)]
+
+        member_ids = [m["id"] for m in members]
+        placeholders = ",".join("?" for _ in member_ids)
+        ach_rows = [dict(r) for r in conn.execute(
+            f"SELECT * FROM game_achievements WHERE game_id IN ({placeholders}) ORDER BY unlocked DESC, unlock_time DESC, name ASC",
+            tuple(member_ids)
+        ).fetchall()]
+
+    # Build per_platform_summary
+    per_platform_summary = []
+    for m in members:
+        unl = int(m.get("achievements_unlocked") or 0)
+        tot = int(m.get("achievements_total") or 0)
+        m_rows = [a for a in ach_rows if a["game_id"] == m["id"]]
+        if m_rows:
+            unl = sum(1 for a in m_rows if a["unlocked"])
+            tot = len(m_rows)
+        pct = round((unl / max(tot, 1)) * 100, 1) if tot > 0 else 0.0
+        per_platform_summary.append({
+            "game_id": m["id"],
+            "title": m["title"],
+            "platform": m["platform"],
+            "short_platform": _short_platform_label(m["platform"]),
+            "source": m["source"],
+            "unlocked": unl,
+            "total": tot,
+            "percentage": pct,
+            "achievements_synced_at": m.get("achievements_synced_at"),
+        })
+
+    # Group achievements across copies
+    grouped_map: Dict[str, Dict[str, Any]] = {}
+    desc_to_key: Dict[str, str] = {}
+
+    for row in ach_rows:
+        name_key = normalize_achievement_text(row.get("name") or "")
+        desc_key = normalize_achievement_text(row.get("description") or "")
+
+        match_key = None
+        if name_key:
+            match_key = f"n:{name_key}"
+        elif desc_key and len(desc_key) >= 10:
+            match_key = f"d:{desc_key}"
+
+        if desc_key and len(desc_key) >= 15 and desc_key in desc_to_key:
+            match_key = desc_to_key[desc_key]
+
+        if not match_key:
+            match_key = f"raw:{row['id']}"
+
+        if desc_key and len(desc_key) >= 15 and desc_key not in desc_to_key:
+            desc_to_key[desc_key] = match_key
+
+        m_plat = row.get("platform") or ""
+        short_plat = _short_platform_label(m_plat)
+
+        plat_entry = {
+            "game_id": row["game_id"],
+            "platform": m_plat,
+            "short_platform": short_plat,
+            "source": row.get("source"),
+            "unlocked": bool(row["unlocked"]),
+            "unlock_time": row.get("unlock_time"),
+            "reward_type": row.get("reward_type"),
+            "reward_value": row.get("reward_value"),
+            "rarity_pct": row.get("rarity_pct"),
+        }
+
+        if match_key not in grouped_map:
+            grouped_map[match_key] = {
+                "key": match_key,
+                "name": row["name"],
+                "description": row.get("description") or "",
+                "icon_url": row.get("icon_url"),
+                "icon_gray_url": row.get("icon_gray_url"),
+                "is_hidden": bool(row.get("is_hidden")),
+                "reward_type": row.get("reward_type"),
+                "reward_value": row.get("reward_value"),
+                "rarity_pct": row.get("rarity_pct"),
+                "platforms": [plat_entry],
+            }
+        else:
+            entry = grouped_map[match_key]
+            if not entry["description"] and row.get("description"):
+                entry["description"] = row["description"]
+            if not entry["icon_url"] and row.get("icon_url"):
+                entry["icon_url"] = row["icon_url"]
+            if not entry["icon_gray_url"] and row.get("icon_gray_url"):
+                entry["icon_gray_url"] = row["icon_gray_url"]
+            if not entry["reward_type"] and row.get("reward_type"):
+                entry["reward_type"] = row["reward_type"]
+                entry["reward_value"] = row.get("reward_value")
+            if entry["rarity_pct"] is None and row.get("rarity_pct") is not None:
+                entry["rarity_pct"] = row["rarity_pct"]
+            entry["platforms"].append(plat_entry)
+
+    achievements_list = []
+    overlap_count = 0
+    for entry in grouped_map.values():
+        unlocked_plats = [p["short_platform"] for p in entry["platforms"] if p["unlocked"]]
+        is_unlocked = len(unlocked_plats) > 0
+        if len(unlocked_plats) > 1:
+            overlap_count += 1
+
+        unlock_times = [p["unlock_time"] for p in entry["platforms"] if p.get("unlock_time")]
+        earliest_unlock = min(unlock_times) if unlock_times else None
+
+        entry["unlocked"] = is_unlocked
+        entry["unlock_time"] = earliest_unlock
+        entry["unlocked_platforms"] = unlocked_plats
+        achievements_list.append(entry)
+
+    achievements_list.sort(
+        key=lambda a: (
+            1 if a["unlocked"] else 0,
+            a["unlock_time"] or "",
+            (a["name"] or "").lower(),
+        ),
+        reverse=True,
+    )
+
+    unique_unlocked = sum(1 for a in achievements_list if a["unlocked"])
+    unique_total = len(achievements_list)
+    percentage = round((unique_unlocked / max(unique_total, 1)) * 100, 1) if unique_total > 0 else 0.0
+
+    return {
+        "unified_summary": {
+            "unlocked": unique_unlocked,
+            "total": unique_total,
+            "percentage": percentage,
+            "overlap_count": overlap_count,
+        },
+        "per_platform_summary": per_platform_summary,
+        "achievements": achievements_list,
     }

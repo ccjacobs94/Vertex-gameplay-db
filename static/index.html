@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=15">
+  <link rel="stylesheet" href="/static/styles.css?v=17">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -189,6 +189,7 @@
           <label for="sort-select" class="sr-only">Sort order</label>
           <select id="sort-select" name="sort">
             <option value="playtime_desc">Most Played</option>
+            <option value="achievements_desc">Most Achievements</option>
             <option value="last_played_desc">Recently Played</option>
             <option value="rating_desc">Highest Rated</option>
             <option value="title_asc">Title (A–Z)</option>
@@ -517,8 +518,21 @@
               </div>
 
               <div class="edit-stat-tile" id="edit-ach-tile">
-                <span class="edit-stat-label">Achievements</span>
+                <div class="edit-stat-tile-top">
+                  <span class="edit-stat-label">Achievements</span>
+                  <button type="button" id="btn-toggle-edit-ach" class="btn-link-subtle" title="Override achievement counts">
+                    Edit
+                  </button>
+                </div>
                 <div id="edit-ach-display" class="edit-stat-value">—</div>
+                <div id="edit-ach-breakdown-pills" class="edit-ach-breakdown-pills"></div>
+                <div id="edit-ach-edit-wrap" class="edit-ach-input-wrap" hidden>
+                  <div class="ach-inputs-row">
+                    <input type="number" id="edit-ach-unlocked" min="0" placeholder="Unlocked">
+                    <span>/</span>
+                    <input type="number" id="edit-ach-total" min="0" placeholder="Total">
+                  </div>
+                </div>
               </div>
 
               <div class="edit-stat-tile" id="edit-meta-tile">
@@ -605,6 +619,42 @@
               placeholder="+ Search library to link another platform copy..."
             >
             <ul id="edit-link-results" class="catalog-results" hidden></ul>
+          </div>
+        </div>
+
+        <div id="edit-achievements-section" class="achievements-explorer-panel">
+          <div class="achievements-explorer-header">
+            <div class="ach-header-title-group">
+              <strong>🏆 Achievements &amp; Trophies</strong>
+              <span id="ach-explorer-count-badge" class="linked-summary-badge">0 / 0</span>
+              <span id="ach-explorer-overlap-badge" class="ach-overlap-badge" hidden></span>
+            </div>
+            <button type="button" id="btn-refresh-game-ach" class="btn btn-secondary btn-xs" title="Live sync achievements from platform APIs">
+              ↻ Sync Achievements
+            </button>
+          </div>
+
+          <div class="ach-filter-bar">
+            <div class="ach-status-filter-pills" role="group" aria-label="Filter achievements by status">
+              <button type="button" class="ach-pill active" data-ach-filter="all">All (<span id="ach-pill-all-count">0</span>)</button>
+              <button type="button" class="ach-pill" data-ach-filter="unlocked">Unlocked (<span id="ach-pill-unl-count">0</span>)</button>
+              <button type="button" class="ach-pill" data-ach-filter="locked">Locked (<span id="ach-pill-lck-count">0</span>)</button>
+            </div>
+            <div id="ach-platform-filter-pills" class="ach-platform-filter-pills" role="group" aria-label="Filter by platform" hidden></div>
+            <div class="ach-search-input-wrap">
+              <label for="ach-search-input" class="sr-only">Search achievements</label>
+              <input type="search" id="ach-search-input" placeholder="Search achievements..." autocomplete="off">
+            </div>
+          </div>
+
+          <div id="ach-loading-indicator" class="ach-loading-state" hidden>
+            <span class="spin-anim" aria-hidden="true">⏳</span>
+            <span>Checking latest achievements from platform APIs...</span>
+          </div>
+
+          <ul id="edit-achievements-list" class="achievements-cards-list"></ul>
+          <div id="ach-empty-state" class="ach-empty-state" hidden>
+            <span>No achievements match your filter or none available for this game.</span>
           </div>
         </div>
 
@@ -912,6 +962,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=15"></script>
+  <script src="/static/app.js?v=17"></script>
 </body>
 </html>
