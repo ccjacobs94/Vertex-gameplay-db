@@ -35,11 +35,13 @@ from db import (
     get_game_by_id,
     get_habits_analytics,
     get_library_stats,
+    get_pending_playtime_prompts,
     get_reconcile_candidates,
     init_db,
     query_games,
     reconcile_games,
     reset_reconcile_dismissals,
+    resolve_playtime_prompt,
     unlink_game,
     update_game,
 )
@@ -269,6 +271,10 @@ class ReconcileConfirmRequest(BaseModel):
 
 class ReconcileDismissRequest(BaseModel):
     game_ids: List[int] = Field(..., min_length=2)
+
+
+class PlaytimePromptResolveRequest(BaseModel):
+    action: str = Field(..., pattern="^(accept|dismiss|mute)$")
 
 
 @app.get("/login")
@@ -512,6 +518,25 @@ async def api_reconcile_unlink(game_id: int) -> Dict[str, Any]:
 async def api_reconcile_reset_dismissals() -> Dict[str, Any]:
     cleared = reset_reconcile_dismissals()
     return {"status": "ok", "cleared": cleared}
+
+
+@app.get("/api/playtime-prompts")
+async def api_get_playtime_prompts() -> Dict[str, Any]:
+    prompts = get_pending_playtime_prompts()
+    return {"count": len(prompts), "prompts": prompts}
+
+
+@app.post("/api/playtime-prompts/{prompt_id}/resolve")
+async def api_resolve_playtime_prompt(
+    prompt_id: int, payload: PlaytimePromptResolveRequest
+) -> Dict[str, Any]:
+    try:
+        res = resolve_playtime_prompt(prompt_id, payload.action)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not res:
+        raise HTTPException(status_code=404, detail="Playtime prompt not found")
+    return {"status": "ok", "result": res, "stats": get_library_stats()}
 
 
 from oauth_provider import get_oauth_routes

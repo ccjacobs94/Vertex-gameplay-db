@@ -14,10 +14,12 @@ except ImportError:
 from db import (
     add_manual_game,
     get_library_stats,
+    get_pending_playtime_prompts,
     get_reconcile_candidates,
     init_db,
     query_games,
     reconcile_games,
+    resolve_playtime_prompt,
     update_game,
 )
 from taxonomy import (
@@ -367,6 +369,25 @@ async def get_game_achievements_detail(title: str) -> Dict[str, Any]:
     res["game_id"] = target["id"]
     res["platform"] = target["platform"]
     return res
+
+
+@mcp.tool()
+def respond_to_playtime_prompt(
+    prompt_id: int,
+    action: str = "accept",
+) -> Dict[str, Any]:
+    """
+    Resolve a pending playtime increase prompt detected during library synchronization.
+    - prompt_id: ID from get_gaming_profile_and_metrics()['playtime_prompts']
+    - action: 'accept' (marks game as 'Playing'), 'dismiss' (keep current status for now),
+              or 'mute' (never ask again for this game)
+    """
+    if action not in ("accept", "dismiss", "mute"):
+        return {"error": "action must be 'accept', 'dismiss', or 'mute'"}
+    res = resolve_playtime_prompt(prompt_id=prompt_id, action=action)
+    if not res:
+        return {"error": f"No pending playtime prompt found with id {prompt_id}"}
+    return {"status": "resolved", "result": res}
 
 
 if __name__ == "__main__":

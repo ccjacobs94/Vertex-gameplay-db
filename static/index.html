@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=17">
+  <link rel="stylesheet" href="/static/styles.css?v=18">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -83,6 +83,14 @@
         <span>Play Habits &amp; Insights</span>
       </button>
     </nav>
+
+    <section
+      id="playtime-prompts-banner"
+      class="playtime-prompts-section"
+      aria-label="Recent playtime activity prompts"
+      aria-live="polite"
+      hidden
+    ></section>
 
     <section class="metrics-bar" aria-label="Library overview metrics" id="metrics-bar">
       <article class="metric-card metric-interactive active" data-filter-status="" role="button" tabindex="0" title="Show all games">
@@ -962,6 +970,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=17"></script>
+  <script src="/static/app.js?v=18"></script>
 </body>
 </html>

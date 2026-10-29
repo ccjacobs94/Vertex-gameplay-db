@@ -97,6 +97,17 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_game_achievements_game ON game_achievements(game_id);
+
+            CREATE TABLE IF NOT EXISTS playtime_prompts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL UNIQUE,
+                previous_hours REAL NOT NULL,
+                new_hours REAL NOT NULL,
+                delta_hours REAL NOT NULL,
+                current_status TEXT NOT NULL,
+                detected_at TEXT NOT NULL,
+                FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+            );
             """
         )
         cols = {
@@ -109,6 +120,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             conn.execute("ALTER TABLE games ADD COLUMN tags TEXT DEFAULT '[]';")
         if "achievements_synced_at" not in cols:
             conn.execute("ALTER TABLE games ADD COLUMN achievements_synced_at TEXT DEFAULT NULL;")
+        if "playtime_prompt_muted" not in cols:
+            conn.execute("ALTER TABLE games ADD COLUMN playtime_prompt_muted INTEGER DEFAULT 0;")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_canonical ON games(canonical_id);")
 
 
@@ -453,7 +466,8 @@ def _consolidate_dicts(
 
     return consolidated
 
-    return consolidated
+
+PLAYTIME_PROMPT_THRESHOLD_HOURS = 0.5
 
 
 def upsert_synced_game(
@@ -527,16 +541,19 @@ def upsert_synced_game(
             game_id = cursor.lastrowid
         else:
             game_id = existing["id"]
-            new_playtime = max(float(existing["playtime_hours"] or 0.0), playtime_hours)
-            new_status = (
-                existing["completion_status"]
-                if existing["status_locked"]
-                else (
-                    inferred_status
-                    if existing["completion_status"] == "Not Played" and new_playtime > 0
-                    else existing["completion_status"]
-                )
-            )
+            old_playtime = round(float(existing["playtime_hours"] or 0.0), 2)
+            new_playtime = max(old_playtime, playtime_hours)
+            delta_hours = round(new_playtime - old_playtime, 2)
+
+            # Preserve existing status on sync updates; prompt the user when playtime increases >= 0.5h
+            new_status = existing["completion_status"]
+            if (
+                not existing["status_locked"]
+                and achievements_total > 0
+                and achievements_unlocked >= achievements_total
+            ):
+                new_status = "Completed"
+
             existing_genres = json.loads(existing["genres"] or "[]")
             # Merge, never replace: sync-discovered genres are added to
             # the manual list, existing entries are never dropped.
@@ -592,6 +609,38 @@ def upsert_synced_game(
                     game_id,
                 ),
             )
+
+            if delta_hours >= PLAYTIME_PROMPT_THRESHOLD_HOURS and not bool(existing["playtime_prompt_muted"]):
+                target_id = existing["canonical_id"] if existing["canonical_id"] is not None else game_id
+                target_row = conn.execute(
+                    "SELECT id, completion_status, playtime_prompt_muted FROM games WHERE id = ?",
+                    (target_id,),
+                ).fetchone()
+                if (
+                    target_row
+                    and (target_row["completion_status"] or "Not Played") != "Playing"
+                    and not bool(target_row["playtime_prompt_muted"])
+                ):
+                    conn.execute(
+                        """
+                        INSERT INTO playtime_prompts (
+                            game_id, previous_hours, new_hours, delta_hours, current_status, detected_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(game_id) DO UPDATE SET
+                            new_hours = excluded.new_hours,
+                            delta_hours = ROUND(playtime_prompts.delta_hours + excluded.delta_hours, 2),
+                            current_status = excluded.current_status,
+                            detected_at = excluded.detected_at
+                        """,
+                        (
+                            target_id,
+                            old_playtime,
+                            new_playtime,
+                            delta_hours,
+                            target_row["completion_status"] or "Not Played",
+                            now,
+                        ),
+                    )
 
         row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
         return _row_to_dict(row)
@@ -775,6 +824,16 @@ def update_game(
             conn.execute(
                 f"UPDATE games SET {', '.join(group_fields)} WHERE canonical_id = ?",
                 tuple(group_values),
+            )
+
+        if "completion_status" in updates:
+            ids_to_clear = [r["id"] for r in group_rows]
+            if cid is not None and cid not in ids_to_clear:
+                ids_to_clear.append(cid)
+            placeholders = ",".join("?" for _ in ids_to_clear)
+            conn.execute(
+                f"DELETE FROM playtime_prompts WHERE game_id IN ({placeholders})",
+                tuple(ids_to_clear),
             )
 
     return get_game_by_id(game_id, db_path)
@@ -1274,6 +1333,111 @@ def reset_reconcile_dismissals(db_path: str = DEFAULT_DB_PATH) -> int:
         return cursor.rowcount
 
 
+def get_pending_playtime_prompts(db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
+    """
+    Return all pending playtime increase prompts for games whose status is not 'Playing'
+    and that have not been muted. Automatically prunes stale prompts.
+    """
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM playtime_prompts ORDER BY detected_at DESC, id DESC"
+        ).fetchall()
+
+    prompts: List[Dict[str, Any]] = []
+    stale_ids: List[int] = []
+
+    for r in rows:
+        p_id = r["id"]
+        g_id = r["game_id"]
+        game = get_game_by_id(g_id, db_path=db_path)
+        if not game or game.get("completion_status") == "Playing":
+            stale_ids.append(p_id)
+            continue
+
+        prompts.append(
+            {
+                "prompt_id": p_id,
+                "game_id": game["id"],
+                "title": game["title"],
+                "platform": game["platform"],
+                "cover_url": game.get("cover_url"),
+                "current_status": game.get("completion_status") or "Not Played",
+                "previous_hours": round(float(r["previous_hours"] or 0.0), 1),
+                "new_hours": round(float(r["new_hours"] or 0.0), 1),
+                "delta_hours": round(float(r["delta_hours"] or 0.0), 1),
+                "total_playtime_hours": game.get("playtime_hours") or 0.0,
+                "detected_at": r["detected_at"],
+            }
+        )
+
+    if stale_ids:
+        with get_connection(db_path) as conn:
+            placeholders = ",".join("?" for _ in stale_ids)
+            conn.execute(
+                f"DELETE FROM playtime_prompts WHERE id IN ({placeholders})",
+                tuple(stale_ids),
+            )
+
+    return prompts
+
+
+def resolve_playtime_prompt(
+    prompt_id: int,
+    action: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> Optional[Dict[str, Any]]:
+    """
+    Resolve a playtime prompt:
+      - 'accept': mark game (and any reconciled group) as 'Playing' (status_locked=1) and delete prompt
+      - 'dismiss': delete prompt for now (will ask again on future +0.5h sync increases)
+      - 'mute': set playtime_prompt_muted=1 on the game (and any reconciled group) and delete prompt
+    """
+    if action not in ("accept", "dismiss", "mute"):
+        raise ValueError("action must be 'accept', 'dismiss', or 'mute'")
+
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM playtime_prompts WHERE id = ?", (prompt_id,)
+        ).fetchone()
+        if not row:
+            return None
+        game_id = int(row["game_id"])
+
+        if action == "dismiss":
+            conn.execute("DELETE FROM playtime_prompts WHERE id = ?", (prompt_id,))
+        elif action == "mute":
+            game_row = conn.execute(
+                "SELECT id, canonical_id FROM games WHERE id = ?", (game_id,)
+            ).fetchone()
+            if game_row:
+                cid = game_row["canonical_id"]
+                if cid is not None:
+                    conn.execute(
+                        "UPDATE games SET playtime_prompt_muted = 1 WHERE canonical_id = ?",
+                        (cid,),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE games SET playtime_prompt_muted = 1 WHERE id = ?",
+                        (game_id,),
+                    )
+            conn.execute("DELETE FROM playtime_prompts WHERE id = ?", (prompt_id,))
+
+    if action == "accept":
+        updated_game = update_game(
+            game_id, {"completion_status": "Playing"}, db_path=db_path
+        )
+        with get_connection(db_path) as conn:
+            conn.execute("DELETE FROM playtime_prompts WHERE id = ?", (prompt_id,))
+        return {"action": "accept", "game_id": game_id, "game": updated_game}
+
+    return {
+        "action": action,
+        "game_id": game_id,
+        "game": get_game_by_id(game_id, db_path=db_path),
+    }
+
+
 def log_sync_event(
     source: str,
     status: str,
@@ -1362,6 +1526,7 @@ def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
     completed_count = sum(
         1 for g in games if g["completion_status"] in ("Beaten", "Completed")
     )
+    pending_prompts = get_pending_playtime_prompts(db_path=db_path)
 
     return {
         "total_games": total_games,
@@ -1371,6 +1536,8 @@ def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
         "playing_count": by_status.get("Playing", 0),
         "reconciled_groups_count": reconciled_groups_count,
         "reconcile_candidates_count": reconcile_candidates_count,
+        "playtime_prompts_count": len(pending_prompts),
+        "playtime_prompts": pending_prompts,
         "missing_genres_count": missing_genres_count,
         "all_genres": all_genres,
         "all_tags": all_tags,

@@ -3763,4 +3763,99 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   border: 1px dashed var(--border-subtle);
 }
 
+/* Playtime Increase Activity Prompts Banner */
+.playtime-prompts-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.playtime-prompt-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.15rem;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.14) 0%, rgba(19, 27, 46, 0.95) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.playtime-prompt-left {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  min-inline-size: 0;
+  flex: 1 1 300px;
+}
+
+.playtime-prompt-thumb {
+  inline-size: 44px;
+  block-size: 66px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+  background-color: var(--bg-input);
+}
+
+.playtime-prompt-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+
+.playtime-prompt-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #60a5fa;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.playtime-prompt-delta {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.playtime-prompt-text {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.playtime-prompt-sub {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.playtime-prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+@media (max-width: 640px) {
+  .playtime-prompt-card {
+    padding: 0.75rem 0.9rem;
+  }
+  .playtime-prompt-actions {
+    inline-size: 100%;
+    justify-content: flex-start;
+  }
+}
+
+
 
