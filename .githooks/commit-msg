@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Enforce Conventional Commits: <type>(<scope>)?: <summary>
+# Enable once per clone:  git config core.hooksPath .githooks
+msg_file="$1"
+first="$(head -1 "$msg_file")"
+
+# Allow git-generated merge / revert messages.
+[[ "$first" =~ ^(Merge|Revert)\  ]] && exit 0
+
+re='^(feat|fix|refactor|perf|test|docs|chore|build|ci|style|revert)(\([a-z0-9,._-]+\))?!?: .{1,72}$'
+if [[ ! "$first" =~ $re ]]; then
+  echo "commit-msg: subject must follow Conventional Commits, e.g." >&2
+  echo "            feat(achievements): add rarity filter" >&2
+  echo "            got: $first" >&2
+  exit 1
+fi

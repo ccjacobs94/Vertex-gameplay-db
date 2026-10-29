@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# GitFlow guard: no direct commits on long-lived branches, quick gate on others.
+# Enable once per clone:  git config core.hooksPath .githooks
+branch="$(git rev-parse --abbrev-ref HEAD)"
+git_dir="$(git rev-parse --git-dir)"
+
+if [[ "$branch" == "main" || "$branch" == "develop" ]]; then
+  # Allow concluding a merge (e.g. after resolving conflicts) on these branches.
+  if [[ ! -f "$git_dir/MERGE_HEAD" ]]; then
+    echo "pre-commit: direct commits to '$branch' are not allowed (GitFlow)." >&2
+    echo "            Create a branch: git switch -c feature/<name> develop" >&2
+    exit 1
+  fi
+fi
+
+exec "$(git rev-parse --show-toplevel)/scripts/check.sh" --quick
