@@ -17,6 +17,7 @@ from db import (
     get_pending_playtime_prompts,
     get_reconcile_candidates,
     init_db,
+    normalize_ownership_status,
     query_games,
     reconcile_games,
     resolve_playtime_prompt,
@@ -53,6 +54,7 @@ def search_game_library(
     status: Optional[str] = None,
     genre: Optional[str] = None,
     tag: Optional[str] = None,
+    ownership_status: Optional[str] = None,
     favorite_only: bool = False,
     sort_by: str = "playtime_desc",
     limit: int = 30,
@@ -61,6 +63,7 @@ def search_game_library(
     Search and filter the user's unified game library.
     - platform: e.g. 'Steam', 'Xbox', 'PlayStation', 'Switch'
     - status: 'Not Played', 'Plan to Play', 'Playing', 'Beaten', 'Completed', 'Dropped'
+    - ownership_status: 'Owned', 'Game Pass', 'PS Plus', 'Subscription'
     - sort_by: 'playtime_desc', 'last_played_desc', 'rating_desc', 'title_asc'
     - tag: e.g. 'Stealth', 'Open World', 'Co-op'. Matches tags and genres.
     """
@@ -70,6 +73,7 @@ def search_game_library(
         status=status,
         genre=genre,
         tag=tag,
+        ownership=ownership_status,
         favorite_only=favorite_only,
         sort_by=sort_by,
         limit=limit,
@@ -81,6 +85,7 @@ def get_what_to_play_recommendations(
     platform: Optional[str] = None,
     genre: Optional[str] = None,
     tag: Optional[str] = None,
+    ownership_status: Optional[str] = None,
     max_candidates: int = 20,
 ) -> Dict[str, Any]:
     """
@@ -90,6 +95,7 @@ def get_what_to_play_recommendations(
     - platform: e.g. 'Steam', 'Xbox', 'PlayStation', 'Switch'
     - genre: filter backlog by broad category (e.g. 'RPG', 'Shooter')
     - tag: filter backlog by mechanic/mode/theme (e.g. 'Stealth', 'Co-op', 'Open World')
+    - ownership_status: optional filter ('Owned', 'Game Pass', 'PS Plus', 'Subscription')
     """
     all_games = query_games(limit=2000)
 
@@ -99,10 +105,17 @@ def get_what_to_play_recommendations(
         reverse=True,
     )[:12]
 
+    o_q = normalize_ownership_status(ownership_status).lower() if ownership_status else None
+
     currently_playing = [
         g for g in all_games
         if g.get("completion_status") == "Playing"
         and (not platform or platform.lower() in g.get("platform", "").lower())
+        and (
+            not o_q
+            or (g.get("ownership_status") or "Owned").lower() == o_q
+            or (o_q in [s.lower() for s in (g.get("ownership_statuses") or [])])
+        )
     ]
 
     t_q = tag.lower().strip() if tag else None
@@ -113,6 +126,11 @@ def get_what_to_play_recommendations(
         if g.get("completion_status") in ("Plan to Play", "Not Played")
         and (g.get("playtime_hours") or 0) < 2.0
         and (not platform or platform.lower() in g.get("platform", "").lower())
+        and (
+            not o_q
+            or (g.get("ownership_status") or "Owned").lower() == o_q
+            or (o_q in [s.lower() for s in (g.get("ownership_statuses") or [])])
+        )
         and (not g_q or any(g_q in gen.lower() for gen in (g.get("genres") or [])))
         and (
             not t_q
@@ -135,6 +153,7 @@ def get_what_to_play_recommendations(
             {
                 "title": g["title"],
                 "platform": g["platform"],
+                "ownership_status": g.get("ownership_status", "Owned"),
                 "playtime_hours": g["playtime_hours"],
                 "user_rating": g["user_rating"],
                 "genres": g["genres"],
@@ -147,6 +166,7 @@ def get_what_to_play_recommendations(
             {
                 "title": g["title"],
                 "platform": g["platform"],
+                "ownership_status": g.get("ownership_status", "Owned"),
                 "playtime_hours": g["playtime_hours"],
                 "last_played": g["last_played"],
                 "notes": g["notes"],
@@ -157,6 +177,7 @@ def get_what_to_play_recommendations(
             {
                 "title": g["title"],
                 "platform": g["platform"],
+                "ownership_status": g.get("ownership_status", "Owned"),
                 "status": g["completion_status"],
                 "critic_score": g["critic_score"],
                 "genres": g["genres"],
@@ -254,12 +275,14 @@ def update_game_genres(
 def update_game_progress(
     title: str,
     completion_status: Optional[str] = None,
+    ownership_status: Optional[str] = None,
     user_rating: Optional[int] = None,
     notes: Optional[str] = None,
     favorite: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Update a game's completion status ('Not Played', 'Plan to Play', 'Playing', 'Beaten', 'Completed', 'Dropped'),
+    ownership_status ('Owned', 'Game Pass', 'PS Plus', 'Subscription'),
     user rating (1-10), personal notes, or favorite flag by matching its title.
     """
     matches = query_games(search=title, limit=5)
@@ -271,6 +294,8 @@ def update_game_progress(
     updates: Dict[str, Any] = {}
     if completion_status is not None:
         updates["completion_status"] = completion_status
+    if ownership_status is not None:
+        updates["ownership_status"] = normalize_ownership_status(ownership_status)
     if user_rating is not None:
         updates["user_rating"] = user_rating
     if notes is not None:
@@ -283,10 +308,111 @@ def update_game_progress(
 
 
 @mcp.tool()
+def update_game_ownership(
+    title: Optional[str] = None,
+    ownership_status: str = "Owned",
+    platform: Optional[str] = None,
+    titles: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Update and lock the ownership/access status ('Owned', 'Game Pass', 'PS Plus', 'Subscription')
+    for a single game title or a batch list of titles. Ideal when monitoring purchases or subscriptions.
+    - title: Single game title to update
+    - titles: Optional batch list of game titles to update with the same ownership_status & platform
+    - ownership_status: 'Owned', 'Game Pass', 'PS Plus', or 'Subscription'
+    - platform: Optional platform filter (e.g. 'Xbox', 'Steam', 'PlayStation') to target a specific
+      platform copy when a game is reconciled across multiple platforms.
+    """
+    norm_own = normalize_ownership_status(ownership_status)
+    target_titles: List[str] = []
+    if title and title.strip():
+        target_titles.append(title.strip())
+    for t in titles or []:
+        if t and t.strip() and t.strip() not in target_titles:
+            target_titles.append(t.strip())
+
+    if not target_titles:
+        return {"error": "Provide 'title' or 'titles' to update ownership."}
+
+    updated_games: List[Dict[str, Any]] = []
+    not_found: List[str] = []
+
+    for t_query in target_titles:
+        matches = query_games(search=t_query, limit=5)
+        if not matches:
+            not_found.append(t_query)
+            continue
+
+        target = next((m for m in matches if m["title"].lower() == t_query.lower()), matches[0])
+        target_id = target["id"]
+
+        # If platform is specified and game has linked_games, target the matching platform copy
+        if platform and target.get("linked_games"):
+            p_lower = platform.strip().lower()
+            plat_copy = next(
+                (
+                    lg
+                    for lg in target["linked_games"]
+                    if p_lower in (lg.get("platform") or "").lower()
+                    or p_lower in (lg.get("source") or "").lower()
+                ),
+                None,
+            )
+            if plat_copy:
+                target_id = plat_copy["id"]
+        elif not platform and target.get("linked_games") and len(target["linked_games"]) > 1:
+            if norm_own == "Game Pass":
+                xbox_copy = next(
+                    (
+                        lg
+                        for lg in target["linked_games"]
+                        if "xbox" in (lg.get("platform") or "").lower()
+                        or lg.get("source") == "Xbox"
+                    ),
+                    None,
+                )
+                if xbox_copy:
+                    target_id = xbox_copy["id"]
+            elif norm_own == "PS Plus":
+                ps_copy = next(
+                    (
+                        lg
+                        for lg in target["linked_games"]
+                        if any(x in (lg.get("platform") or "").lower() for x in ("playstation", "ps4", "ps5"))
+                        or lg.get("source") == "PlayStation"
+                    ),
+                    None,
+                )
+                if ps_copy:
+                    target_id = ps_copy["id"]
+
+        res = update_game(target_id, {"ownership_status": norm_own})
+        if res:
+            updated_games.append(
+                {
+                    "id": res["id"],
+                    "title": res["title"],
+                    "platform": res["platform"],
+                    "ownership_status": res.get("ownership_status"),
+                    "linked_games": res.get("linked_games"),
+                }
+            )
+
+    return {
+        "status": "updated",
+        "ownership_status": norm_own,
+        "updated_count": len(updated_games),
+        "updated_games": updated_games,
+        "not_found": not_found,
+    }
+
+
+@mcp.tool()
 def add_game_to_library(
     title: str,
     platform: str = "Nintendo Switch",
     completion_status: str = "Plan to Play",
+    ownership_status: str = "Owned",
     playtime_hours: float = 0.0,
     user_rating: Optional[int] = None,
     genres: Optional[List[str]] = None,
@@ -295,6 +421,7 @@ def add_game_to_library(
 ) -> Dict[str, Any]:
     """
     Add a new game (such as a Nintendo Switch, PS4, Xbox, or PC title) to the library.
+    - ownership_status: 'Owned', 'Game Pass', 'PS Plus', or 'Subscription'
     """
     ignored: List[str] = []
     for label in genres or []:
@@ -308,6 +435,7 @@ def add_game_to_library(
         title=title,
         platform=platform,
         completion_status=completion_status,
+        ownership_status=normalize_ownership_status(ownership_status),
         playtime_hours=playtime_hours,
         user_rating=user_rating,
         genres=validate_genres(genres),

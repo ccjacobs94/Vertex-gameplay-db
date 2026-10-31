@@ -12,7 +12,8 @@ Follow these steps to analyze the user's gaming library, make data-driven recomm
 
 ## 1. Querying the Library & Metrics
 
-Prefer using the `game-hub` MCP server tools if active (`get_gaming_profile_and_metrics`, `search_game_library`, `get_what_to_play_recommendations`, `update_game_progress`, `update_game_genres`, `add_game_to_library`).
+Prefer using the `game-hub` MCP server tools if active (`get_gaming_profile_and_metrics`, `search_game_library`, `get_what_to_play_recommendations`, `update_game_progress`, `update_game_ownership`, `update_game_genres`, `add_game_to_library`).
+- **Ownership vs. Game Pass**: Games track `ownership_status` (`Owned`, `Game Pass`, `PS Plus`, `Subscription`). Use `update_game_ownership` (supports single or batch titles and optional `platform` targeting) when the user buys a game or clarifies whether they played a title on Game Pass.
 
 - **Genres vs Tags**: Genres are broad categories (e.g. `RPG`, `Shooter`, `Puzzle`); tags are mechanics, modes, themes (e.g. `Stealth`, `Open World`, `Co-op`, `Sci-Fi`). Use `update_game_genres` to curate labels (defaults to safe `mode="merge"`).
 

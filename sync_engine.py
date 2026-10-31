@@ -342,6 +342,7 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
         async with _make_async_client(timeout=40.0, extra_headers=headers) as client:
             titles: List[Dict[str, Any]] = []
             xuid = None
+            gamepass_map: Dict[str, bool] = {}
 
             # OpenXBL v2 /api/v2/achievements provides rich 'images' arrays containing official 2:3 'Poster' box art
             try:
@@ -356,24 +357,32 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
             except Exception as exc:
                 logger.warning("Could not fetch Xbox achievements endpoint for posters: %s", exc)
 
-            # Fallback to /api/v2/titles if achievements endpoint didn't return titles
-            if not titles:
+            # Fetch /api/v2/titles to populate gamePass.isGamePass metadata (and serve as fallback for titles/xuid)
+            try:
                 resp = await client.get("https://xbl.io/api/v2/titles")
-                resp.raise_for_status()
-                payload = resp.json()
-                
-                # OpenXBL v2 wraps titles and xuid in payload['content']
-                if isinstance(payload, dict):
-                    if "content" in payload and isinstance(payload["content"], dict):
-                        xuid = payload["content"].get("xuid")
-                        titles = payload["content"].get("titles", [])
-                    else:
-                        xuid = payload.get("xuid")
-                        titles = payload.get("titles", [])
-                elif isinstance(payload, list):
-                    titles = payload
-                else:
-                    titles = []
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    titles_from_ep: List[Dict[str, Any]] = []
+                    if isinstance(payload, dict):
+                        if "content" in payload and isinstance(payload["content"], dict):
+                            xuid = xuid or payload["content"].get("xuid")
+                            titles_from_ep = payload["content"].get("titles", [])
+                        else:
+                            xuid = xuid or payload.get("xuid")
+                            titles_from_ep = payload.get("titles", [])
+                    elif isinstance(payload, list):
+                        titles_from_ep = payload
+
+                    for qt in titles_from_ep:
+                        q_tid = qt.get("titleId")
+                        gp_info = qt.get("gamePass")
+                        if q_tid and isinstance(gp_info, dict) and gp_info.get("isGamePass") is not None:
+                            gamepass_map[str(q_tid)] = bool(gp_info.get("isGamePass"))
+
+                    if not titles:
+                        titles = titles_from_ep
+            except Exception as exc:
+                logger.warning("Could not fetch Xbox /api/v2/titles for Game Pass status: %s", exc)
 
             if not xuid:
                 try:
@@ -466,6 +475,13 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
                 playtime_mins = playtime_map.get(str(title_id), float(t.get("minutesPlayed") or 0.0))
                 playtime_hours = round(playtime_mins / 60.0, 2)
 
+                gp_obj = t.get("gamePass")
+                is_gp = gamepass_map.get(
+                    str(title_id),
+                    bool(gp_obj.get("isGamePass")) if isinstance(gp_obj, dict) else False,
+                )
+                ownership_status = "Game Pass" if is_gp else None
+
                 saved_game = upsert_synced_game(
                     external_id=f"xbox:{title_id}",
                     title=name,
@@ -476,6 +492,7 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
                     achievements_unlocked=unlocked,
                     achievements_total=total_ach,
                     cover_url=cover_url,
+                    ownership_status=ownership_status,
                     db_path=db_path,
                 )
                 upserted_xbox_games.append((saved_game["id"], str(title_id), platform, playtime_hours, total_ach))

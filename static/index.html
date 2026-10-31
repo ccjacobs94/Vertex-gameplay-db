@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=18">
+  <link rel="stylesheet" href="/static/styles.css?v=19">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -192,6 +192,15 @@
             <option value="Beaten">Beaten</option>
             <option value="Completed">Completed (100%)</option>
             <option value="Dropped">Dropped</option>
+          </select>
+
+          <label for="ownership-filter" class="sr-only">Ownership or subscription access</label>
+          <select id="ownership-filter" name="ownership">
+            <option value="">All Ownership</option>
+            <option value="Owned">Owned Outright</option>
+            <option value="Game Pass">Xbox Game Pass</option>
+            <option value="PS Plus">PS Plus</option>
+            <option value="Subscription">Other Subscription</option>
           </select>
 
           <label for="sort-select" class="sr-only">Sort order</label>
@@ -445,6 +454,15 @@
             </select>
           </div>
           <div class="form-group">
+            <label for="add-ownership">Ownership / Access</label>
+            <select id="add-ownership" name="ownership_status">
+              <option value="Owned">Owned Outright</option>
+              <option value="Game Pass">Xbox Game Pass</option>
+              <option value="PS Plus">PS Plus</option>
+              <option value="Subscription">Other Subscription</option>
+            </select>
+          </div>
+          <div class="form-group">
             <label for="add-hours">Playtime (Hours)</label>
             <input type="number" id="add-hours" name="playtime_hours" step="any" min="0" value="0">
           </div>
@@ -561,6 +579,16 @@
                   <option value="Beaten">Beaten</option>
                   <option value="Completed">Completed (100%)</option>
                   <option value="Dropped">Dropped</option>
+                </select>
+              </div>
+
+              <div class="form-group edit-ownership-group">
+                <label for="edit-ownership">Ownership / Access</label>
+                <select id="edit-ownership" name="ownership_status">
+                  <option value="Owned">Owned Outright</option>
+                  <option value="Game Pass">Xbox Game Pass</option>
+                  <option value="PS Plus">PS Plus</option>
+                  <option value="Subscription">Other Subscription</option>
                 </select>
               </div>
 
@@ -819,6 +847,7 @@
           <label for="triage-scope" class="sr-only">Triage queue filter</label>
           <select id="triage-scope" class="triage-scope-select">
             <option value="unlocked">Untriaged (Auto-Synced Only)</option>
+            <option value="xbox_ownership">Xbox Ownership Review</option>
             <option value="not_played">Not Played Only</option>
             <option value="current_filter">Current Library View</option>
             <option value="all">All Games</option>
@@ -870,6 +899,15 @@
               <div class="triage-stat-box">
                 <span class="triage-stat-label">Current Status</span>
                 <span id="triage-current-status" class="status-pill">Not Played</span>
+              </div>
+              <div class="triage-stat-box">
+                <span class="triage-stat-label">Ownership (<kbd>G</kbd>)</span>
+                <button
+                  type="button"
+                  id="btn-triage-ownership"
+                  class="ownership-toggle-pill"
+                  title="Click or press G to toggle Owned vs Game Pass"
+                >Owned</button>
               </div>
             </div>
 
@@ -926,7 +964,7 @@
         </div>
         <div class="triage-nav-right">
           <span class="triage-shortcuts-hint">
-            <kbd>1</kbd>–<kbd>6</kbd> Status &bull; <kbd>F</kbd> Fav &bull; <kbd>Space</kbd>/<kbd>→</kbd> Skip &bull; <kbd>←</kbd> Undo/Back
+            <kbd>1</kbd>–<kbd>6</kbd> Status &bull; <kbd>G</kbd> Game Pass/Owned &bull; <kbd>F</kbd> Fav &bull; <kbd>Space</kbd>/<kbd>→</kbd> Skip &bull; <kbd>←</kbd> Back
           </span>
           <button type="button" id="btn-triage-skip" class="btn btn-secondary" title="Skip / Keep Current (Space or →)">
             Skip →
@@ -970,6 +1008,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=18"></script>
+  <script src="/static/app.js?v=19"></script>
 </body>
 </html>
