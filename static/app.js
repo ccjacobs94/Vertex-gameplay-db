@@ -76,6 +76,7 @@ const state = {
   allTags: [...COMMON_TAGS],
   platform: "",
   status: "",
+  ownership: "",
   genre: "",
   tag: "",
   search: "",
@@ -156,6 +157,7 @@ function updateActiveFiltersUI() {
     (state.genre ? 1 : 0) +
     (state.tag ? 1 : 0) +
     (state.status ? 1 : 0) +
+    (state.ownership ? 1 : 0) +
     (state.favoriteOnly ? 1 : 0) +
     (state.sortBy !== "playtime_desc" ? 1 : 0);
 
@@ -171,6 +173,7 @@ function updateActiveFiltersUI() {
       !state.genre &&
       !state.tag &&
       !state.status &&
+      !state.ownership &&
       !state.favoriteOnly &&
       !state.platform &&
       !state.search &&
@@ -199,6 +202,8 @@ function syncFilterInputs() {
   }
   const stSelect = document.getElementById("status-filter");
   if (stSelect) stSelect.value = state.status;
+  const ownSelect = document.getElementById("ownership-filter");
+  if (ownSelect) ownSelect.value = state.ownership;
   const gnSelect = document.getElementById("genre-filter");
   if (gnSelect) gnSelect.value = state.genre;
   const tgSelect = document.getElementById("tag-filter");
@@ -269,6 +274,7 @@ async function fetchHabitsAnalytics() {
   if (state.search) params.set("search", state.search);
   if (state.platform) params.set("platform", state.platform);
   if (state.status) params.set("status", state.status);
+  if (state.ownership) params.set("ownership", state.ownership);
   if (state.genre) params.set("genre", state.genre);
   if (state.tag) params.set("tag", state.tag);
   if (state.favoriteOnly) params.set("favorite_only", "true");
@@ -376,6 +382,7 @@ function renderHabitsDashboard(data) {
     if (state.genre) chips.push({ label: `Genre: ${state.genre}`, key: "genre" });
     if (state.tag) chips.push({ label: `Tag: ${state.tag}`, key: "tag" });
     if (state.status) chips.push({ label: `Status: ${state.status}`, key: "status" });
+    if (state.ownership) chips.push({ label: `Ownership: ${state.ownership}`, key: "ownership" });
     if (state.favoriteOnly) chips.push({ label: "★ Favorites", key: "favoriteOnly" });
     if (state.search) chips.push({ label: `Search: "${state.search}"`, key: "search" });
 
@@ -388,6 +395,7 @@ function renderHabitsDashboard(data) {
         else if (chip.key === "genre") state.genre = "";
         else if (chip.key === "tag") state.tag = "";
         else if (chip.key === "status") state.status = "";
+        else if (chip.key === "ownership") state.ownership = "";
         else if (chip.key === "favoriteOnly") state.favoriteOnly = false;
         else if (chip.key === "search") state.search = "";
         syncFilterInputs();
@@ -973,6 +981,7 @@ async function fetchGames() {
   if (state.search) params.set("search", state.search);
   if (state.platform) params.set("platform", state.platform);
   if (state.status) params.set("status", state.status);
+  if (state.ownership) params.set("ownership", state.ownership);
   if (state.genre) params.set("genre", state.genre);
   if (state.tag) params.set("tag", state.tag);
   if (state.favoriteOnly) params.set("favorite_only", "true");
@@ -1005,9 +1014,10 @@ async function quickPatchGame(gameId, updates) {
     const data = await res.json();
     const updated = data.game;
     if (updated) {
-      const idx = state.games.findIndex((g) => g.id === gameId);
+      const targetGameId = updated.id || gameId;
+      const idx = state.games.findIndex((g) => g.id === targetGameId || g.id === gameId);
       if (idx !== -1) state.games[idx] = updated;
-      const tIdx = state.triageQueue.findIndex((g) => g.id === gameId);
+      const tIdx = state.triageQueue.findIndex((g) => g.id === targetGameId || g.id === gameId);
       if (tIdx !== -1) state.triageQueue[tIdx] = updated;
       updateTriageButtonBadge();
       fetchStats();
@@ -1063,6 +1073,22 @@ function renderGames() {
     platBadge.textContent = game.platform;
     wrapper.appendChild(platBadge);
 
+    const ownStatus = game.ownership_status || "Owned";
+    if (ownStatus !== "Owned") {
+      const ownBadge = document.createElement("span");
+      const ownSlug = ownStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      ownBadge.className = `ownership-badge ${ownSlug}`;
+      ownBadge.textContent = ownStatus;
+      ownBadge.title = `Access via ${ownStatus}`;
+      wrapper.appendChild(ownBadge);
+    } else if (game.has_game_pass_copy) {
+      const ownBadge = document.createElement("span");
+      ownBadge.className = "ownership-badge has-gp-sub";
+      ownBadge.textContent = "Owned + GP";
+      ownBadge.title = "Owned on a linked platform + played on Game Pass";
+      wrapper.appendChild(ownBadge);
+    }
+
     if (game.favorite) {
       const fav = document.createElement("span");
       fav.className = "fav-star";
@@ -1114,6 +1140,14 @@ function renderGames() {
     listPlat.className = "card-list-plat";
     listPlat.textContent = game.platform;
     subrow.appendChild(listPlat);
+
+    if (ownStatus !== "Owned") {
+      const listOwn = document.createElement("span");
+      const ownSlug = ownStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      listOwn.className = `card-list-ownership ${ownSlug}`;
+      listOwn.textContent = ownStatus;
+      subrow.appendChild(listOwn);
+    }
 
     if (achTot > 0 || achUnl > 0) {
       const listAch = document.createElement("span");
@@ -1400,6 +1434,30 @@ function renderEditLinkedCopies(game) {
     right.style.display = "flex";
     right.style.alignItems = "center";
     right.style.gap = "0.6rem";
+
+    const ownSelect = document.createElement("select");
+    ownSelect.className = "linked-copy-ownership-select";
+    const copyOwn = copy.ownership_status || "Owned";
+    ownSelect.dataset.ownership = copyOwn;
+    ownSelect.setAttribute("aria-label", `Ownership for ${copy.title} on ${copy.platform}`);
+    for (const oVal of ["Owned", "Game Pass", "PS Plus", "Subscription"]) {
+      const opt = document.createElement("option");
+      opt.value = oVal;
+      opt.textContent = oVal;
+      if (oVal === copyOwn) opt.selected = true;
+      ownSelect.appendChild(opt);
+    }
+    ownSelect.addEventListener("change", async (ev) => {
+      const nextOwn = ev.target.value;
+      ownSelect.dataset.ownership = nextOwn;
+      const updated = await quickPatchGame(copy.id, { ownership_status: nextOwn });
+      if (updated) {
+        await fetchGames();
+        const refreshed = state.games.find((g) => g.id === game.id) || updated;
+        if (refreshed) openEditModal(refreshed);
+      }
+    });
+    right.appendChild(ownSelect);
 
     const hrs = document.createElement("span");
     hrs.className = "reconcile-copy-hours";
@@ -1774,6 +1832,15 @@ function openEditModal(game) {
     platBadge.textContent = game.platform;
     badgesEl.appendChild(platBadge);
 
+    const ownStatus = game.ownership_status || "Owned";
+    if (ownStatus !== "Owned") {
+      const ownBadge = document.createElement("span");
+      const ownSlug = ownStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      ownBadge.className = `edit-header-badge ${ownSlug}`;
+      ownBadge.textContent = ownStatus;
+      badgesEl.appendChild(ownBadge);
+    }
+
     if (game.last_played) {
       const lpDate = new Date(game.last_played);
       if (!Number.isNaN(lpDate.getTime())) {
@@ -1849,6 +1916,18 @@ function openEditModal(game) {
 
   document.getElementById("edit-id").value = game.id;
   document.getElementById("edit-status").value = game.completion_status || "Not Played";
+  const editOwnEl = document.getElementById("edit-ownership");
+  const editOwnGroup = editOwnEl ? editOwnEl.closest(".form-group") : null;
+  const isMultiCopy = game.is_reconciled && Array.isArray(game.linked_games) && game.linked_games.length > 1;
+  if (editOwnEl) {
+    editOwnEl.value = game.ownership_status || "Owned";
+    editOwnEl.disabled = isMultiCopy;
+    if (editOwnGroup) {
+      editOwnGroup.title = isMultiCopy
+        ? "Ownership is managed per linked copy in the Cross-Platform Copies section below."
+        : "";
+    }
+  }
   document.getElementById("edit-hours").value = game.playtime_hours ?? 0;
   renderEditRatingPills(game.user_rating);
   document.getElementById("edit-genres").value = (game.genres || []).join(", ");
@@ -2448,6 +2527,13 @@ function buildTriageQueue(sourceGames, scope) {
   if (scope === "unlocked") {
     return sourceGames.filter((g) => !g.status_locked);
   }
+  if (scope === "xbox_ownership") {
+    return sourceGames.filter(
+      (g) =>
+        (g.platform || "").toLowerCase().includes("xbox") ||
+        (g.sources || []).some((s) => s.toLowerCase().includes("xbox"))
+    );
+  }
   if (scope === "not_played") {
     return sourceGames.filter((g) => (g.completion_status || "Not Played") === "Not Played");
   }
@@ -2562,6 +2648,13 @@ function renderTriageCard() {
   statusEl.textContent = curStatus;
   statusEl.dataset.status = curStatus;
 
+  const ownBtn = document.getElementById("btn-triage-ownership");
+  if (ownBtn) {
+    const curOwn = game.ownership_status || "Owned";
+    ownBtn.textContent = curOwn;
+    ownBtn.dataset.ownership = curOwn;
+  }
+
   const favBtn = document.getElementById("btn-triage-fav");
   favBtn.setAttribute("aria-pressed", String(Boolean(game.favorite)));
 
@@ -2617,6 +2710,30 @@ async function toggleTriageFavorite() {
   renderTriageCard();
   await quickPatchGame(game.id, { favorite: nextFav });
   showTriageToast(nextFav ? `★ Favorited ${game.title}` : `Removed favorite`);
+}
+
+async function toggleTriageOwnership() {
+  const queue = state.triageQueue;
+  if (state.triageIndex >= queue.length) return;
+  const game = queue[state.triageIndex];
+  const curOwn = game.ownership_status || "Owned";
+  const nextOwn = curOwn === "Game Pass" ? "Owned" : "Game Pass";
+  game.ownership_status = nextOwn;
+  game.ownership_locked = true;
+  renderTriageCard();
+  let targetId = game.id;
+  if (Array.isArray(game.linked_games) && game.linked_games.length > 1) {
+    const xboxCopy = game.linked_games.find(
+      (lg) => (lg.platform || "").toLowerCase().includes("xbox") || lg.source === "Xbox"
+    );
+    if (xboxCopy) targetId = xboxCopy.id;
+  }
+  const updated = await quickPatchGame(targetId, { ownership_status: nextOwn });
+  if (updated) {
+    queue[state.triageIndex] = updated;
+    renderTriageCard();
+  }
+  showTriageToast(`Ownership: ${game.title} → ${nextOwn}`);
 }
 
 function stepTriage(delta) {
@@ -2936,6 +3053,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resetFiltersBtn.addEventListener("click", () => {
       state.platform = "";
       state.status = "";
+      state.ownership = "";
       state.genre = "";
       state.tag = "";
       state.search = "";
@@ -2944,6 +3062,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
       document.getElementById("search-input").value = "";
       document.getElementById("status-filter").value = "";
+      const ofEl = document.getElementById("ownership-filter");
+      if (ofEl) ofEl.value = "";
       document.getElementById("genre-filter").value = "";
       const tf = document.getElementById("tag-filter");
       if (tf) tf.value = "";
@@ -3001,6 +3121,14 @@ document.addEventListener("DOMContentLoaded", () => {
     state.status = e.target.value;
     refreshActiveView();
   });
+
+  const ownershipFilterEl = document.getElementById("ownership-filter");
+  if (ownershipFilterEl) {
+    ownershipFilterEl.addEventListener("change", (e) => {
+      state.ownership = e.target.value;
+      refreshActiveView();
+    });
+  }
 
   document.getElementById("sort-select").addEventListener("change", (e) => {
     state.sortBy = e.target.value;
@@ -3095,6 +3223,7 @@ document.addEventListener("DOMContentLoaded", () => {
       title: document.getElementById("add-title").value.trim(),
       platform: document.getElementById("add-platform").value,
       completion_status: document.getElementById("add-status").value,
+      ownership_status: document.getElementById("add-ownership")?.value || "Owned",
       playtime_hours: parseFloat(document.getElementById("add-hours").value || "0"),
       user_rating: ratingVal ? parseInt(ratingVal, 10) : null,
       cover_url: document.getElementById("add-cover").value.trim() || null,
@@ -3258,6 +3387,11 @@ document.addEventListener("DOMContentLoaded", () => {
       notes: document.getElementById("edit-notes").value.trim(),
       favorite: document.getElementById("edit-favorite").checked,
     };
+
+    const editOwnEl = document.getElementById("edit-ownership");
+    if (editOwnEl && !editOwnEl.disabled) {
+      payload.ownership_status = editOwnEl.value || "Owned";
+    }
 
     if (hoursInput && hoursInput.dataset.unlocked === "true") {
       payload.playtime_hours = parseFloat(hoursInput.value || "0");
@@ -3460,6 +3594,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   document.getElementById("btn-triage-fav").addEventListener("click", toggleTriageFavorite);
+  const triageOwnBtn = document.getElementById("btn-triage-ownership");
+  if (triageOwnBtn) {
+    triageOwnBtn.addEventListener("click", toggleTriageOwnership);
+  }
   document.getElementById("btn-triage-prev").addEventListener("click", () => stepTriage(-1));
   document.getElementById("btn-triage-skip").addEventListener("click", () => stepTriage(1));
 
@@ -3584,6 +3722,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (keyToStatus[e.key]) {
       e.preventDefault();
       applyTriageStatus(keyToStatus[e.key]);
+    } else if (e.key === "g" || e.key === "G") {
+      e.preventDefault();
+      toggleTriageOwnership();
     } else if (e.key === "f" || e.key === "F") {
       e.preventDefault();
       toggleTriageFavorite();

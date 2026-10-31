@@ -122,7 +122,42 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             conn.execute("ALTER TABLE games ADD COLUMN achievements_synced_at TEXT DEFAULT NULL;")
         if "playtime_prompt_muted" not in cols:
             conn.execute("ALTER TABLE games ADD COLUMN playtime_prompt_muted INTEGER DEFAULT 0;")
+        if "ownership_status" not in cols:
+            conn.execute("ALTER TABLE games ADD COLUMN ownership_status TEXT DEFAULT 'Owned';")
+        if "ownership_locked" not in cols:
+            conn.execute("ALTER TABLE games ADD COLUMN ownership_locked INTEGER DEFAULT 0;")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_canonical ON games(canonical_id);")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_games_ownership ON games(ownership_status);")
+
+
+OWNERSHIP_STATUSES = ("Owned", "Game Pass", "PS Plus", "Subscription")
+
+_OWNERSHIP_MAP = {
+    "owned": "Owned",
+    "own": "Owned",
+    "purchased": "Owned",
+    "bought": "Owned",
+    "game pass": "Game Pass",
+    "gamepass": "Game Pass",
+    "xbox game pass": "Game Pass",
+    "pc game pass": "Game Pass",
+    "xgp": "Game Pass",
+    "ps plus": "PS Plus",
+    "ps+": "PS Plus",
+    "playstation plus": "PS Plus",
+    "subscription": "Subscription",
+    "ea play": "Subscription",
+    "ubisoft+": "Subscription",
+}
+
+
+def normalize_ownership_status(val: Optional[str]) -> str:
+    if not val or not isinstance(val, str):
+        return "Owned"
+    cleaned = val.strip()
+    if cleaned in OWNERSHIP_STATUSES:
+        return cleaned
+    return _OWNERSHIP_MAP.get(cleaned.lower(), "Owned")
 
 
 _ROMAN_MAP = {
@@ -239,6 +274,10 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
         d["tags"] = []
     d["favorite"] = bool(d.get("favorite", 0))
     d["status_locked"] = bool(d.get("status_locked", 0))
+    d["ownership_status"] = normalize_ownership_status(d.get("ownership_status"))
+    d["ownership_locked"] = bool(d.get("ownership_locked", 0))
+    d["ownership_statuses"] = [d["ownership_status"]]
+    d["has_game_pass_copy"] = d["ownership_status"] == "Game Pass"
     d["playtime_hours"] = round(float(d.get("playtime_hours") or 0.0), 1)
     d["canonical_id"] = d.get("canonical_id")
     d["achievements_synced_at"] = d.get("achievements_synced_at")
@@ -258,6 +297,8 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
             "achievements_unlocked": d.get("achievements_unlocked") or 0,
             "achievements_total": d.get("achievements_total") or 0,
             "achievements_synced_at": d.get("achievements_synced_at"),
+            "ownership_status": d["ownership_status"],
+            "ownership_locked": d["ownership_locked"],
             "cover_url": d.get("cover_url"),
         }
     ]
@@ -303,6 +344,11 @@ def _consolidate_dicts(
     for key, members in groups.items():
         if len(members) == 1:
             single = dict(members[0])
+            own_st = normalize_ownership_status(single.get("ownership_status"))
+            single["ownership_status"] = own_st
+            single["ownership_locked"] = bool(single.get("ownership_locked", 0))
+            single["ownership_statuses"] = [own_st]
+            single["has_game_pass_copy"] = own_st == "Game Pass"
             single["is_reconciled"] = False
             single["linked_count"] = 1
             single["platforms"] = [single["platform"]]
@@ -319,6 +365,8 @@ def _consolidate_dicts(
                     "achievements_unlocked": single.get("achievements_unlocked") or 0,
                     "achievements_total": single.get("achievements_total") or 0,
                     "achievements_synced_at": single.get("achievements_synced_at"),
+                    "ownership_status": own_st,
+                    "ownership_locked": single["ownership_locked"],
                     "cover_url": single.get("cover_url"),
                 }
             ]
@@ -433,6 +481,24 @@ def _consolidate_dicts(
                     merged_tags.append(tag)
         unified["tags"] = merged_tags
 
+        # Ownership: if owned on at least one linked platform, unified game counts as 'Owned'
+        member_ownerships: List[str] = []
+        for m in members_sorted:
+            ost = normalize_ownership_status(m.get("ownership_status"))
+            if ost not in member_ownerships:
+                member_ownerships.append(ost)
+        if "Owned" in member_ownerships:
+            unified["ownership_status"] = "Owned"
+        elif "Game Pass" in member_ownerships:
+            unified["ownership_status"] = "Game Pass"
+        elif "PS Plus" in member_ownerships:
+            unified["ownership_status"] = "PS Plus"
+        else:
+            unified["ownership_status"] = member_ownerships[0] if member_ownerships else "Owned"
+        unified["ownership_statuses"] = member_ownerships
+        unified["has_game_pass_copy"] = "Game Pass" in member_ownerships
+        unified["ownership_locked"] = any(bool(m.get("ownership_locked")) for m in members)
+
         # Status, rating, favorite, critic_score, release_year
         unified["favorite"] = any(bool(m.get("favorite")) for m in members)
         unified["status_locked"] = any(bool(m.get("status_locked")) for m in members)
@@ -458,6 +524,8 @@ def _consolidate_dicts(
                 "achievements_unlocked": int(m.get("achievements_unlocked") or 0),
                 "achievements_total": int(m.get("achievements_total") or 0),
                 "achievements_synced_at": m.get("achievements_synced_at"),
+                "ownership_status": normalize_ownership_status(m.get("ownership_status")),
+                "ownership_locked": bool(m.get("ownership_locked", 0)),
                 "cover_url": m.get("cover_url"),
             }
             for m in members_sorted
@@ -484,6 +552,7 @@ def upsert_synced_game(
     critic_score: Optional[int] = None,
     release_year: Optional[int] = None,
     cover_url: Optional[str] = None,
+    ownership_status: Optional[str] = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> Dict[str, Any]:
     """
@@ -507,6 +576,12 @@ def upsert_synced_game(
             "SELECT * FROM games WHERE external_id = ?", (external_id,)
         ).fetchone()
 
+        norm_incoming_ownership = (
+            normalize_ownership_status(ownership_status)
+            if ownership_status is not None
+            else "Owned"
+        )
+
         if existing is None:
             genres_json = json.dumps(genres or [])
             tags_json = json.dumps(tags or [])
@@ -515,9 +590,10 @@ def upsert_synced_game(
                 INSERT INTO games (
                     external_id, title, platform, source, playtime_hours,
                     last_played, completion_status, status_locked,
+                    ownership_status, ownership_locked,
                     achievements_unlocked, achievements_total, genres, tags,
                     critic_score, release_year, cover_url, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     external_id,
@@ -527,6 +603,7 @@ def upsert_synced_game(
                     playtime_hours,
                     last_played,
                     inferred_status,
+                    norm_incoming_ownership,
                     achievements_unlocked,
                     achievements_total,
                     genres_json,
@@ -553,6 +630,16 @@ def upsert_synced_game(
                 and achievements_unlocked >= achievements_total
             ):
                 new_status = "Completed"
+
+            # Sticky ownership rule: never overwrite if ownership_locked=1, and never
+            # downgrade 'Game Pass' / 'PS Plus' / 'Subscription' back to 'Owned' when a title leaves the catalog.
+            existing_ownership = normalize_ownership_status(existing["ownership_status"])
+            if bool(existing["ownership_locked"]):
+                new_ownership = existing_ownership
+            elif ownership_status is not None and norm_incoming_ownership != "Owned":
+                new_ownership = norm_incoming_ownership
+            else:
+                new_ownership = existing_ownership
 
             existing_genres = json.loads(existing["genres"] or "[]")
             # Merge, never replace: sync-discovered genres are added to
@@ -583,6 +670,7 @@ def upsert_synced_game(
                     playtime_hours = ?,
                     last_played = COALESCE(?, last_played),
                     completion_status = ?,
+                    ownership_status = ?,
                     achievements_unlocked = MAX(achievements_unlocked, ?),
                     achievements_total = MAX(achievements_total, ?),
                     genres = ?,
@@ -598,6 +686,7 @@ def upsert_synced_game(
                     new_playtime,
                     last_played,
                     new_status,
+                    new_ownership,
                     achievements_unlocked,
                     achievements_total,
                     merged_genres,
@@ -659,27 +748,32 @@ def add_manual_game(
     cover_url: Optional[str] = None,
     notes: str = "",
     favorite: bool = False,
+    ownership_status: str = "Owned",
     db_path: str = DEFAULT_DB_PATH,
 ) -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     slug = "".join(c if c.isalnum() else "-" for c in title.lower()).strip("-")
     plat_slug = "".join(c if c.isalnum() else "-" for c in platform.lower()).strip("-")
     external_id = f"manual:{plat_slug}:{slug}"
+    norm_ownership = normalize_ownership_status(ownership_status)
 
     with get_connection(db_path) as conn:
         conn.execute(
             """
             INSERT INTO games (
                 external_id, title, platform, source, playtime_hours,
-                completion_status, status_locked, genres, tags, critic_score,
+                completion_status, status_locked, ownership_status, ownership_locked,
+                genres, tags, critic_score,
                 user_rating, release_year, cover_url, notes, favorite,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, 'Manual', ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, 'Manual', ?, ?, 1, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(external_id) DO UPDATE SET
                 title = excluded.title,
                 playtime_hours = excluded.playtime_hours,
                 completion_status = excluded.completion_status,
                 status_locked = 1,
+                ownership_status = excluded.ownership_status,
+                ownership_locked = 1,
                 genres = excluded.genres,
                 tags = excluded.tags,
                 critic_score = COALESCE(excluded.critic_score, games.critic_score),
@@ -696,6 +790,7 @@ def add_manual_game(
                 platform,
                 round(float(playtime_hours or 0.0), 2),
                 completion_status,
+                norm_ownership,
                 json.dumps(genres or []),
                 json.dumps(tags or []),
                 critic_score,
@@ -724,6 +819,7 @@ def update_game(
         "platform",
         "playtime_hours",
         "completion_status",
+        "ownership_status",
         "achievements_unlocked",
         "achievements_total",
         "user_rating",
@@ -779,6 +875,8 @@ def update_game(
                 v = json.dumps(v)
             elif k == "favorite":
                 v = 1 if v else 0
+            elif k == "ownership_status":
+                v = normalize_ownership_status(v)
 
             if is_multi and k == "playtime_hours":
                 # Avoid inflating individual platform playtime when saving consolidated total
@@ -804,6 +902,9 @@ def update_game(
             else:
                 if k == "completion_status":
                     single_fields.append("status_locked = ?")
+                    single_values.append(1)
+                elif k == "ownership_status":
+                    single_fields.append("ownership_locked = ?")
                     single_values.append(1)
                 single_fields.append(f"{k} = ?")
                 single_values.append(v)
@@ -885,6 +986,7 @@ def query_games(
     status: Optional[str] = None,
     genre: Optional[str] = None,
     tag: Optional[str] = None,
+    ownership: Optional[str] = None,
     favorite_only: bool = False,
     sort_by: str = "playtime_desc",
     limit: int = 500,
@@ -940,6 +1042,15 @@ def query_games(
             for g in items
             if any(t_q in t.lower() for t in (g.get("tags") or []))
             or any(t_q in gen.lower() for gen in (g.get("genres") or []))
+        ]
+
+    if ownership:
+        o_q = normalize_ownership_status(ownership).lower()
+        items = [
+            g
+            for g in items
+            if (g.get("ownership_status") or "Owned").lower() == o_q
+            or (o_q in [s.lower() for s in (g.get("ownership_statuses") or [])])
         ]
 
     if favorite_only:
@@ -1465,6 +1576,7 @@ def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
 
     by_platform: Dict[str, Dict[str, Any]] = {}
     by_status: Dict[str, int] = {}
+    by_ownership: Dict[str, Dict[str, Any]] = {}
     genre_hours: Dict[str, float] = {}
     tag_hours: Dict[str, float] = {}
 
@@ -1480,6 +1592,14 @@ def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
 
         st = g["completion_status"] or "Not Played"
         by_status[st] = by_status.get(st, 0) + 1
+
+        own = g.get("ownership_status") or "Owned"
+        if own not in by_ownership:
+            by_ownership[own] = {"count": 0, "hours": 0.0}
+        by_ownership[own]["count"] += 1
+        by_ownership[own]["hours"] = round(
+            by_ownership[own]["hours"] + float(g.get("playtime_hours") or 0.0), 1
+        )
 
         for gen in g.get("genres") or []:
             genre_hours[gen] = round(genre_hours.get(gen, 0.0) + max(g["playtime_hours"], 0.5), 1)
@@ -1544,6 +1664,7 @@ def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
         "top_tags": top_tags,
         "platforms": by_platform,
         "statuses": by_status,
+        "ownership": by_ownership,
         "top_genres": top_genres,
         "top_played": [
             {
@@ -1588,6 +1709,7 @@ def get_habits_analytics(
     status: Optional[str] = None,
     genre: Optional[str] = None,
     tag: Optional[str] = None,
+    ownership: Optional[str] = None,
     favorite_only: bool = False,
     db_path: str = DEFAULT_DB_PATH,
 ) -> Dict[str, Any]:
@@ -1601,6 +1723,7 @@ def get_habits_analytics(
         status=status,
         genre=genre,
         tag=tag,
+        ownership=ownership,
         favorite_only=favorite_only,
         limit=10000,
         db_path=db_path,
