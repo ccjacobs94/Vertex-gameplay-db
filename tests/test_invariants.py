@@ -105,6 +105,130 @@ class TestUserEditPreservation(unittest.TestCase):
         self.assertEqual(after["genres"], ["Puzzle", "Platformer", "Action"])
         self.assertEqual(after["tags"], ["Co-op", "Story Rich", "Singleplayer"])
 
+    # --- ownership_status / ownership_locked --------------------------------
+    def test_manual_ownership_change_sets_lock(self):
+        game = self._sync(ownership_status="Game Pass")
+        updated = db.update_game(game["id"], {"ownership_status": "Owned"}, db_path=self.db_path)
+        self.assertTrue(updated["ownership_locked"])
+        self.assertEqual(updated["ownership_status"], "Owned")
+
+    def test_sync_does_not_override_locked_ownership(self):
+        game = self._sync(ownership_status="Game Pass")
+        db.update_game(game["id"], {"ownership_status": "Owned"}, db_path=self.db_path)
+        # Sync reporting Game Pass again must not override locked Owned status
+        after = self._sync(ownership_status="Game Pass")
+        self.assertEqual(after["ownership_status"], "Owned")
+        self.assertTrue(after["ownership_locked"])
+
+    def test_sticky_gamepass_never_downgraded_by_subsequent_sync(self):
+        # Initial sync with Game Pass = True
+        game = self._sync(ownership_status="Game Pass")
+        self.assertEqual(game["ownership_status"], "Game Pass")
+        # Title leaves Game Pass catalog, sync reports None/Owned without user lock
+        after = self._sync(ownership_status=None)
+        self.assertEqual(after["ownership_status"], "Game Pass")
+
+    def test_cross_platform_reconciliation_ownership(self):
+        g_xbox = db.upsert_synced_game(
+            "xbox:123", "Halo", "Xbox", "Xbox", 10.0,
+            ownership_status="Game Pass", db_path=self.db_path
+        )
+        g_steam = db.upsert_synced_game(
+            "steam:123", "Halo", "PC (Steam)", "Steam", 5.0,
+            ownership_status="Owned", db_path=self.db_path
+        )
+        merged = db.reconcile_games([g_xbox["id"], g_steam["id"]], db_path=self.db_path)
+        self.assertEqual(merged["ownership_status"], "Owned")
+        self.assertTrue(merged["has_game_pass_copy"])
+
+    def test_reconciled_game_general_update_preserves_per_copy_ownership(self):
+        g_xbox = db.upsert_synced_game(
+            "xbox:123", "Halo", "Xbox", "Xbox", 10.0,
+            ownership_status="Game Pass", db_path=self.db_path
+        )
+        g_steam = db.upsert_synced_game(
+            "steam:123", "Halo", "PC (Steam)", "Steam", 5.0,
+            ownership_status="Owned", db_path=self.db_path
+        )
+        merged = db.reconcile_games([g_xbox["id"], g_steam["id"]], db_path=self.db_path)
+        # General update to notes/status must NOT overwrite individual copies' ownership
+        updated = db.update_game(
+            merged["id"],
+            {"notes": "Favorite FPS", "completion_status": "Playing"},
+            db_path=self.db_path,
+        )
+        self.assertEqual(updated["notes"], "Favorite FPS")
+        self.assertEqual(updated["completion_status"], "Playing")
+        self.assertEqual(updated["ownership_status"], "Owned")
+        self.assertTrue(updated["has_game_pass_copy"])
+
+        xbox_copy = next(c for c in updated["linked_games"] if c["platform"] == "Xbox")
+        steam_copy = next(c for c in updated["linked_games"] if "Steam" in c["platform"] or "PC" in c["platform"])
+        self.assertEqual(xbox_copy["ownership_status"], "Game Pass")
+        self.assertEqual(steam_copy["ownership_status"], "Owned")
+        self.assertFalse(xbox_copy["ownership_locked"])
+
+    def test_query_games_ownership_filter_matches_reconciled_copies(self):
+        g_xbox = db.upsert_synced_game(
+            "xbox:123", "Halo", "Xbox", "Xbox", 10.0,
+            ownership_status="Game Pass", db_path=self.db_path
+        )
+        g_steam = db.upsert_synced_game(
+            "steam:123", "Halo", "PC (Steam)", "Steam", 5.0,
+            ownership_status="Owned", db_path=self.db_path
+        )
+        db.reconcile_games([g_xbox["id"], g_steam["id"]], db_path=self.db_path)
+
+        # Standalone Game Pass game
+        db.upsert_synced_game(
+            "xbox:456", "Starfield", "Xbox", "Xbox", 20.0,
+            ownership_status="Game Pass", db_path=self.db_path
+        )
+
+        # Standalone Owned game
+        db.upsert_synced_game(
+            "steam:789", "Portal 2", "PC", "Steam", 15.0,
+            ownership_status="Owned", db_path=self.db_path
+        )
+
+        # Filtering by Game Pass matches both Starfield and the reconciled Halo
+        gp_games = db.query_games(ownership="Game Pass", db_path=self.db_path)
+        gp_titles = [g["title"] for g in gp_games]
+        self.assertIn("Starfield", gp_titles)
+        self.assertIn("Halo", gp_titles)
+        self.assertNotIn("Portal 2", gp_titles)
+
+        # Filtering by Owned matches both Portal 2 and the reconciled Halo
+        owned_games = db.query_games(ownership="Owned", db_path=self.db_path)
+        owned_titles = [g["title"] for g in owned_games]
+        self.assertIn("Portal 2", owned_titles)
+        self.assertIn("Halo", owned_titles)
+        self.assertNotIn("Starfield", owned_titles)
+
+    def test_multi_copy_xbox_ownership_reconciliation(self):
+        # Edge case: Xbox 360 copy Owned + Xbox One copy Game Pass
+        g_x360 = db.upsert_synced_game(
+            "xbox:360_1", "Skyrim", "Xbox", "Xbox", 80.0,
+            ownership_status="Owned", db_path=self.db_path
+        )
+        g_xb1 = db.upsert_synced_game(
+            "xbox:xb1_2", "Skyrim", "Xbox", "Xbox", 40.0,
+            ownership_status="Game Pass", db_path=self.db_path
+        )
+        merged = db.reconcile_games([g_x360["id"], g_xb1["id"]], db_path=self.db_path)
+        self.assertEqual(merged["ownership_status"], "Owned")
+        self.assertTrue(merged["has_game_pass_copy"])
+
+    def test_manual_game_creation_locks_ownership(self):
+        game = db.add_manual_game(
+            title="Sea of Stars",
+            platform="Xbox",
+            ownership_status="Game Pass",
+            db_path=self.db_path,
+        )
+        self.assertEqual(game["ownership_status"], "Game Pass")
+        self.assertTrue(game["ownership_locked"])
+
     # --- sync data monotonicity --------------------------------------------
 
     def test_sync_never_decreases_playtime(self):
@@ -131,7 +255,10 @@ class TestSchemaMigrations(unittest.TestCase):
 
             with sqlite3.connect(path) as conn:
                 cols = {r[1] for r in conn.execute("PRAGMA table_info(games)")}
-            for required in ("status_locked", "user_rating", "notes", "favorite", "genres", "tags"):
+            for required in (
+                "status_locked", "ownership_status", "ownership_locked",
+                "user_rating", "notes", "favorite", "genres", "tags"
+            ):
                 self.assertIn(required, cols)
 
 
