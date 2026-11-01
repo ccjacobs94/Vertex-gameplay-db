@@ -6,6 +6,8 @@ Accessible over Local Network (LAN) and Tailscale.
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import inspect
+import json
 import logging
 import os
 from pathlib import Path
@@ -427,6 +429,11 @@ class UserConnectionsUpdateRequest(BaseModel):
     steam_id: Optional[str] = None
     xbl_api_key: Optional[str] = None
     psn_npsso: Optional[str] = None
+
+
+class ConnectionTestRequest(BaseModel):
+    platform: str
+    credential: str
 
 
 class CreateTokenRequest(BaseModel):
@@ -1162,6 +1169,183 @@ async def api_admin_revoke_invite(code_hash: str, request: Request) -> Dict[str,
 
 
 
+def clean_steam_input(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    text = raw.strip()
+    # Strip URL prefixes if provided
+    text = text.split("?")[0].split("#")[0].strip()
+    text = re.sub(r"^https?://(?:www\.)?steamcommunity\.com/(?:id|profiles)/", "", text, flags=re.IGNORECASE)
+    text = text.rstrip("/")
+    return text.strip()
+
+
+def clean_psn_token(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    text = raw.strip()
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and "npsso" in data:
+            return str(data["npsso"]).strip()
+    except Exception:
+        pass
+    m = re.search(r'["\']?npsso["\']?\s*[:=]\s*["\']?([a-zA-Z0-9_-]+)["\']?', text)
+    if m:
+        return m.group(1).strip()
+    return text.strip("\"' ")
+
+
+def clean_xbl_key(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    return raw.strip()
+
+
+def _verify_steam_connection(credential: str) -> Dict[str, Any]:
+    cleaned = clean_steam_input(credential)
+    if not cleaned:
+        return {"status": "error", "platform": "steam", "message": "Steam ID or Profile URL cannot be empty"}
+
+    api_key = os.environ.get("STEAM_API_KEY", "").strip()
+    steam_id = cleaned
+
+    if api_key:
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                if not (cleaned.isdigit() and len(cleaned) >= 16):
+                    r_vanity = client.get(
+                        "https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/",
+                        params={"key": api_key, "vanityurl": cleaned},
+                    )
+                    if r_vanity.status_code == 200:
+                        vdata = r_vanity.json().get("response", {})
+                        if vdata.get("success") == 1 and vdata.get("steamid"):
+                            steam_id = str(vdata["steamid"])
+                        else:
+                            return {
+                                "status": "error",
+                                "platform": "steam",
+                                "message": f"Could not resolve Steam vanity URL '{cleaned}'",
+                            }
+
+                r_player = client.get(
+                    "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",
+                    params={"key": api_key, "steamids": steam_id},
+                )
+                if r_player.status_code == 200:
+                    players = r_player.json().get("response", {}).get("players", [])
+                    if players:
+                        p = players[0]
+                        persona_name = p.get("personaname", steam_id)
+                        avatar = p.get("avatarfull") or p.get("avatarmedium") or ""
+                        return {
+                            "status": "ok",
+                            "platform": "steam",
+                            "steam_id": steam_id,
+                            "persona_name": persona_name,
+                            "avatar_url": avatar,
+                            "message": f"Steam account verified successfully as {persona_name}",
+                        }
+        except Exception as exc:
+            return {"status": "error", "platform": "steam", "message": f"Steam verification check error: {exc}"}
+
+    if cleaned.isdigit() and len(cleaned) >= 16:
+        return {
+            "status": "ok",
+            "platform": "steam",
+            "steam_id": cleaned,
+            "persona_name": cleaned,
+            "avatar_url": "",
+            "message": "SteamID recorded (live persona lookup requires server STEAM_API_KEY)",
+        }
+    return {
+        "status": "error",
+        "platform": "steam",
+        "message": "Custom profile URLs require STEAM_API_KEY on the server to resolve. Please provide a 17-digit numeric SteamID64.",
+    }
+
+
+def _verify_xbox_connection(credential: str) -> Dict[str, Any]:
+    cleaned = clean_xbl_key(credential)
+    if not cleaned:
+        return {"status": "error", "platform": "xbox", "message": "OpenXBL API key cannot be empty"}
+
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.get(
+                "https://xbl.io/api/v2/account",
+                headers={"X-Authorization": cleaned, "Accept": "application/json"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                profile_users = data.get("profileUsers", [])
+                gamertag = "Xbox Gamer"
+                gamerscore = "0"
+                avatar_url = ""
+                if profile_users:
+                    u = profile_users[0]
+                    settings = {s.get("id"): s.get("value", "") for s in u.get("settings", [])}
+                    gamertag = settings.get("Gamertag") or u.get("hostId") or gamertag
+                    gamerscore = settings.get("Gamerscore", "0")
+                    avatar_url = settings.get("GameDisplayPicRaw", "")
+                return {
+                    "status": "ok",
+                    "platform": "xbox",
+                    "gamertag": gamertag,
+                    "gamerscore": gamerscore,
+                    "avatar_url": avatar_url,
+                    "message": f"Xbox account verified successfully as {gamertag} ({gamerscore} G)",
+                }
+            elif resp.status_code in (401, 403):
+                return {"status": "error", "platform": "xbox", "message": "Invalid OpenXBL API key (unauthorized)"}
+            else:
+                return {
+                    "status": "error",
+                    "platform": "xbox",
+                    "message": f"OpenXBL returned status {resp.status_code}",
+                }
+    except Exception as exc:
+        return {"status": "error", "platform": "xbox", "message": f"Xbox verification check failed: {exc}"}
+
+
+def _verify_psn_connection(credential: str) -> Dict[str, Any]:
+    cleaned = clean_psn_token(credential)
+    if not cleaned:
+        return {"status": "error", "platform": "psn", "message": "PlayStation token or Online ID cannot be empty"}
+
+    if len(cleaned) == 64 and all(c in "0123456789abcdefABCDEF" for c in cleaned):
+        try:
+            from psnawp_api import PSNAWP
+            psnawp = PSNAWP(cleaned)
+            me = psnawp.me()
+            online_id = getattr(me, "online_id", "") or "PSN User"
+            account_id = getattr(me, "account_id", "")
+            return {
+                "status": "ok",
+                "platform": "psn",
+                "online_id": online_id,
+                "account_id": account_id,
+                "message": f"PlayStation Network account verified successfully as {online_id}",
+            }
+        except Exception as exc:
+            return {"status": "error", "platform": "psn", "message": f"PlayStation NPSSO verification failed: {exc}"}
+
+    if len(cleaned) <= 30 and re.match(r"^[a-zA-Z0-9_-]+$", cleaned):
+        return {
+            "status": "ok",
+            "platform": "psn",
+            "online_id": cleaned,
+            "message": f"PlayStation Online ID set to {cleaned}",
+        }
+
+    return {
+        "status": "error",
+        "platform": "psn",
+        "message": "Invalid PSN NPSSO token (must be 64 hexadecimal characters) or invalid PSN Online ID",
+    }
+
+
 @app.get("/api/user/connections")
 async def api_get_user_connections(request: Request) -> Dict[str, Any]:
     user_id, username = _get_active_user(request)
@@ -1177,6 +1361,7 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
         "steam_id": conns.get("steam_id", ""),
         "has_xbl_api_key": bool(xbl_key),
         "has_psn_npsso": bool(psn_token),
+        "onboarding_completed": bool(conns.get("onboarding_completed", False)),
         "xbl_api_key_masked": (f"••••••••{xbl_key[-4:]}" if len(xbl_key) >= 4 else ("••••" if xbl_key else "")),
         "psn_npsso_masked": (f"••••••••{psn_token[-4:]}" if len(psn_token) >= 4 else ("••••" if psn_token else "")),
         "server_defaults": {
@@ -1195,13 +1380,14 @@ async def api_update_user_connections(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
 
+    steam = clean_steam_input(payload.steam_id) if payload.steam_id is not None else None
     # If key is "__CLEAR__", clear it; if empty string/None, preserve existing
-    xbl = "" if payload.xbl_api_key == "__CLEAR__" else (payload.xbl_api_key if payload.xbl_api_key else None)
-    psn = "" if payload.psn_npsso == "__CLEAR__" else (payload.psn_npsso if payload.psn_npsso else None)
+    xbl = "" if payload.xbl_api_key == "__CLEAR__" else (clean_xbl_key(payload.xbl_api_key) if payload.xbl_api_key else None)
+    psn = "" if payload.psn_npsso == "__CLEAR__" else (clean_psn_token(payload.psn_npsso) if payload.psn_npsso else None)
 
     updated = system_db.set_user_connections(
         user_id=user_id,
-        steam_id=payload.steam_id,
+        steam_id=steam,
         xbl_api_key=xbl,
         psn_npsso=psn,
     )
@@ -1212,8 +1398,41 @@ async def api_update_user_connections(
             "steam_id": updated.get("steam_id", ""),
             "has_xbl_api_key": bool(updated.get("xbl_api_key")),
             "has_psn_npsso": bool(updated.get("psn_npsso")),
+            "onboarding_completed": bool(updated.get("onboarding_completed", False)),
         },
     }
+
+
+@app.post("/api/user/connections/test")
+async def api_test_user_connection(payload: ConnectionTestRequest, request: Request) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    plat = payload.platform.strip().lower()
+    cred = payload.credential.strip()
+
+    if plat == "steam":
+        res = _verify_steam_connection(cred)
+    elif plat in ("xbox", "xbl"):
+        res = _verify_xbox_connection(cred)
+    elif plat == "psn":
+        res = _verify_psn_connection(cred)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported verification platform: {plat}")
+
+    if inspect.isawaitable(res):
+        res = await res
+    return res
+
+
+@app.post("/api/user/onboarding/complete")
+async def api_complete_user_onboarding(request: Request) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    system_db.set_user_onboarding_completed(user_id, True)
+    return {"status": "ok", "onboarding_completed": True, "message": "Onboarding marked as completed"}
 
 
 @app.get("/api/user/mcp")
