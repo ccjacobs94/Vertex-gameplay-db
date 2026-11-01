@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=25 and sw to v21
-        self.assertIn('href="/static/styles.css?v=25"', index_html)
-        self.assertIn('src="/static/app.js?v=25"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v21";', sw_js)
+        # Cache buster must be bumped to v=26 and sw to v22
+        self.assertIn('href="/static/styles.css?v=26"', index_html)
+        self.assertIn('src="/static/app.js?v=26"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v22";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -116,6 +116,38 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.dismissWizardForever = dismissWizardForever;", app_js)
         self.assertIn("window.openConnectionsModal = openConnectionsModal;", app_js)
         self.assertIn("if (!dialog.open)", app_js)
+
+    def test_mobile_settings_and_logout_elements(self):
+        index_path = os.path.join(self.static_dir, "index.html")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        styles_path = os.path.join(self.static_dir, "styles.css")
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+
+        # Mobile bottom navigation bar includes Settings
+        self.assertIn('id="mnav-settings"', index_html)
+
+        # Mobile header includes Settings button and mobile Sign Out link
+        self.assertIn('id="btn-mobile-settings"', index_html)
+        self.assertIn('id="btn-mobile-logout"', index_html)
+
+        # Settings dialog Account section has a direct Sign Out action
+        self.assertIn('id="btn-settings-logout"', index_html)
+
+        # JavaScript wires mnav-settings and toggles mobile/settings logout buttons
+        self.assertIn('document.getElementById("mnav-settings")', app_js)
+        self.assertIn('document.getElementById("btn-mobile-settings")', app_js)
+        self.assertIn('document.getElementById("btn-mobile-logout")', app_js)
+        self.assertIn('document.getElementById("btn-settings-logout")', app_js)
+
+        # CSS styles mobile header actions and 6-column bottom navigation
+        self.assertIn(".mobile-header-actions", styles_css)
+        self.assertIn("grid-template-columns: repeat(6, 1fr)", styles_css)
 
 
 if __name__ == "__main__":

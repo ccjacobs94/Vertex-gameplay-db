@@ -970,6 +970,14 @@ async function fetchStats() {
     if (logoutBtn) {
       logoutBtn.hidden = !stats.auth_enabled;
     }
+    const mobileLogoutBtn = document.getElementById("btn-mobile-logout");
+    if (mobileLogoutBtn) {
+      mobileLogoutBtn.hidden = !stats.auth_enabled;
+    }
+    const settingsLogoutBtn = document.getElementById("btn-settings-logout");
+    if (settingsLogoutBtn) {
+      settingsLogoutBtn.hidden = !stats.auth_enabled;
+    }
 
     const adminTab = document.getElementById("stab-admin-users");
     if (adminTab && typeof stats.is_admin === "boolean") {
@@ -4660,6 +4668,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const mnavTriage = document.getElementById("mnav-triage");
   const mnavAdd = document.getElementById("mnav-add");
   const mnavReconcile = document.getElementById("mnav-reconcile");
+  const mnavSettings = document.getElementById("mnav-settings");
 
   function setMobileNavActive(activeId) {
     for (const item of document.querySelectorAll(".mobile-bottom-nav .mnav-item")) {
@@ -4693,6 +4702,12 @@ document.addEventListener("DOMContentLoaded", () => {
       openReconcileModal();
     });
   }
+  if (mnavSettings) {
+    mnavSettings.addEventListener("click", () => {
+      setMobileNavActive("mnav-settings");
+      openSettingsModal();
+    });
+  }
 
   triageDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
   reconcileDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
@@ -4703,6 +4718,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnOpenSettings = document.getElementById("btn-open-settings");
   if (btnOpenSettings) {
     btnOpenSettings.addEventListener("click", openSettingsModal);
+  }
+  const btnMobileSettings = document.getElementById("btn-mobile-settings");
+  if (btnMobileSettings) {
+    btnMobileSettings.addEventListener("click", openSettingsModal);
+  }
+  const btnMobileSync = document.getElementById("btn-mobile-sync");
+  if (btnMobileSync) {
+    btnMobileSync.addEventListener("click", () => {
+      const syncBtn = document.getElementById("btn-sync");
+      if (syncBtn) syncBtn.click();
+    });
   }
   const btnCloseSettings = document.getElementById("btn-close-settings");
   if (btnCloseSettings && settingsDialog) {
