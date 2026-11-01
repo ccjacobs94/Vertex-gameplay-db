@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=23">
+  <link rel="stylesheet" href="/static/styles.css?v=24">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -39,6 +39,10 @@
         </div>
       </div>
       <div class="header-actions">
+        <button type="button" id="btn-open-connections" class="btn btn-secondary btn-connections" title="Connected Accounts &amp; Onboarding" onclick="window.openConnectionsModal && window.openConnectionsModal()">
+          <span class="btn-connections-icon" aria-hidden="true">🎮</span>
+          <span class="btn-connections-label">Accounts</span>
+        </button>
         <button type="button" id="btn-open-reconcile" class="btn btn-reconcile">
           🔗 Reconcile
         </button>
@@ -249,6 +253,20 @@
       <div class="section-header">
         <h2 id="library-heading">Library (<span id="results-count">0</span>)</h2>
         <div id="source-indicators" class="source-indicators"></div>
+      </div>
+
+      <!-- Empty Library Welcome Banner -->
+      <div id="empty-library-welcome" class="empty-library-welcome" hidden>
+        <div class="welcome-banner-content">
+          <div class="welcome-banner-icon" aria-hidden="true">🎮</div>
+          <div class="welcome-banner-text">
+            <h3>Welcome to Game Hub!</h3>
+            <p>Your library is currently empty. Connect your Steam, Xbox, or PlayStation accounts to automatically aggregate your games, playtime, and achievements.</p>
+          </div>
+          <button type="button" id="btn-welcome-connect" class="btn btn-primary" onclick="window.openOnboardingWizard && window.openOnboardingWizard()">
+            🚀 Connect Accounts &amp; Sync
+          </button>
+        </div>
       </div>
 
       <div id="games-grid" class="games-grid"></div>
@@ -868,6 +886,174 @@
     </div>
   </dialog>
 
+  <!-- Onboarding & Platform Connection Wizard Dialog -->
+  <dialog id="onboarding-dialog" class="modal-dialog onboarding-modal" closedby="any" aria-labelledby="onboarding-modal-title">
+    <div class="modal-content onboarding-modal-content">
+      <header class="modal-header">
+        <div>
+          <h2 id="onboarding-modal-title">🎮 Connect Your Accounts</h2>
+          <p class="modal-subtitle">Link your gaming libraries to aggregate playtime, achievements, and backlogs</p>
+        </div>
+        <button type="button" id="btn-close-onboarding" class="btn-icon" aria-label="Close modal" onclick="window.closeOnboardingWizard && window.closeOnboardingWizard()">✕</button>
+      </header>
+
+      <!-- Stepper Indicator -->
+      <div class="wizard-stepper" role="tablist" aria-label="Onboarding Steps">
+        <button type="button" class="wizard-step-btn active" id="wstep-tab-1" onclick="window.switchWizardStep && window.switchWizardStep(1)">
+          <span class="step-num">1</span>
+          <span class="step-name">Steam</span>
+        </button>
+        <button type="button" class="wizard-step-btn" id="wstep-tab-2" onclick="window.switchWizardStep && window.switchWizardStep(2)">
+          <span class="step-num">2</span>
+          <span class="step-name">Xbox</span>
+        </button>
+        <button type="button" class="wizard-step-btn" id="wstep-tab-3" onclick="window.switchWizardStep && window.switchWizardStep(3)">
+          <span class="step-num">3</span>
+          <span class="step-name">PlayStation</span>
+        </button>
+        <button type="button" class="wizard-step-btn" id="wstep-tab-4" onclick="window.switchWizardStep && window.switchWizardStep(4)">
+          <span class="step-num">4</span>
+          <span class="step-name">Sync</span>
+        </button>
+      </div>
+
+      <!-- Step 1: Steam -->
+      <div id="wstep-panel-1" class="wizard-step-panel active">
+        <div class="platform-connect-card">
+          <div class="platform-card-header">
+            <span class="platform-icon" aria-hidden="true">🎮</span>
+            <div>
+              <h3>Steam (PC)</h3>
+              <p class="card-desc">Sync your PC Steam games, hours played, and achievements.</p>
+            </div>
+          </div>
+
+          <div class="sso-action-box">
+            <a href="/api/auth/steam/login?return_to=/" class="btn btn-steam-sso" id="btn-steam-sso">
+              <svg class="brand-icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#brand-icon-steam"></use></svg>
+              <span>1-Click Sign In with Steam</span>
+            </a>
+            <span class="or-divider">── or enter Steam ID manually ──</span>
+          </div>
+
+          <div class="form-group">
+            <label for="wizard-steam-id">Steam ID or Profile URL</label>
+            <div class="input-with-button">
+              <input type="text" id="wizard-steam-id" placeholder="e.g. 76561198012345678 or https://steamcommunity.com/id/vanity" autocomplete="off" />
+              <button type="button" id="btn-verify-steam" class="btn btn-secondary">Test &amp; Verify</button>
+            </div>
+            <span class="form-hint">Accepts your 17-digit numeric SteamID64 or vanity profile URL.</span>
+          </div>
+
+          <div id="wizard-steam-status" class="verification-badge-card" hidden></div>
+        </div>
+      </div>
+
+      <!-- Step 2: Xbox / Game Pass -->
+      <div id="wstep-panel-2" class="wizard-step-panel" hidden>
+        <div class="platform-connect-card">
+          <div class="platform-card-header">
+            <span class="platform-icon" aria-hidden="true">🟢</span>
+            <div>
+              <h3>Xbox &amp; PC Game Pass</h3>
+              <p class="card-desc">Sync Xbox console titles, Windows Xbox app, and cloud playtime.</p>
+            </div>
+          </div>
+
+          <div class="guidance-box">
+            <h4>How to get your OpenXBL API Key:</h4>
+            <ol>
+              <li>Go to <a href="https://xbl.io" target="_blank" rel="noopener">xbl.io</a> and click <strong>Sign In with Microsoft</strong>.</li>
+              <li>Authorize OpenXBL with your personal Xbox profile.</li>
+              <li>Copy your free personal API key and paste it below:</li>
+            </ol>
+            <a href="https://xbl.io" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
+              Open xbl.io in New Tab ↗
+            </a>
+          </div>
+
+          <div class="form-group">
+            <label for="wizard-xbl-key">OpenXBL API Key</label>
+            <div class="input-with-button">
+              <input type="password" id="wizard-xbl-key" placeholder="Enter OpenXBL key" autocomplete="off" />
+              <button type="button" id="btn-toggle-wizard-xbl" class="btn btn-sm btn-secondary">Show</button>
+              <button type="button" id="btn-verify-xbox" class="btn btn-secondary">Test &amp; Verify</button>
+            </div>
+          </div>
+
+          <div id="wizard-xbox-status" class="verification-badge-card" hidden></div>
+        </div>
+      </div>
+
+      <!-- Step 3: PlayStation -->
+      <div id="wstep-panel-3" class="wizard-step-panel" hidden>
+        <div class="platform-connect-card">
+          <div class="platform-card-header">
+            <span class="platform-icon" aria-hidden="true">🔵</span>
+            <div>
+              <h3>PlayStation (PS4 / PS5)</h3>
+              <p class="card-desc">Sync PlayStation trophies, played titles, and hours.</p>
+            </div>
+          </div>
+
+          <div class="guidance-box">
+            <h4>Guided Token Extractor:</h4>
+            <div class="guidance-steps-buttons">
+              <a href="https://www.playstation.com" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
+                1. Log into playstation.com ↗
+              </a>
+              <a href="https://ca.account.sony.com/api/v1/ssocookie" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
+                2. Open SSO Cookie Link ↗
+              </a>
+            </div>
+            <p class="form-hint" style="margin-top: 0.5rem;">
+              Copy the 64-character <code>npsso</code> code (or paste the entire JSON <code>{"npsso": "..."}</code>). You can also enter just your public PSN Online ID.
+            </p>
+          </div>
+
+          <div class="form-group">
+            <label for="wizard-psn-token">PlayStation NPSSO Token or PSN Online ID</label>
+            <div class="input-with-button">
+              <input type="password" id="wizard-psn-token" placeholder="Paste 64-char token or Online ID" autocomplete="off" />
+              <button type="button" id="btn-toggle-wizard-psn" class="btn btn-sm btn-secondary">Show</button>
+              <button type="button" id="btn-verify-psn" class="btn btn-secondary">Test &amp; Verify</button>
+            </div>
+          </div>
+
+          <div id="wizard-psn-status" class="verification-badge-card" hidden></div>
+        </div>
+      </div>
+
+      <!-- Step 4: Summary & Ready to Sync -->
+      <div id="wstep-panel-4" class="wizard-step-panel" hidden>
+        <div class="platform-connect-card ready-sync-card">
+          <div class="ready-sync-icon" aria-hidden="true">🚀</div>
+          <h3>Ready to Aggregate Your Games</h3>
+          <p class="card-desc">Your accounts are linked. Click below to begin syncing your libraries, playtimes, and achievements across platforms.</p>
+
+          <div class="connected-summary-list" id="wizard-summary-list">
+            <!-- Populated dynamically -->
+          </div>
+
+          <div class="sync-start-action">
+            <button type="button" id="btn-wizard-start-sync" class="btn btn-primary btn-large">
+              🔄 Save &amp; Start Initial Sync
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Wizard Navigation Footer -->
+      <footer class="modal-footer wizard-footer">
+        <button type="button" id="btn-wizard-prev" class="btn btn-secondary" disabled>← Previous</button>
+        <div class="wizard-footer-right">
+          <button type="button" id="btn-wizard-skip" class="btn btn-secondary">Skip for Now</button>
+          <button type="button" id="btn-wizard-next" class="btn btn-primary">Next →</button>
+        </div>
+      </footer>
+    </div>
+  </dialog>
+
   <!-- Settings & Connections Dialog -->
   <dialog id="settings-dialog" class="modal-dialog settings-modal" closedby="any" aria-labelledby="settings-modal-title">
     <div class="modal-content settings-modal-content">
@@ -899,14 +1085,27 @@
 
       <!-- Section 1: Platform Connections -->
       <section id="ssection-connections" class="settings-tab-panel" role="tabpanel" aria-labelledby="stab-connections">
-        <p class="settings-panel-desc">
-          Configure your personal gaming accounts for automated multi-platform syncs and achievement tracking.
-        </p>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+          <p class="settings-panel-desc" style="margin: 0;">
+            Configure your personal gaming accounts for automated multi-platform syncs and achievement tracking.
+          </p>
+          <button type="button" id="btn-launch-wizard" class="btn btn-sm btn-secondary" onclick="window.openOnboardingWizard && window.openOnboardingWizard()">
+            🚀 Setup Wizard
+          </button>
+        </div>
+
         <form id="settings-connections-form" class="settings-form" onsubmit="return false;">
           <div class="form-group">
-            <label for="setting-steam-id">Steam ID (SteamID64)</label>
-            <input type="text" id="setting-steam-id" placeholder="e.g. 76561198012345678" autocomplete="off" />
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <label for="setting-steam-id">Steam ID (SteamID64)</label>
+              <a href="/api/auth/steam/login?return_to=/" class="btn btn-sm btn-secondary" style="font-size: 0.78rem;">1-Click Steam Sign In ↗</a>
+            </div>
+            <div class="input-with-button">
+              <input type="text" id="setting-steam-id" placeholder="e.g. 76561198012345678" autocomplete="off" />
+              <button type="button" id="btn-test-settings-steam" class="btn btn-sm btn-secondary">Test &amp; Verify</button>
+            </div>
             <span class="form-hint">Your 17-digit numeric Steam ID or custom vanity profile name.</span>
+            <div id="settings-steam-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
           </div>
 
           <div class="form-group">
@@ -914,8 +1113,10 @@
             <div class="input-with-button">
               <input type="password" id="setting-xbl-key" placeholder="Enter key (leave blank to keep current)" autocomplete="off" />
               <button type="button" id="btn-toggle-xbl" class="btn btn-sm btn-secondary" aria-label="Toggle Xbox key visibility">Show</button>
+              <button type="button" id="btn-test-settings-xbox" class="btn btn-sm btn-secondary">Test &amp; Verify</button>
             </div>
             <span class="form-hint">Obtain a free API key at <a href="https://xbl.io" target="_blank" rel="noopener">xbl.io</a> to sync your Xbox and PC Game Pass games.</span>
+            <div id="settings-xbox-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
           </div>
 
           <div class="form-group">
@@ -923,8 +1124,10 @@
             <div class="input-with-button">
               <input type="password" id="setting-psn-npsso" placeholder="Enter 64-char token (leave blank to keep current)" autocomplete="off" />
               <button type="button" id="btn-toggle-psn" class="btn btn-sm btn-secondary" aria-label="Toggle PSN token visibility">Show</button>
+              <button type="button" id="btn-test-settings-psn" class="btn btn-sm btn-secondary">Test &amp; Verify</button>
             </div>
-            <span class="form-hint">64-character PlayStation NPSSO token from Sony login to sync PS4 &amp; PS5 games and trophies.</span>
+            <span class="form-hint">64-character PlayStation NPSSO token from Sony login or your public PSN Online ID.</span>
+            <div id="settings-psn-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
           </div>
 
           <div class="settings-actions">
@@ -1365,6 +1568,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=23"></script>
+  <script src="/static/app.js?v=24"></script>
 </body>
 </html>

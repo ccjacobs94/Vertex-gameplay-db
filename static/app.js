@@ -1107,6 +1107,11 @@ function renderGames() {
   grid.classList.toggle("list-view", state.viewMode === "list");
   updateActiveFiltersUI();
 
+  const emptyWelcome = document.getElementById("empty-library-welcome");
+  if (emptyWelcome) {
+    emptyWelcome.hidden = state.games.length > 0;
+  }
+
   if (state.games.length === 0) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
@@ -3314,6 +3319,196 @@ window.openSettingsModal = openSettingsModal;
 window.loadAccountInfo = loadAccountInfo;
 window.loadAdminUsers = loadAdminUsers;
 
+let currentWizardStep = 1;
+
+async function testPlatformConnection(platform, credential, statusContainerId) {
+  const container = document.getElementById(statusContainerId);
+  if (!container) return false;
+
+  if (!credential || !credential.trim()) {
+    container.hidden = false;
+    container.className = "verification-badge-card error";
+    container.innerHTML = "<span>⚠️ Please enter a credential or account ID before testing.</span>";
+    return false;
+  }
+
+  container.hidden = false;
+  container.className = "verification-badge-card loading";
+  container.innerHTML = "<span>⏳ Testing connection to " + platform.toUpperCase() + "...</span>";
+
+  try {
+    const res = await fetch("/api/user/connections/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: platform, credential: credential.trim() }),
+    });
+    const data = await res.json();
+    if (res.ok && data.status === "ok") {
+      container.className = "verification-badge-card success";
+      let html = "<span>✓ " + (data.message || "Verified successfully!") + "</span>";
+      if (data.avatar_url) {
+        html = '<img src="' + data.avatar_url + '" class="verification-avatar" alt="Avatar" /> ' + html;
+      }
+      container.innerHTML = html;
+      return true;
+    } else {
+      container.className = "verification-badge-card error";
+      container.innerHTML = "<span>✕ " + (data.message || data.detail || "Verification failed") + "</span>";
+      return false;
+    }
+  } catch (err) {
+    container.className = "verification-badge-card error";
+    container.innerHTML = "<span>✕ Network error testing connection: " + err.message + "</span>";
+    return false;
+  }
+}
+
+function openOnboardingWizard() {
+  const dialog = document.getElementById("onboarding-dialog");
+  if (!dialog) return;
+  if (!dialog.open) {
+    try {
+      dialog.showModal();
+    } catch (e) {
+      console.error("Failed to open onboarding dialog:", e);
+    }
+  }
+  dialog.scrollTop = 0;
+  switchWizardStep(1);
+  loadWizardExistingData();
+}
+
+function closeOnboardingWizard() {
+  const dialog = document.getElementById("onboarding-dialog");
+  if (dialog && dialog.open) {
+    dialog.close();
+  }
+  sessionStorage.setItem("vertex_onboarding_dismissed", "true");
+}
+
+function openConnectionsModal() {
+  openOnboardingWizard();
+}
+
+window.openOnboardingWizard = openOnboardingWizard;
+window.closeOnboardingWizard = closeOnboardingWizard;
+window.openConnectionsModal = openConnectionsModal;
+
+async function loadWizardExistingData() {
+  try {
+    const res = await fetch("/api/user/connections");
+    if (!res.ok) return;
+    const data = await res.json();
+    const steamInp = document.getElementById("wizard-steam-id");
+    const xblInp = document.getElementById("wizard-xbl-key");
+    const psnInp = document.getElementById("wizard-psn-token");
+    if (steamInp && data.steam_id) steamInp.value = data.steam_id;
+    if (xblInp && data.has_xbl_api_key) xblInp.placeholder = data.xbl_api_key_masked || "Configured";
+    if (psnInp && data.has_psn_npsso) psnInp.placeholder = data.psn_npsso_masked || "Configured";
+  } catch (e) {}
+}
+
+function switchWizardStep(stepNum) {
+  currentWizardStep = Math.max(1, Math.min(4, stepNum));
+  for (let i = 1; i <= 4; i++) {
+    const tab = document.getElementById("wstep-tab-" + i);
+    const panel = document.getElementById("wstep-panel-" + i);
+    if (tab) {
+      tab.classList.toggle("active", i === currentWizardStep);
+      tab.classList.toggle("completed", i < currentWizardStep);
+    }
+    if (panel) {
+      panel.hidden = i !== currentWizardStep;
+    }
+  }
+
+  const prevBtn = document.getElementById("btn-wizard-prev");
+  const nextBtn = document.getElementById("btn-wizard-next");
+  if (prevBtn) {
+    prevBtn.disabled = currentWizardStep === 1;
+  }
+  if (nextBtn) {
+    if (currentWizardStep === 4) {
+      nextBtn.hidden = true;
+    } else {
+      nextBtn.hidden = false;
+      nextBtn.textContent = "Next →";
+    }
+  }
+
+  if (currentWizardStep === 4) {
+    updateWizardSummary();
+  }
+}
+window.switchWizardStep = switchWizardStep;
+
+async function updateWizardSummary() {
+  const list = document.getElementById("wizard-summary-list");
+  if (!list) return;
+  list.innerHTML = "<span>Checking connections...</span>";
+
+  try {
+    const res = await fetch("/api/user/connections");
+    const data = res.ok ? await res.json() : {};
+    const steamVal = document.getElementById("wizard-steam-id")?.value.trim() || data.steam_id;
+    const xblVal = document.getElementById("wizard-xbl-key")?.value.trim() || data.has_xbl_api_key;
+    const psnVal = document.getElementById("wizard-psn-token")?.value.trim() || data.has_psn_npsso;
+
+    list.innerHTML = "";
+    const platforms = [
+      { name: "Steam (PC)", active: Boolean(steamVal), icon: "🎮" },
+      { name: "Xbox / PC Game Pass", active: Boolean(xblVal), icon: "🟢" },
+      { name: "PlayStation (PS4 / PS5)", active: Boolean(psnVal), icon: "🔵" },
+    ];
+
+    for (const p of platforms) {
+      const pill = document.createElement("div");
+      pill.className = "connected-summary-pill" + (p.active ? " active" : "");
+      pill.innerHTML = p.icon + " " + p.name + ": " + (p.active ? "<strong>Connected ✓</strong>" : "<em>Not connected</em>");
+      list.appendChild(pill);
+    }
+  } catch (err) {
+    list.innerHTML = "<span>Unable to load connections summary</span>";
+  }
+}
+
+async function finishWizardAndSync() {
+  const steamInp = document.getElementById("wizard-steam-id");
+  const xblInp = document.getElementById("wizard-xbl-key");
+  const psnInp = document.getElementById("wizard-psn-token");
+
+  const payload = {};
+  if (steamInp && steamInp.value.trim()) payload.steam_id = steamInp.value.trim();
+  if (xblInp && xblInp.value.trim()) payload.xbl_api_key = xblInp.value.trim();
+  if (psnInp && psnInp.value.trim()) payload.psn_npsso = psnInp.value.trim();
+
+  try {
+    if (Object.keys(payload).length > 0) {
+      await fetch("/api/user/connections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    }
+    await fetch("/api/user/onboarding/complete", { method: "POST" });
+  } catch (e) {
+    console.error("Error completing onboarding:", e);
+  }
+
+  closeOnboardingWizard();
+  const syncBtn = document.getElementById("btn-sync");
+  if (syncBtn) {
+    syncBtn.click();
+  }
+}
+
+async function skipWizard() {
+  try {
+    await fetch("/api/user/onboarding/complete", { method: "POST" });
+  } catch (e) {}
+  closeOnboardingWizard();
+}
+
 async function openTriageModal() {
   const dialog = document.getElementById("triage-dialog");
   const scopeSelect = document.getElementById("triage-scope");
@@ -4653,8 +4848,126 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Onboarding Wizard & Verification Button Bindings
+  const btnOpenConn = document.getElementById("btn-open-connections");
+  if (btnOpenConn) btnOpenConn.addEventListener("click", openConnectionsModal);
+
+  const btnWelcomeConn = document.getElementById("btn-welcome-connect");
+  if (btnWelcomeConn) btnWelcomeConn.addEventListener("click", openOnboardingWizard);
+
+  const btnLaunchWiz = document.getElementById("btn-launch-wizard");
+  if (btnLaunchWiz) btnLaunchWiz.addEventListener("click", openOnboardingWizard);
+
+  const btnCloseWiz = document.getElementById("btn-close-onboarding");
+  if (btnCloseWiz) btnCloseWiz.addEventListener("click", closeOnboardingWizard);
+
+  const btnWizPrev = document.getElementById("btn-wizard-prev");
+  if (btnWizPrev) btnWizPrev.addEventListener("click", () => switchWizardStep(currentWizardStep - 1));
+
+  const btnWizNext = document.getElementById("btn-wizard-next");
+  if (btnWizNext) btnWizNext.addEventListener("click", () => switchWizardStep(currentWizardStep + 1));
+
+  const btnWizSkip = document.getElementById("btn-wizard-skip");
+  if (btnWizSkip) btnWizSkip.addEventListener("click", skipWizard);
+
+  const btnWizStartSync = document.getElementById("btn-wizard-start-sync");
+  if (btnWizStartSync) btnWizStartSync.addEventListener("click", finishWizardAndSync);
+
+  const btnVerifySteam = document.getElementById("btn-verify-steam");
+  if (btnVerifySteam) {
+    btnVerifySteam.addEventListener("click", () => {
+      const val = document.getElementById("wizard-steam-id")?.value || "";
+      testPlatformConnection("steam", val, "wizard-steam-status");
+    });
+  }
+
+  const btnVerifyXbox = document.getElementById("btn-verify-xbox");
+  if (btnVerifyXbox) {
+    btnVerifyXbox.addEventListener("click", () => {
+      const val = document.getElementById("wizard-xbl-key")?.value || "";
+      testPlatformConnection("xbox", val, "wizard-xbox-status");
+    });
+  }
+
+  const btnVerifyPsn = document.getElementById("btn-verify-psn");
+  if (btnVerifyPsn) {
+    btnVerifyPsn.addEventListener("click", () => {
+      const val = document.getElementById("wizard-psn-token")?.value || "";
+      testPlatformConnection("psn", val, "wizard-psn-status");
+    });
+  }
+
+  const btnTestSetSteam = document.getElementById("btn-test-settings-steam");
+  if (btnTestSetSteam) {
+    btnTestSetSteam.addEventListener("click", () => {
+      const val = document.getElementById("setting-steam-id")?.value || "";
+      testPlatformConnection("steam", val, "settings-steam-status");
+    });
+  }
+
+  const btnTestSetXbox = document.getElementById("btn-test-settings-xbox");
+  if (btnTestSetXbox) {
+    btnTestSetXbox.addEventListener("click", () => {
+      const val = document.getElementById("setting-xbl-key")?.value || "";
+      testPlatformConnection("xbox", val, "settings-xbox-status");
+    });
+  }
+
+  const btnTestSetPsn = document.getElementById("btn-test-settings-psn");
+  if (btnTestSetPsn) {
+    btnTestSetPsn.addEventListener("click", () => {
+      const val = document.getElementById("setting-psn-npsso")?.value || "";
+      testPlatformConnection("psn", val, "settings-psn-status");
+    });
+  }
+
+  const btnToggleWizXbl = document.getElementById("btn-toggle-wizard-xbl");
+  if (btnToggleWizXbl) {
+    btnToggleWizXbl.addEventListener("click", () => {
+      const inp = document.getElementById("wizard-xbl-key");
+      if (!inp) return;
+      const isPw = inp.type === "password";
+      inp.type = isPw ? "text" : "password";
+      btnToggleWizXbl.textContent = isPw ? "Hide" : "Show";
+    });
+  }
+
+  const btnToggleWizPsn = document.getElementById("btn-toggle-wizard-psn");
+  if (btnToggleWizPsn) {
+    btnToggleWizPsn.addEventListener("click", () => {
+      const inp = document.getElementById("wizard-psn-token");
+      if (!inp) return;
+      const isPw = inp.type === "password";
+      inp.type = isPw ? "text" : "password";
+      btnToggleWizPsn.textContent = isPw ? "Hide" : "Show";
+    });
+  }
+
   // Handle PWA Home Screen Shortcut URLs (?action=add | ?action=triage | ?action=reconcile)
   const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get("steam_connected") === "1") {
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, document.title, cleanUrl);
+    setTimeout(() => {
+      const syncBtn = document.getElementById("btn-sync");
+      if (syncBtn) syncBtn.click();
+    }, 400);
+  } else if (urlParams.get("error") === "steam_verification_failed") {
+    alert("Steam connection verification failed. Please try again or enter your Steam ID manually.");
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, document.title, cleanUrl);
+  }
+
+  fetch("/api/user/connections").then(async (res) => {
+    if (res.ok) {
+      const conns = await res.json();
+      if (conns && conns.onboarding_completed === false) {
+        if (!sessionStorage.getItem("vertex_onboarding_dismissed")) {
+          setTimeout(() => openOnboardingWizard(), 400);
+        }
+      }
+    }
+  }).catch(() => {});
   const actionParam = urlParams.get("action");
   if (actionParam === "add") {
     openAddGameModal();

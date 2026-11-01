@@ -6,6 +6,8 @@ Accessible over Local Network (LAN) and Tailscale.
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+import inspect
+import json
 import logging
 import os
 from pathlib import Path
@@ -15,7 +17,7 @@ import shutil
 import sqlite3
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
@@ -427,6 +429,11 @@ class UserConnectionsUpdateRequest(BaseModel):
     steam_id: Optional[str] = None
     xbl_api_key: Optional[str] = None
     psn_npsso: Optional[str] = None
+
+
+class ConnectionTestRequest(BaseModel):
+    platform: str
+    credential: str
 
 
 class CreateTokenRequest(BaseModel):
@@ -1162,6 +1169,183 @@ async def api_admin_revoke_invite(code_hash: str, request: Request) -> Dict[str,
 
 
 
+def clean_steam_input(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    text = raw.strip()
+    # Strip URL prefixes if provided
+    text = text.split("?")[0].split("#")[0].strip()
+    text = re.sub(r"^https?://(?:www\.)?steamcommunity\.com/(?:id|profiles)/", "", text, flags=re.IGNORECASE)
+    text = text.rstrip("/")
+    return text.strip()
+
+
+def clean_psn_token(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    text = raw.strip()
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and "npsso" in data:
+            return str(data["npsso"]).strip()
+    except Exception:
+        pass
+    m = re.search(r'["\']?npsso["\']?\s*[:=]\s*["\']?([a-zA-Z0-9_-]+)["\']?', text)
+    if m:
+        return m.group(1).strip()
+    return text.strip("\"' ")
+
+
+def clean_xbl_key(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    return raw.strip()
+
+
+def _verify_steam_connection(credential: str) -> Dict[str, Any]:
+    cleaned = clean_steam_input(credential)
+    if not cleaned:
+        return {"status": "error", "platform": "steam", "message": "Steam ID or Profile URL cannot be empty"}
+
+    api_key = os.environ.get("STEAM_API_KEY", "").strip()
+    steam_id = cleaned
+
+    if api_key:
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                if not (cleaned.isdigit() and len(cleaned) >= 16):
+                    r_vanity = client.get(
+                        "https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/",
+                        params={"key": api_key, "vanityurl": cleaned},
+                    )
+                    if r_vanity.status_code == 200:
+                        vdata = r_vanity.json().get("response", {})
+                        if vdata.get("success") == 1 and vdata.get("steamid"):
+                            steam_id = str(vdata["steamid"])
+                        else:
+                            return {
+                                "status": "error",
+                                "platform": "steam",
+                                "message": f"Could not resolve Steam vanity URL '{cleaned}'",
+                            }
+
+                r_player = client.get(
+                    "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/",
+                    params={"key": api_key, "steamids": steam_id},
+                )
+                if r_player.status_code == 200:
+                    players = r_player.json().get("response", {}).get("players", [])
+                    if players:
+                        p = players[0]
+                        persona_name = p.get("personaname", steam_id)
+                        avatar = p.get("avatarfull") or p.get("avatarmedium") or ""
+                        return {
+                            "status": "ok",
+                            "platform": "steam",
+                            "steam_id": steam_id,
+                            "persona_name": persona_name,
+                            "avatar_url": avatar,
+                            "message": f"Steam account verified successfully as {persona_name}",
+                        }
+        except Exception as exc:
+            return {"status": "error", "platform": "steam", "message": f"Steam verification check error: {exc}"}
+
+    if cleaned.isdigit() and len(cleaned) >= 16:
+        return {
+            "status": "ok",
+            "platform": "steam",
+            "steam_id": cleaned,
+            "persona_name": cleaned,
+            "avatar_url": "",
+            "message": "SteamID recorded (live persona lookup requires server STEAM_API_KEY)",
+        }
+    return {
+        "status": "error",
+        "platform": "steam",
+        "message": "Custom profile URLs require STEAM_API_KEY on the server to resolve. Please provide a 17-digit numeric SteamID64.",
+    }
+
+
+def _verify_xbox_connection(credential: str) -> Dict[str, Any]:
+    cleaned = clean_xbl_key(credential)
+    if not cleaned:
+        return {"status": "error", "platform": "xbox", "message": "OpenXBL API key cannot be empty"}
+
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.get(
+                "https://xbl.io/api/v2/account",
+                headers={"X-Authorization": cleaned, "Accept": "application/json"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                profile_users = data.get("profileUsers", [])
+                gamertag = "Xbox Gamer"
+                gamerscore = "0"
+                avatar_url = ""
+                if profile_users:
+                    u = profile_users[0]
+                    settings = {s.get("id"): s.get("value", "") for s in u.get("settings", [])}
+                    gamertag = settings.get("Gamertag") or u.get("hostId") or gamertag
+                    gamerscore = settings.get("Gamerscore", "0")
+                    avatar_url = settings.get("GameDisplayPicRaw", "")
+                return {
+                    "status": "ok",
+                    "platform": "xbox",
+                    "gamertag": gamertag,
+                    "gamerscore": gamerscore,
+                    "avatar_url": avatar_url,
+                    "message": f"Xbox account verified successfully as {gamertag} ({gamerscore} G)",
+                }
+            elif resp.status_code in (401, 403):
+                return {"status": "error", "platform": "xbox", "message": "Invalid OpenXBL API key (unauthorized)"}
+            else:
+                return {
+                    "status": "error",
+                    "platform": "xbox",
+                    "message": f"OpenXBL returned status {resp.status_code}",
+                }
+    except Exception as exc:
+        return {"status": "error", "platform": "xbox", "message": f"Xbox verification check failed: {exc}"}
+
+
+def _verify_psn_connection(credential: str) -> Dict[str, Any]:
+    cleaned = clean_psn_token(credential)
+    if not cleaned:
+        return {"status": "error", "platform": "psn", "message": "PlayStation token or Online ID cannot be empty"}
+
+    if len(cleaned) == 64 and all(c in "0123456789abcdefABCDEF" for c in cleaned):
+        try:
+            from psnawp_api import PSNAWP
+            psnawp = PSNAWP(cleaned)
+            me = psnawp.me()
+            online_id = getattr(me, "online_id", "") or "PSN User"
+            account_id = getattr(me, "account_id", "")
+            return {
+                "status": "ok",
+                "platform": "psn",
+                "online_id": online_id,
+                "account_id": account_id,
+                "message": f"PlayStation Network account verified successfully as {online_id}",
+            }
+        except Exception as exc:
+            return {"status": "error", "platform": "psn", "message": f"PlayStation NPSSO verification failed: {exc}"}
+
+    if len(cleaned) <= 30 and re.match(r"^[a-zA-Z0-9_-]+$", cleaned):
+        return {
+            "status": "ok",
+            "platform": "psn",
+            "online_id": cleaned,
+            "message": f"PlayStation Online ID set to {cleaned}",
+        }
+
+    return {
+        "status": "error",
+        "platform": "psn",
+        "message": "Invalid PSN NPSSO token (must be 64 hexadecimal characters) or invalid PSN Online ID",
+    }
+
+
 @app.get("/api/user/connections")
 async def api_get_user_connections(request: Request) -> Dict[str, Any]:
     user_id, username = _get_active_user(request)
@@ -1177,6 +1361,7 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
         "steam_id": conns.get("steam_id", ""),
         "has_xbl_api_key": bool(xbl_key),
         "has_psn_npsso": bool(psn_token),
+        "onboarding_completed": bool(conns.get("onboarding_completed", False)),
         "xbl_api_key_masked": (f"••••••••{xbl_key[-4:]}" if len(xbl_key) >= 4 else ("••••" if xbl_key else "")),
         "psn_npsso_masked": (f"••••••••{psn_token[-4:]}" if len(psn_token) >= 4 else ("••••" if psn_token else "")),
         "server_defaults": {
@@ -1195,13 +1380,14 @@ async def api_update_user_connections(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
 
+    steam = clean_steam_input(payload.steam_id) if payload.steam_id is not None else None
     # If key is "__CLEAR__", clear it; if empty string/None, preserve existing
-    xbl = "" if payload.xbl_api_key == "__CLEAR__" else (payload.xbl_api_key if payload.xbl_api_key else None)
-    psn = "" if payload.psn_npsso == "__CLEAR__" else (payload.psn_npsso if payload.psn_npsso else None)
+    xbl = "" if payload.xbl_api_key == "__CLEAR__" else (clean_xbl_key(payload.xbl_api_key) if payload.xbl_api_key else None)
+    psn = "" if payload.psn_npsso == "__CLEAR__" else (clean_psn_token(payload.psn_npsso) if payload.psn_npsso else None)
 
     updated = system_db.set_user_connections(
         user_id=user_id,
-        steam_id=payload.steam_id,
+        steam_id=steam,
         xbl_api_key=xbl,
         psn_npsso=psn,
     )
@@ -1212,8 +1398,250 @@ async def api_update_user_connections(
             "steam_id": updated.get("steam_id", ""),
             "has_xbl_api_key": bool(updated.get("xbl_api_key")),
             "has_psn_npsso": bool(updated.get("psn_npsso")),
+            "onboarding_completed": bool(updated.get("onboarding_completed", False)),
         },
     }
+
+
+@app.post("/api/user/connections/test")
+async def api_test_user_connection(payload: ConnectionTestRequest, request: Request) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    plat = payload.platform.strip().lower()
+    cred = payload.credential.strip()
+
+    if plat == "steam":
+        res = _verify_steam_connection(cred)
+    elif plat in ("xbox", "xbl"):
+        res = _verify_xbox_connection(cred)
+    elif plat == "psn":
+        res = _verify_psn_connection(cred)
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported verification platform: {plat}")
+
+    if inspect.isawaitable(res):
+        res = await res
+    return res
+
+
+@app.post("/api/user/onboarding/complete")
+async def api_complete_user_onboarding(request: Request) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    system_db.set_user_onboarding_completed(user_id, True)
+    return {"status": "ok", "onboarding_completed": True, "message": "Onboarding marked as completed"}
+
+
+def validate_steam_openid_response(query_params: Dict[str, str]) -> Optional[str]:
+    mode = query_params.get("openid.mode", "")
+    if mode in ("cancel", "error"):
+        return None
+
+    # Re-validate with Steam using check_authentication
+    validation_payload = {k: v for k, v in query_params.items() if k.startswith("openid.")}
+    validation_payload["openid.mode"] = "check_authentication"
+
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.post("https://steamcommunity.com/openid/login", data=validation_payload)
+            if resp.status_code == 200 and "is_valid:true" in resp.text:
+                claimed_id = query_params.get("openid.claimed_id", "")
+                m = re.search(r"https?://steamcommunity\.com/openid/id/(\d+)", claimed_id)
+                if m:
+                    return m.group(1)
+    except Exception as exc:
+        logger.warning("Steam OpenID signature validation error: %s", exc)
+    return None
+
+
+@app.get("/api/auth/steam/login")
+async def api_auth_steam_login(request: Request, return_to: str = "/") -> Response:
+    base_url = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") and request.headers.get("x-forwarded-host"):
+        base_url = f"{request.headers['x-forwarded-proto']}://{request.headers['x-forwarded-host']}".rstrip("/")
+
+    return_url = f"{base_url}/api/auth/steam/callback?return_to={quote(return_to)}"
+    realm_url = f"{base_url}/"
+
+    params = {
+        "openid.ns": "http://specs.openid.net/auth/2.0",
+        "openid.mode": "checkid_setup",
+        "openid.return_to": return_url,
+        "openid.realm": realm_url,
+        "openid.identity": "http://specs.openid.net/auth/2.0/identifier_select",
+        "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select",
+    }
+    steam_login_url = f"https://steamcommunity.com/openid/login?{urlencode(params)}"
+    return RedirectResponse(url=steam_login_url, status_code=303)
+
+
+@app.get("/api/auth/steam/callback")
+async def api_auth_steam_callback(request: Request, return_to: str = "/") -> Response:
+    target_return = return_to if return_to.startswith("/") else "/"
+    sep = "&" if "?" in target_return else "?"
+
+    if request.query_params.get("openid.mode") in ("cancel", "error"):
+        return RedirectResponse(f"{target_return}{sep}cancelled=1", status_code=303)
+
+    raw_params = dict(request.query_params)
+    steam_id = validate_steam_openid_response(raw_params)
+    if inspect.isawaitable(steam_id):
+        steam_id = await steam_id
+
+    if not steam_id:
+        return RedirectResponse(f"{target_return}{sep}error=steam_verification_failed", status_code=303)
+
+    user_id, _ = _get_active_user(request)
+    if user_id:
+        system_db.set_user_connections(user_id=user_id, steam_id=steam_id)
+        return RedirectResponse(f"{target_return}{sep}steam_connected=1&steam_id={steam_id}", status_code=303)
+
+    return RedirectResponse(f"/login?steam_id={steam_id}&steam_unlinked=1", status_code=303)
+
+
+def exchange_xbox_oauth_code(code: str, redirect_uri: str) -> Optional[Dict[str, Any]]:
+    client_id = os.environ.get("MICROSOFT_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("MICROSOFT_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        return None
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            # 1. Exchange auth code for Microsoft OAuth access token
+            token_resp = client.post(
+                "https://login.live.com/oauth20_token.srf",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": code,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": redirect_uri,
+                },
+            )
+            if token_resp.status_code != 200:
+                logger.warning("Microsoft OAuth token exchange error: %s", token_resp.text)
+                return None
+            token_data = token_resp.json()
+            access_token = token_data.get("access_token")
+
+            # 2. Authenticate with Xbox Live User Auth
+            xbl_resp = client.post(
+                "https://user.auth.xboxlive.com/user/authenticate",
+                json={
+                    "RelyingParty": "http://auth.xboxlive.com",
+                    "TokenType": "JWT",
+                    "Properties": {
+                        "AuthMethod": "RPS",
+                        "SiteName": "user.auth.xboxlive.com",
+                        "RpsTicket": f"d={access_token}",
+                    },
+                },
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+            )
+            if xbl_resp.status_code != 200:
+                logger.warning("Xbox Live user authentication error: %s", xbl_resp.text)
+                return None
+            xbl_data = xbl_resp.json()
+            user_token = xbl_data.get("Token")
+            user_hash = xbl_data.get("DisplayClaims", {}).get("xui", [{}])[0].get("uhs", "")
+
+            # 3. Obtain XSTS token for Xbox Live services
+            xsts_resp = client.post(
+                "https://xsts.auth.xboxlive.com/xsts/authorize",
+                json={
+                    "RelyingParty": "http://xboxlive.com",
+                    "TokenType": "JWT",
+                    "Properties": {
+                        "SandboxId": "RETAIL",
+                        "UserTokens": [user_token],
+                    },
+                },
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+            )
+            if xsts_resp.status_code != 200:
+                logger.warning("Xbox Live XSTS authorization error: %s", xsts_resp.text)
+                return None
+            xsts_data = xsts_resp.json()
+            xsts_token = xsts_data.get("Token")
+            xui = xsts_data.get("DisplayClaims", {}).get("xui", [{}])[0]
+            gamertag = xui.get("gtg", "Xbox Gamer")
+            xuid = xui.get("xid", "")
+
+            return {
+                "status": "ok",
+                "gamertag": gamertag,
+                "xuid": xuid,
+                "user_hash": user_hash,
+                "xsts_token": xsts_token,
+            }
+    except Exception as exc:
+        logger.warning("Xbox Live OAuth exchange error: %s", exc)
+        return None
+
+
+@app.get("/api/auth/xbox/login")
+async def api_auth_xbox_login(request: Request, return_to: str = "/") -> Response:
+    client_id = os.environ.get("MICROSOFT_CLIENT_ID", "").strip()
+    target_return = return_to if return_to.startswith("/") else "/"
+    sep = "&" if "?" in target_return else "?"
+
+    if not client_id:
+        return RedirectResponse(f"{target_return}{sep}error=xbox_oauth_not_configured", status_code=303)
+
+    base_url = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") and request.headers.get("x-forwarded-host"):
+        base_url = f"{request.headers['x-forwarded-proto']}://{request.headers['x-forwarded-host']}".rstrip("/")
+
+    redirect_uri = f"{base_url}/api/auth/xbox/callback"
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "scope": "XboxLive.signin offline_access",
+        "redirect_uri": redirect_uri,
+        "state": target_return,
+    }
+    ms_auth_url = f"https://login.live.com/oauth20_authorize.srf?{urlencode(params)}"
+    return RedirectResponse(url=ms_auth_url, status_code=303)
+
+
+@app.get("/api/auth/xbox/callback")
+async def api_auth_xbox_callback(
+    request: Request,
+    code: Optional[str] = None,
+    error: Optional[str] = None,
+    state: Optional[str] = None,
+    return_to: Optional[str] = None,
+) -> Response:
+    target_return = (state or return_to or "/")
+    if not target_return.startswith("/"):
+        target_return = "/"
+    sep = "&" if "?" in target_return else "?"
+
+    if error or not code:
+        return RedirectResponse(f"{target_return}{sep}error=xbox_auth_cancelled", status_code=303)
+
+    base_url = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") and request.headers.get("x-forwarded-host"):
+        base_url = f"{request.headers['x-forwarded-proto']}://{request.headers['x-forwarded-host']}".rstrip("/")
+    redirect_uri = f"{base_url}/api/auth/xbox/callback"
+
+    result = exchange_xbox_oauth_code(code, redirect_uri)
+    if inspect.isawaitable(result):
+        result = await result
+
+    if not result or result.get("status") != "ok":
+        return RedirectResponse(f"{target_return}{sep}error=xbox_auth_failed", status_code=303)
+
+    user_id, _ = _get_active_user(request)
+    gamertag = result.get("gamertag", "Xbox Gamer")
+    if user_id:
+        system_db.set_user_connections(user_id=user_id, xbl_api_key=result.get("xsts_token", ""))
+        return RedirectResponse(f"{target_return}{sep}xbox_connected=1&gamertag={quote(gamertag)}", status_code=303)
+
+    return RedirectResponse(f"/login?xbox_unlinked=1&gamertag={quote(gamertag)}", status_code=303)
 
 
 @app.get("/api/user/mcp")
