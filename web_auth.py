@@ -16,6 +16,7 @@ from urllib.parse import quote, urlparse
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+import system_db
 from db import get_connection
 
 logger = logging.getLogger("gamehub.web_auth")
@@ -38,7 +39,7 @@ PUBLIC_PATH_PREFIXES = (
 
 
 def get_auth_username() -> str:
-    return os.environ.get("VERTEX_USERNAME", "chris").strip() or "chris"
+    return os.environ.get("VERTEX_USERNAME", "chameleon94").strip() or "chameleon94"
 
 
 def get_auth_password() -> str:
@@ -433,6 +434,9 @@ async def handle_login_post(request: Request) -> Response:
             error_msg="Invalid username or password.",
             default_username=username or expected_user,
         )
+
+    # Ensure user exists in system.db
+    system_db.ensure_user(expected_user)
 
     session_id = create_web_session(
         username=expected_user,
