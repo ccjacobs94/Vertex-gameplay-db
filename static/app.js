@@ -971,6 +971,12 @@ async function fetchStats() {
       logoutBtn.hidden = !stats.auth_enabled;
     }
 
+    const adminTab = document.getElementById("stab-admin-users");
+    if (adminTab && typeof stats.is_admin === "boolean") {
+      adminTab.hidden = !stats.is_admin;
+    }
+
+
     document.getElementById("stat-total-games").textContent = stats.total_games || 0;
     document.getElementById("stat-total-hours").textContent = `${stats.total_playtime_hours || 0} hrs`;
     document.getElementById("stat-playing").textContent = stats.playing_count || 0;
@@ -2683,6 +2689,8 @@ function switchSettingsTab(tabId) {
     { btn: "stab-connections", panel: "ssection-connections" },
     { btn: "stab-mcp", panel: "ssection-mcp" },
     { btn: "stab-portability", panel: "ssection-portability" },
+    { btn: "stab-account", panel: "ssection-account" },
+    { btn: "stab-admin-users", panel: "ssection-admin-users" },
   ];
   for (const t of tabs) {
     const isTarget = t.btn === tabId;
@@ -2903,6 +2911,247 @@ async function handleDatabaseImport(file) {
   }
 }
 
+async function loadAccountInfo() {
+  try {
+    const res = await fetch("/api/account");
+    if (!res.ok) return;
+    const data = await res.json();
+    const userEl = document.getElementById("account-display-username");
+    const roleEl = document.getElementById("account-display-role");
+    const statusEl = document.getElementById("account-display-status");
+    const adminTab = document.getElementById("stab-admin-users");
+
+    if (userEl) userEl.textContent = data.username || "—";
+    if (roleEl) {
+      roleEl.textContent = data.role === "admin" ? "Administrator" : "User";
+      roleEl.className = data.role === "admin" ? "badge-role badge-role-admin" : "badge-role badge-role-user";
+    }
+    if (statusEl) {
+      statusEl.textContent = data.status || "active";
+      statusEl.className = `badge-status badge-status-${data.status}`;
+    }
+    if (adminTab) {
+      adminTab.hidden = data.role !== "admin";
+    }
+  } catch (err) {
+    console.error("Failed to load account info:", err);
+  }
+}
+
+async function saveAccountPassword() {
+  const curInput = document.getElementById("input-current-password");
+  const newInput = document.getElementById("input-new-password");
+  const confInput = document.getElementById("input-confirm-password");
+  const msgEl = document.getElementById("password-status-msg");
+
+  if (!curInput || !newInput || !confInput || !msgEl) return;
+  msgEl.className = "connections-status-msg";
+  msgEl.textContent = "";
+
+  if (!curInput.value) {
+    msgEl.className = "connections-status-msg error";
+    msgEl.textContent = "Please enter your current password.";
+    return;
+  }
+  if (!newInput.value || newInput.value.length < 8) {
+    msgEl.className = "connections-status-msg error";
+    msgEl.textContent = "New password must be at least 8 characters.";
+    return;
+  }
+  if (newInput.value !== confInput.value) {
+    msgEl.className = "connections-status-msg error";
+    msgEl.textContent = "New passwords do not match.";
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/account/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        current_password: curInput.value,
+        new_password: newInput.value,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      msgEl.className = "connections-status-msg success";
+      msgEl.textContent = "Password updated successfully.";
+      curInput.value = "";
+      newInput.value = "";
+      confInput.value = "";
+    } else {
+      msgEl.className = "connections-status-msg error";
+      msgEl.textContent = data.detail || "Failed to update password.";
+    }
+  } catch (err) {
+    msgEl.className = "connections-status-msg error";
+    msgEl.textContent = `Error: ${err.message}`;
+  }
+}
+
+async function loadAdminUsers() {
+  const tbody = document.getElementById("admin-users-tbody");
+  if (!tbody) return;
+  try {
+    const res = await fetch("/api/admin/users");
+    if (!res.ok) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:1.5rem; color:#ef4444;">Failed to load users (${res.status})</td></tr>`;
+      return;
+    }
+    const data = await res.json();
+    const users = data.users || [];
+    if (!users.length) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:1.5rem; color:#64748b;">No users registered yet.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = users.map((u) => {
+      const isSelf = u.username === (document.getElementById("account-display-username")?.textContent || "");
+      const isActive = u.status === "active";
+      const isAdmin = u.role === "admin";
+      const statusClass = isActive ? "badge-status-active" : "badge-status-inactive";
+      const roleClass = isAdmin ? "badge-role-admin" : "badge-role-user";
+
+      return `<tr>
+        <td><strong>${escapeHtml(u.username)}</strong>${isSelf ? ' <span style="font-size:0.75rem; color:#38bdf8;">(you)</span>' : ''}</td>
+        <td><span class="badge-role ${roleClass}">${isAdmin ? "Admin" : "User"}</span></td>
+        <td><span class="badge-status ${statusClass}">${escapeHtml(u.status)}</span></td>
+        <td style="font-size:0.8rem; color:#94a3b8;">${u.created_at ? u.created_at.split('T')[0] : '—'}</td>
+        <td class="admin-actions-cell">
+          ${!isSelf ? `
+            <button type="button" class="btn btn-sm ${isActive ? 'btn-danger-outline' : 'btn-success-outline'}"
+              onclick="updateAdminUserStatus('${escapeHtml(u.id)}', '${isActive ? 'inactive' : 'active'}')">
+              ${isActive ? 'Suspend' : 'Activate'}
+            </button>
+            <button type="button" class="btn btn-sm btn-secondary"
+              onclick="updateAdminUserRole('${escapeHtml(u.id)}', '${isAdmin ? 'user' : 'admin'}')">
+              ${isAdmin ? 'Demote' : 'Make Admin'}
+            </button>
+          ` : ''}
+          <button type="button" class="btn btn-sm btn-secondary"
+            onclick="resetAdminUserPassword('${escapeHtml(u.id)}', '${escapeHtml(u.username)}')">
+            Reset PW
+          </button>
+        </td>
+      </tr>`;
+    }).join("");
+  } catch (err) {
+    console.error("Failed to load admin users:", err);
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:1.5rem; color:#ef4444;">Error: ${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+async function updateAdminUserStatus(userId, newStatus) {
+  try {
+    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        status: newStatus,
+        status_reason: newStatus === "inactive" ? "admin_suspended" : null,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(`Action failed: ${err.detail || "Could not update status"}`);
+      return;
+    }
+    loadAdminUsers();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+window.updateAdminUserStatus = updateAdminUserStatus;
+
+async function updateAdminUserRole(userId, newRole) {
+  try {
+    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: newRole }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(`Action failed: ${err.detail || "Could not update role"}`);
+      return;
+    }
+    loadAdminUsers();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+window.updateAdminUserRole = updateAdminUserRole;
+
+async function resetAdminUserPassword(userId, username) {
+  if (!confirm(`Reset password for user "${username}"? This will invalidate their current sessions and generate a new temporary password.`)) {
+    return;
+  }
+  try {
+    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(`Reset failed: ${data.detail || "Could not reset password"}`);
+      return;
+    }
+    const alertBox = document.getElementById("admin-temp-pw-alert");
+    const codeEl = document.getElementById("admin-temp-pw-display");
+    if (alertBox && codeEl) {
+      codeEl.textContent = data.temporary_password;
+      alertBox.hidden = false;
+    } else {
+      alert(`Temporary password for ${username}: ${data.temporary_password}`);
+    }
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+window.resetAdminUserPassword = resetAdminUserPassword;
+
+async function createAdminUser() {
+  const uInput = document.getElementById("new-user-username");
+  const rInput = document.getElementById("new-user-role");
+  const pInput = document.getElementById("new-user-password");
+  if (!uInput || !uInput.value.trim()) {
+    alert("Please enter a username.");
+    return;
+  }
+  try {
+    const res = await fetch("/api/admin/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: uInput.value.trim(),
+        role: rInput ? rInput.value : "user",
+        password: pInput && pInput.value ? pInput.value : null,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(`Create user failed: ${data.detail || "Could not create user"}`);
+      return;
+    }
+    uInput.value = "";
+    if (pInput) pInput.value = "";
+    document.getElementById("admin-create-user-card").hidden = true;
+
+    if (data.temporary_password) {
+      const alertBox = document.getElementById("admin-temp-pw-alert");
+      const codeEl = document.getElementById("admin-temp-pw-display");
+      if (alertBox && codeEl) {
+        codeEl.textContent = data.temporary_password;
+        alertBox.hidden = false;
+      }
+    }
+    loadAdminUsers();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+  }
+}
+
 function openSettingsModal() {
   const dialog = document.getElementById("settings-dialog");
   if (!dialog) return;
@@ -2921,7 +3170,9 @@ function openSettingsModal() {
   if (banner) banner.hidden = true;
   loadSettingsConnections();
   loadSettingsMcp();
+  loadAccountInfo();
 }
+
 window.openSettingsModal = openSettingsModal;
 
 async function openTriageModal() {
@@ -4123,6 +4374,36 @@ document.addEventListener("DOMContentLoaded", () => {
   if (stabMcp) stabMcp.addEventListener("click", () => switchSettingsTab("stab-mcp"));
   const stabPort = document.getElementById("stab-portability");
   if (stabPort) stabPort.addEventListener("click", () => switchSettingsTab("stab-portability"));
+  const stabAccount = document.getElementById("stab-account");
+  if (stabAccount) stabAccount.addEventListener("click", () => {
+    switchSettingsTab("stab-account");
+    loadAccountInfo();
+  });
+  const stabAdminUsers = document.getElementById("stab-admin-users");
+  if (stabAdminUsers) stabAdminUsers.addEventListener("click", () => {
+    switchSettingsTab("stab-admin-users");
+    loadAdminUsers();
+  });
+
+  const btnSubmitPw = document.getElementById("btn-submit-change-password");
+  if (btnSubmitPw) btnSubmitPw.addEventListener("click", saveAccountPassword);
+
+  const btnToggleCreateUser = document.getElementById("btn-toggle-create-user");
+  const adminCreateCard = document.getElementById("admin-create-user-card");
+  if (btnToggleCreateUser && adminCreateCard) {
+    btnToggleCreateUser.addEventListener("click", () => {
+      adminCreateCard.hidden = !adminCreateCard.hidden;
+    });
+  }
+  const btnCancelCreateUser = document.getElementById("btn-cancel-create-user");
+  if (btnCancelCreateUser && adminCreateCard) {
+    btnCancelCreateUser.addEventListener("click", () => {
+      adminCreateCard.hidden = true;
+    });
+  }
+  const btnSubmitCreateUser = document.getElementById("btn-submit-create-user");
+  if (btnSubmitCreateUser) btnSubmitCreateUser.addEventListener("click", createAdminUser);
+
 
   const btnToggleXbl = document.getElementById("btn-toggle-xbl");
   if (btnToggleXbl) {

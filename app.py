@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import sqlite3
 import tempfile
@@ -26,13 +27,17 @@ from starlette.background import BackgroundTask
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import mcp_server
+import passwords
 import system_db
 import db
 from context import get_current_user_id, reset_current_user_id, set_current_user_id
+import web_auth
 from web_auth import (
     SESSION_COOKIE_NAME,
+    SESSION_MAX_AGE_SECONDS,
     _is_direct_local_or_tailscale_request,
     get_auth_username,
+    get_auth_password,
     handle_login_get,
     handle_login_post,
     handle_logout,
@@ -270,7 +275,7 @@ async def lifespan(app: FastAPI):
     init_db()
     system_db.init_system_db()
     default_user = get_auth_username()
-    system_db.ensure_user(default_user)
+    system_db.ensure_bootstrap_admin(default_user)
     # If the default user's library doesn't exist yet, seed it from DEFAULT_DB_PATH
     default_user_db = Path(USERS_DB_DIR) / default_user / "games.db"
     if not default_user_db.exists() and Path(DEFAULT_DB_PATH).exists():
@@ -287,6 +292,7 @@ async def lifespan(app: FastAPI):
     yield
     sync_task.cancel()
     mcp_task.cancel()
+
 
 
 app = FastAPI(
@@ -318,6 +324,11 @@ class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
             username = get_auth_username()
         user_id = system_db.get_user_id_by_username(username) if username else None
         user_ctx_token = set_current_user_id(user_id) if user_id else None
+        if user_id:
+            try:
+                init_db()
+            except Exception:
+                pass
 
         try:
             response = await call_next(request)
@@ -395,6 +406,28 @@ class CreateTokenRequest(BaseModel):
     label: Optional[str] = Field(default="Personal Access Token")
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8)
+
+
+class AdminUserCreateRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    password: Optional[str] = None
+    email: Optional[str] = None
+    role: str = Field(default="user", pattern="^(admin|user)$")
+
+
+class AdminUserUpdateRequest(BaseModel):
+    status: Optional[str] = Field(default=None, pattern="^(active|pending|inactive)$")
+    role: Optional[str] = Field(default=None, pattern="^(admin|user)$")
+    status_reason: Optional[str] = None
+
+
+class AdminResetPasswordRequest(BaseModel):
+    new_password: Optional[str] = None
+
+
 def _get_active_user(request: Request) -> Tuple[Optional[str], Optional[str]]:
     """Return (user_id, username) for the active request."""
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
@@ -403,10 +436,25 @@ def _get_active_user(request: Request) -> Tuple[Optional[str], Optional[str]]:
         username = get_auth_username()
     user_id = get_current_user_id()
     if not user_id and username:
-        user_id = system_db.get_user_id_by_username(username)
-        if not user_id:
+        user = system_db.get_user_by_username(username)
+        if user:
+            if user.get("status") != "active":
+                return None, None
+            user_id = user["id"]
+        else:
             user_id = system_db.ensure_user(username)
     return user_id, username
+
+
+def _require_admin(request: Request) -> Tuple[str, str]:
+    user_id, username = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user = system_db.get_user(user_id)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin privileges required")
+    return user_id, username or user.get("username", "")
+
 
 
 def _get_active_user_db_path(user_id: Optional[str] = None) -> Path:
@@ -492,7 +540,7 @@ async def api_list_games(
 
 
 @app.get("/api/stats")
-async def api_get_stats() -> Dict[str, Any]:
+async def api_get_stats(request: Request = None) -> Dict[str, Any]:
     stats = get_library_stats()
     stats["configured_sources"] = {
         "steam": bool(os.environ.get("STEAM_API_KEY") and os.environ.get("STEAM_ID")),
@@ -501,7 +549,20 @@ async def api_get_stats() -> Dict[str, Any]:
     }
     stats["sync_interval_hours"] = SYNC_INTERVAL_HOURS
     stats["auth_enabled"] = is_web_auth_enabled()
+
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    is_admin = False
+    if user_id:
+        user = system_db.get_user(user_id)
+        if user and user.get("role") == "admin":
+            is_admin = True
+    stats["is_admin"] = is_admin
+    stats["edition"] = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
+    stats["registration_policy"] = system_db.get_setting(
+        "registration_policy", os.environ.get("VERTEX_REGISTRATION", "disabled")
+    )
     return stats
+
 
 
 @app.get("/api/analytics")
@@ -690,6 +751,169 @@ async def api_resolve_playtime_prompt(
     if not res:
         raise HTTPException(status_code=404, detail="Playtime prompt not found")
     return {"status": "ok", "result": res, "stats": get_library_stats()}
+
+
+@app.get("/api/account")
+async def api_get_account(request: Request) -> Dict[str, Any]:
+    user_id, username = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user = system_db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
+    reg_policy = system_db.get_setting(
+        "registration_policy", os.environ.get("VERTEX_REGISTRATION", "disabled")
+    )
+    return {
+        "user_id": user["id"],
+        "username": user["username"],
+        "email": user.get("email"),
+        "role": user.get("role", "user"),
+        "status": user.get("status", "active"),
+        "status_reason": user.get("status_reason"),
+        "created_at": user.get("created_at"),
+        "last_login_at": user.get("last_login_at"),
+        "edition": edition,
+        "registration_policy": reg_policy,
+    }
+
+
+@app.post("/api/account/password")
+async def api_change_password(payload: ChangePasswordRequest, request: Request) -> Response:
+    user_id, username = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user = system_db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    verified = passwords.verify_password(payload.current_password, user.get("password_hash"))
+    if not verified:
+        bootstrap_user = get_auth_username()
+        bootstrap_pass = get_auth_password()
+        if (
+            secrets.compare_digest(user["username"].lower(), bootstrap_user.lower())
+            and bool(bootstrap_pass)
+            and secrets.compare_digest(payload.current_password, bootstrap_pass)
+        ):
+            verified = True
+
+    if not verified:
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    try:
+        system_db.set_user_password(user_id, payload.new_password, actor_id=user_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    # Revoke sessions for this username and create fresh one
+    web_auth.revoke_sessions_for_username(user["username"])
+    new_sess = web_auth.create_web_session(
+        user["username"], request.headers.get("user-agent", "")
+    )
+    resp = JSONResponse({"status": "success", "message": "Password updated successfully"})
+    resp.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=new_sess,
+        max_age=SESSION_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=web_auth._is_https_request(request),
+        samesite="lax",
+        path="/",
+    )
+    return resp
+
+
+@app.get("/api/admin/users")
+async def api_admin_list_users(request: Request, status: Optional[str] = None) -> Dict[str, Any]:
+    _require_admin(request)
+    users = system_db.list_users(status=status)
+    return {"users": users}
+
+
+@app.post("/api/admin/users")
+async def api_admin_create_user(
+    payload: AdminUserCreateRequest, request: Request
+) -> Dict[str, Any]:
+    actor_id, _ = _require_admin(request)
+    pw = payload.password
+    generated_pw = False
+    if not pw:
+        pw = secrets.token_urlsafe(16)
+        generated_pw = True
+
+    try:
+        new_uid = system_db.create_user(
+            username=payload.username,
+            password=pw,
+            email=payload.email,
+            role=payload.role,
+            status="active",
+            actor_id=actor_id,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    user = system_db.get_user(new_uid)
+    return {
+        "status": "success",
+        "user": user,
+        "temporary_password": pw if generated_pw else None,
+    }
+
+
+@app.patch("/api/admin/users/{target_user_id}")
+async def api_admin_update_user(
+    target_user_id: str, payload: AdminUserUpdateRequest, request: Request
+) -> Dict[str, Any]:
+    actor_id, _ = _require_admin(request)
+    target = system_db.get_user(target_user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        if payload.status is not None:
+            system_db.set_user_status(
+                target_user_id,
+                payload.status,
+                reason=payload.status_reason,
+                actor_id=actor_id,
+            )
+        if payload.role is not None:
+            system_db.set_user_role(target_user_id, payload.role, actor_id=actor_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    updated = system_db.get_user(target_user_id)
+    return {"status": "success", "user": updated}
+
+
+@app.post("/api/admin/users/{target_user_id}/reset-password")
+async def api_admin_reset_password(
+    target_user_id: str, payload: AdminResetPasswordRequest, request: Request
+) -> Dict[str, Any]:
+    actor_id, _ = _require_admin(request)
+    target = system_db.get_user(target_user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    pw = payload.new_password or secrets.token_urlsafe(16)
+
+    try:
+        system_db.set_user_password(target_user_id, pw, actor_id=actor_id)
+        # Invalidate old sessions and PATs
+        web_auth.revoke_sessions_for_username(target["username"])
+        with system_db.get_system_connection() as conn:
+            conn.execute("DELETE FROM oauth_tokens WHERE user_id = ?", (target_user_id,))
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    return {
+        "status": "success",
+        "message": f"Password reset for {target['username']}",
+        "temporary_password": pw,
+    }
 
 
 @app.get("/api/user/connections")
