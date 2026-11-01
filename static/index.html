@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=25">
+  <link rel="stylesheet" href="/static/styles.css?v=26">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -61,6 +61,17 @@
         </button>
         <a href="/logout" id="btn-logout" class="btn btn-secondary btn-logout" title="Sign Out" hidden>
           Sign Out
+        </a>
+      </div>
+      <div class="mobile-header-actions">
+        <button type="button" id="btn-mobile-sync" class="btn-icon mobile-header-btn" aria-label="Sync Libraries" title="Sync Libraries">
+          🔄
+        </button>
+        <button type="button" id="btn-mobile-settings" class="btn-icon mobile-header-btn" aria-label="Settings &amp; Accounts" title="Settings" onclick="window.openSettingsModal && window.openSettingsModal()">
+          ⚙️
+        </button>
+        <a href="/logout" id="btn-mobile-logout" class="btn-icon mobile-header-btn mobile-logout-btn" aria-label="Sign Out" title="Sign Out" hidden>
+          🚪
         </a>
       </div>
     </div>
@@ -1224,6 +1235,11 @@
             <span id="account-display-role" class="badge-role badge-role-user">User</span>
             <span id="account-display-status" class="badge-status badge-status-active">Active</span>
           </div>
+          <div class="account-logout-wrap" style="margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end;">
+            <a href="/logout" id="btn-settings-logout" class="btn btn-secondary" style="display: inline-flex; align-items: center; gap: 0.4rem; color: #f87171; border-color: rgba(239, 68, 68, 0.3);" hidden>
+              <span>🚪</span> Sign Out
+            </a>
+          </div>
         </div>
 
         <form id="form-change-password" class="settings-form" onsubmit="return false;">
@@ -1567,8 +1583,12 @@
       <span class="mnav-fab" aria-hidden="true">＋</span>
       <span class="mnav-label">Add</span>
     </button>
+    <button type="button" id="mnav-settings" class="mnav-item" aria-label="Settings &amp; Accounts">
+      <span class="mnav-icon" aria-hidden="true">⚙️</span>
+      <span class="mnav-label">Settings</span>
+    </button>
   </nav>
 
-  <script src="/static/app.js?v=25"></script>
+  <script src="/static/app.js?v=26"></script>
 </body>
 </html>

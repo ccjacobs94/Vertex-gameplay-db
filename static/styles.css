@@ -2466,8 +2466,9 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   transform: translateY(-2px);
 }
 
-/* Mobile Bottom Navigation Bar (Hidden on Desktop) */
-.mobile-bottom-nav {
+/* Mobile Bottom Navigation Bar & Mobile Header Actions (Hidden on Desktop) */
+.mobile-bottom-nav,
+.mobile-header-actions {
   display: none;
 }
 
@@ -2527,6 +2528,39 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   /* Move primary actions to Bottom Navigation Bar on mobile */
   .header-actions {
     display: none;
+  }
+
+  .mobile-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    flex-shrink: 0;
+  }
+
+  .mobile-header-btn {
+    inline-size: 38px;
+    block-size: 38px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    font-size: 1.05rem;
+    color: var(--text-primary);
+    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.1s ease;
+  }
+
+  .mobile-header-btn:active {
+    transform: scale(0.95);
+    background: var(--bg-hover);
+  }
+
+  .mobile-logout-btn {
+    color: #f87171;
+    border-color: rgba(239, 68, 68, 0.3);
   }
 
   .main-container {
@@ -2922,7 +2956,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
     inset-inline: 0;
     z-index: 30;
     display: grid;
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(6, 1fr);
     align-items: center;
     background-color: rgba(15, 22, 38, 0.92);
     backdrop-filter: blur(18px);
@@ -2943,7 +2977,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
     justify-content: center;
     gap: 0.18rem;
     padding-block: 0.25rem;
-    padding-inline: 0.2rem;
+    padding-inline: 0.1rem;
     cursor: pointer;
     font-family: inherit;
     min-block-size: 48px;
@@ -2966,12 +3000,12 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   }
 
   .mnav-icon {
-    font-size: 1.2rem;
+    font-size: 1.15rem;
     line-height: 1;
   }
 
   .mnav-label {
-    font-size: 0.68rem;
+    font-size: clamp(0.58rem, 2.2vw, 0.68rem);
     font-weight: 600;
     letter-spacing: 0.01em;
     white-space: nowrap;
