@@ -1502,6 +1502,148 @@ async def api_auth_steam_callback(request: Request, return_to: str = "/") -> Res
     return RedirectResponse(f"/login?steam_id={steam_id}&steam_unlinked=1", status_code=303)
 
 
+def exchange_xbox_oauth_code(code: str, redirect_uri: str) -> Optional[Dict[str, Any]]:
+    client_id = os.environ.get("MICROSOFT_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("MICROSOFT_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        return None
+
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            # 1. Exchange auth code for Microsoft OAuth access token
+            token_resp = client.post(
+                "https://login.live.com/oauth20_token.srf",
+                data={
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "code": code,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": redirect_uri,
+                },
+            )
+            if token_resp.status_code != 200:
+                logger.warning("Microsoft OAuth token exchange error: %s", token_resp.text)
+                return None
+            token_data = token_resp.json()
+            access_token = token_data.get("access_token")
+
+            # 2. Authenticate with Xbox Live User Auth
+            xbl_resp = client.post(
+                "https://user.auth.xboxlive.com/user/authenticate",
+                json={
+                    "RelyingParty": "http://auth.xboxlive.com",
+                    "TokenType": "JWT",
+                    "Properties": {
+                        "AuthMethod": "RPS",
+                        "SiteName": "user.auth.xboxlive.com",
+                        "RpsTicket": f"d={access_token}",
+                    },
+                },
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+            )
+            if xbl_resp.status_code != 200:
+                logger.warning("Xbox Live user authentication error: %s", xbl_resp.text)
+                return None
+            xbl_data = xbl_resp.json()
+            user_token = xbl_data.get("Token")
+            user_hash = xbl_data.get("DisplayClaims", {}).get("xui", [{}])[0].get("uhs", "")
+
+            # 3. Obtain XSTS token for Xbox Live services
+            xsts_resp = client.post(
+                "https://xsts.auth.xboxlive.com/xsts/authorize",
+                json={
+                    "RelyingParty": "http://xboxlive.com",
+                    "TokenType": "JWT",
+                    "Properties": {
+                        "SandboxId": "RETAIL",
+                        "UserTokens": [user_token],
+                    },
+                },
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+            )
+            if xsts_resp.status_code != 200:
+                logger.warning("Xbox Live XSTS authorization error: %s", xsts_resp.text)
+                return None
+            xsts_data = xsts_resp.json()
+            xsts_token = xsts_data.get("Token")
+            xui = xsts_data.get("DisplayClaims", {}).get("xui", [{}])[0]
+            gamertag = xui.get("gtg", "Xbox Gamer")
+            xuid = xui.get("xid", "")
+
+            return {
+                "status": "ok",
+                "gamertag": gamertag,
+                "xuid": xuid,
+                "user_hash": user_hash,
+                "xsts_token": xsts_token,
+            }
+    except Exception as exc:
+        logger.warning("Xbox Live OAuth exchange error: %s", exc)
+        return None
+
+
+@app.get("/api/auth/xbox/login")
+async def api_auth_xbox_login(request: Request, return_to: str = "/") -> Response:
+    client_id = os.environ.get("MICROSOFT_CLIENT_ID", "").strip()
+    target_return = return_to if return_to.startswith("/") else "/"
+    sep = "&" if "?" in target_return else "?"
+
+    if not client_id:
+        return RedirectResponse(f"{target_return}{sep}error=xbox_oauth_not_configured", status_code=303)
+
+    base_url = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") and request.headers.get("x-forwarded-host"):
+        base_url = f"{request.headers['x-forwarded-proto']}://{request.headers['x-forwarded-host']}".rstrip("/")
+
+    redirect_uri = f"{base_url}/api/auth/xbox/callback"
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "scope": "XboxLive.signin offline_access",
+        "redirect_uri": redirect_uri,
+        "state": target_return,
+    }
+    ms_auth_url = f"https://login.live.com/oauth20_authorize.srf?{urlencode(params)}"
+    return RedirectResponse(url=ms_auth_url, status_code=303)
+
+
+@app.get("/api/auth/xbox/callback")
+async def api_auth_xbox_callback(
+    request: Request,
+    code: Optional[str] = None,
+    error: Optional[str] = None,
+    state: Optional[str] = None,
+    return_to: Optional[str] = None,
+) -> Response:
+    target_return = (state or return_to or "/")
+    if not target_return.startswith("/"):
+        target_return = "/"
+    sep = "&" if "?" in target_return else "?"
+
+    if error or not code:
+        return RedirectResponse(f"{target_return}{sep}error=xbox_auth_cancelled", status_code=303)
+
+    base_url = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") and request.headers.get("x-forwarded-host"):
+        base_url = f"{request.headers['x-forwarded-proto']}://{request.headers['x-forwarded-host']}".rstrip("/")
+    redirect_uri = f"{base_url}/api/auth/xbox/callback"
+
+    result = exchange_xbox_oauth_code(code, redirect_uri)
+    if inspect.isawaitable(result):
+        result = await result
+
+    if not result or result.get("status") != "ok":
+        return RedirectResponse(f"{target_return}{sep}error=xbox_auth_failed", status_code=303)
+
+    user_id, _ = _get_active_user(request)
+    gamertag = result.get("gamertag", "Xbox Gamer")
+    if user_id:
+        system_db.set_user_connections(user_id=user_id, xbl_api_key=result.get("xsts_token", ""))
+        return RedirectResponse(f"{target_return}{sep}xbox_connected=1&gamertag={quote(gamertag)}", status_code=303)
+
+    return RedirectResponse(f"/login?xbox_unlinked=1&gamertag={quote(gamertag)}", status_code=303)
+
+
 @app.get("/api/user/mcp")
 async def api_get_user_mcp(request: Request) -> Dict[str, Any]:
     user_id, username = _get_active_user(request)
