@@ -2906,15 +2906,23 @@ async function handleDatabaseImport(file) {
 function openSettingsModal() {
   const dialog = document.getElementById("settings-dialog");
   if (!dialog) return;
+  if (!dialog.open) {
+    try {
+      dialog.showModal();
+    } catch (e) {
+      console.error("Failed to show settings dialog:", e);
+    }
+  }
+  dialog.scrollTop = 0;
   switchSettingsTab("stab-connections");
-  loadSettingsConnections();
-  loadSettingsMcp();
   const alertBox = document.getElementById("new-token-alert");
   if (alertBox) alertBox.hidden = true;
   const banner = document.getElementById("import-status-banner");
   if (banner) banner.hidden = true;
-  dialog.showModal();
+  loadSettingsConnections();
+  loadSettingsMcp();
 }
+window.openSettingsModal = openSettingsModal;
 
 async function openTriageModal() {
   const dialog = document.getElementById("triage-dialog");
