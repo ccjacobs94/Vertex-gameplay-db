@@ -274,6 +274,43 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
     await server.serve()
 
 
+def clean_unconfigured_subaccount_libraries(default_user: str, db_path: Optional[str] = None) -> List[str]:
+    """
+    Ensure subaccounts without personal credentials do not retain games accidentally
+    leaked from server-owner environment defaults. Returns list of cleaned user_ids.
+    """
+    cleaned = []
+    try:
+        active_uids = system_db.list_active_user_ids(db_path=db_path)
+    except Exception:
+        return cleaned
+
+    for uid in active_uids:
+        if uid == default_user:
+            continue
+        try:
+            uconns = system_db.get_user_connections(uid, db_path=db_path)
+            has_own_creds = bool(uconns.get("steam_id") or uconns.get("xbl_api_key") or uconns.get("psn_npsso"))
+            if not has_own_creds:
+                user_db_file = Path(db.USERS_DB_DIR) / uid / "games.db"
+                if user_db_file.exists():
+                    with db.get_connection(str(user_db_file)) as uconn:
+                        synced_count = uconn.execute("SELECT count(*) FROM games WHERE source != 'Manual'").fetchone()[0]
+                        manual_count = uconn.execute("SELECT count(*) FROM games WHERE source = 'Manual'").fetchone()[0]
+                        if synced_count > 0 and manual_count == 0:
+                            logger.info("Purging leaked server-owner games from unconfigured subaccount %s", uid)
+                            uconn.execute("DELETE FROM games")
+                            uconn.execute("DELETE FROM sync_logs")
+                            uconn.execute("DELETE FROM game_achievements")
+                            uconn.execute("DELETE FROM playtime_prompts")
+                            uconn.execute("DELETE FROM reconcile_dismissals")
+                            uconn.commit()
+                            cleaned.append(uid)
+        except Exception as exc:
+            logger.warning("Could not check/clean subaccount database for %s: %s", uid, exc)
+    return cleaned
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -290,6 +327,7 @@ async def lifespan(app: FastAPI):
             logger.info("Migrated legacy database from %s to %s", DEFAULT_DB_PATH, default_user_db)
         except Exception as e:
             logger.warning("Could not seed default user database: %s", e)
+    clean_unconfigured_subaccount_libraries(default_user)
     sync_task = asyncio.create_task(_periodic_sync_loop())
     mcp_task = asyncio.create_task(_run_mcp_http_server("0.0.0.0", MCP_PORT))
     logger.info("Started MCP Streamable HTTP server on port %s with CORS & OAuth discovery", MCP_PORT)
@@ -1355,6 +1393,8 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
     xbl_key = conns.get("xbl_api_key", "")
     psn_token = conns.get("psn_npsso", "")
 
+    is_primary = (user_id == get_auth_username())
+
     return {
         "user_id": user_id,
         "username": username,
@@ -1365,9 +1405,9 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
         "xbl_api_key_masked": (f"••••••••{xbl_key[-4:]}" if len(xbl_key) >= 4 else ("••••" if xbl_key else "")),
         "psn_npsso_masked": (f"••••••••{psn_token[-4:]}" if len(psn_token) >= 4 else ("••••" if psn_token else "")),
         "server_defaults": {
-            "steam": bool(os.environ.get("STEAM_API_KEY") and os.environ.get("STEAM_ID")),
-            "xbox": bool(os.environ.get("XBL_API_KEY")),
-            "psn": bool(os.environ.get("PSN_NPSSO")),
+            "steam": bool(os.environ.get("STEAM_API_KEY") and (os.environ.get("STEAM_ID") if is_primary else False)),
+            "xbox": bool(os.environ.get("XBL_API_KEY") if is_primary else False),
+            "psn": bool(os.environ.get("PSN_NPSSO") if is_primary else False),
         },
     }
 
