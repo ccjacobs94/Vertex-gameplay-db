@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=21">
+  <link rel="stylesheet" href="/static/styles.css?v=22">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -47,6 +47,10 @@
         </button>
         <button type="button" id="btn-sync" class="btn btn-secondary">
           Sync Libraries
+        </button>
+        <button type="button" id="btn-open-settings" class="btn btn-secondary btn-settings" title="Settings &amp; Connections" onclick="window.openSettingsModal && window.openSettingsModal()">
+          <span class="btn-settings-icon" aria-hidden="true">⚙️</span>
+          <span class="btn-settings-label">Settings</span>
         </button>
         <button type="button" id="btn-open-add" class="btn btn-primary">
           + Add Game
@@ -864,6 +868,145 @@
     </div>
   </dialog>
 
+  <!-- Settings & Connections Dialog -->
+  <dialog id="settings-dialog" class="modal-dialog settings-modal" closedby="any" aria-labelledby="settings-modal-title">
+    <div class="modal-content settings-modal-content">
+      <header class="modal-header">
+        <div>
+          <h2 id="settings-modal-title">⚙️ Settings &amp; Connections</h2>
+          <p class="modal-subtitle">Platform integrations, MCP AI agents, and personal library backup</p>
+        </div>
+        <button type="button" id="btn-close-settings" class="btn-icon" aria-label="Close modal" onclick="document.getElementById('settings-dialog') &amp;&amp; document.getElementById('settings-dialog').close()">✕</button>
+      </header>
+
+      <div class="settings-tabs-bar" role="tablist">
+        <button type="button" class="settings-tab-btn active" role="tab" id="stab-connections" aria-selected="true" aria-controls="ssection-connections">
+          🔌 Platform Connections
+        </button>
+        <button type="button" class="settings-tab-btn" role="tab" id="stab-mcp" aria-selected="false" aria-controls="ssection-mcp">
+          🤖 MCP Server &amp; Tokens
+        </button>
+        <button type="button" class="settings-tab-btn" role="tab" id="stab-portability" aria-selected="false" aria-controls="ssection-portability">
+          💾 Library Portability
+        </button>
+      </div>
+
+      <!-- Section 1: Platform Connections -->
+      <section id="ssection-connections" class="settings-tab-panel" role="tabpanel" aria-labelledby="stab-connections">
+        <p class="settings-panel-desc">
+          Configure your personal gaming accounts for automated multi-platform syncs and achievement tracking.
+        </p>
+        <form id="settings-connections-form" class="settings-form" onsubmit="return false;">
+          <div class="form-group">
+            <label for="setting-steam-id">Steam ID (SteamID64)</label>
+            <input type="text" id="setting-steam-id" placeholder="e.g. 76561198012345678" autocomplete="off" />
+            <span class="form-hint">Your 17-digit numeric Steam ID or custom vanity profile name.</span>
+          </div>
+
+          <div class="form-group">
+            <label for="setting-xbl-key">OpenXBL API Key</label>
+            <div class="input-with-button">
+              <input type="password" id="setting-xbl-key" placeholder="Enter key (leave blank to keep current)" autocomplete="off" />
+              <button type="button" id="btn-toggle-xbl" class="btn btn-sm btn-secondary" aria-label="Toggle Xbox key visibility">Show</button>
+            </div>
+            <span class="form-hint">Obtain a free API key at <a href="https://xbl.io" target="_blank" rel="noopener">xbl.io</a> to sync your Xbox and PC Game Pass games.</span>
+          </div>
+
+          <div class="form-group">
+            <label for="setting-psn-npsso">PlayStation NPSSO Token</label>
+            <div class="input-with-button">
+              <input type="password" id="setting-psn-npsso" placeholder="Enter 64-char token (leave blank to keep current)" autocomplete="off" />
+              <button type="button" id="btn-toggle-psn" class="btn btn-sm btn-secondary" aria-label="Toggle PSN token visibility">Show</button>
+            </div>
+            <span class="form-hint">64-character PlayStation NPSSO token from Sony login to sync PS4 &amp; PS5 games and trophies.</span>
+          </div>
+
+          <div class="settings-actions">
+            <button type="button" id="btn-save-connections" class="btn btn-primary">Save Platform Connections</button>
+            <span id="connections-status-msg" class="settings-status-msg" aria-live="polite"></span>
+          </div>
+        </form>
+      </section>
+
+      <!-- Section 2: MCP Server & Tokens -->
+      <section id="ssection-mcp" class="settings-tab-panel" role="tabpanel" aria-labelledby="stab-mcp" hidden>
+        <p class="settings-panel-desc">
+          Connect Google Gemini, Claude, Cursor, or any Model Context Protocol (MCP) AI client directly to your library.
+        </p>
+
+        <div class="form-group">
+          <label for="mcp-endpoint-input">Personal MCP Server Endpoint (Streamable HTTP)</label>
+          <div class="input-with-button">
+            <input type="text" id="mcp-endpoint-input" readonly class="code-input" />
+            <button type="button" id="btn-copy-mcp-endpoint" class="btn btn-secondary">Copy URL</button>
+          </div>
+          <span class="form-hint">Streamable HTTP endpoint URL for AI agent configuration.</span>
+        </div>
+
+        <div class="mcp-tokens-header">
+          <h3>Personal Access Tokens (PAT)</h3>
+          <p class="form-hint">Tokens allow AI agents to authenticate securely and scope queries directly to your personal library.</p>
+        </div>
+
+        <div id="new-token-alert" class="token-alert-box" hidden>
+          <div class="token-alert-title">🔑 New Personal Access Token Generated</div>
+          <p>Copy this token now. For your security, it will never be displayed in full again:</p>
+          <div class="input-with-button">
+            <input type="text" id="new-token-value" readonly class="code-input" />
+            <button type="button" id="btn-copy-new-token" class="btn btn-primary">Copy Token</button>
+          </div>
+        </div>
+
+        <div class="token-create-row">
+          <input type="text" id="token-label-input" placeholder="Token description (e.g. Claude Desktop, Cursor)" />
+          <button type="button" id="btn-generate-token" class="btn btn-primary">+ Generate Token</button>
+        </div>
+
+        <div id="tokens-list-container" class="tokens-list-container">
+          <!-- Populated by JavaScript -->
+        </div>
+      </section>
+
+      <!-- Section 3: Library Portability -->
+      <section id="ssection-portability" class="settings-tab-panel" role="tabpanel" aria-labelledby="stab-portability" hidden>
+        <p class="settings-panel-desc">
+          Backup or restore your personal game library database. All synced and custom games, playtimes, ratings, notes, tags, and cross-platform reconciliations are safely preserved.
+        </p>
+
+        <div class="portability-grid">
+          <div class="portability-card">
+            <div class="portability-icon" aria-hidden="true">📥</div>
+            <div class="portability-body">
+              <h4>Export Library (.db)</h4>
+              <p>Download a full, clean SQLite database backup of your library (<code>games.db</code>).</p>
+            </div>
+            <a href="/api/user/library/export" id="btn-export-db" class="btn btn-primary" download="games.db">
+              Export Library (.db)
+            </a>
+          </div>
+
+          <div class="portability-card">
+            <div class="portability-icon" aria-hidden="true">📤</div>
+            <div class="portability-body">
+              <h4>Import Library (.db)</h4>
+              <p>Restore or migrate a previously exported <code>games.db</code> file. An automatic safety backup of your current library is created on the server before replacement.</p>
+            </div>
+            <input type="file" id="import-db-file" accept=".db,.sqlite,.sqlite3" style="display:none;" />
+            <button type="button" id="btn-trigger-import-db" class="btn btn-secondary">
+              Choose .db &amp; Import
+            </button>
+          </div>
+        </div>
+
+        <div id="import-status-banner" class="import-status-banner" aria-live="polite" hidden></div>
+      </section>
+
+      <footer class="modal-footer">
+        <button type="button" id="btn-close-settings-footer" class="btn btn-secondary" onclick="document.getElementById('settings-dialog') &amp;&amp; document.getElementById('settings-dialog').close()">Done</button>
+      </footer>
+    </div>
+  </dialog>
+
   <!-- Quick Triage Modal Dialog (< 5s per game workflow) -->
   <dialog id="triage-dialog" class="modal-dialog triage-modal" closedby="any" aria-labelledby="triage-modal-title">
     <div class="modal-content triage-content">
@@ -1047,6 +1190,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=21"></script>
+  <script src="/static/app.js?v=22"></script>
 </body>
 </html>

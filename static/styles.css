@@ -71,16 +71,18 @@ body {
   max-inline-size: 1400px;
   margin-inline: auto;
   display: flex;
-  flex-wrap: wrap;
-  align-items: safe center;
+  flex-wrap: nowrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 1.25rem;
 }
 
 .brand-group {
   display: flex;
   align-items: center;
   gap: 0.85rem;
+  min-inline-size: 0;
+  flex-shrink: 1;
 }
 
 .brand-logo {
@@ -100,6 +102,7 @@ body {
 .brand-text {
   display: flex;
   flex-direction: column;
+  min-inline-size: 0;
 }
 
 .brand-group h1 {
@@ -110,18 +113,49 @@ body {
   background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 45%, #38bdf8 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  line-height: 1.2;
 }
 
 .subtitle {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.65rem;
+  flex-shrink: 0;
+}
+
+.header-actions .btn {
+  padding-block: 0.55rem;
+  padding-inline: 0.95rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.btn-settings {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+@media (max-width: 1200px) {
+  .btn-settings-label {
+    display: none;
+  }
+  .header-actions {
+    gap: 0.45rem;
+  }
+  .header-actions .btn {
+    padding-inline: 0.75rem;
+  }
 }
 
 .btn-logout {
@@ -4180,6 +4214,237 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
     justify-content: flex-start;
   }
 }
+
+/* ==========================================================================
+   Settings & Connections Modal & Data Portability
+   ========================================================================== */
+
+.settings-modal {
+  inline-size: min(720px, 94dvw);
+}
+
+.settings-modal-content {
+  gap: 1rem;
+}
+
+.modal-subtitle {
+  margin: 0.25rem 0 0 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.settings-tabs-bar {
+  display: flex;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0.5rem;
+  overflow-x: auto;
+}
+
+.settings-tab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  padding: 0.5rem 0.85rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: all 0.15s ease-in-out;
+}
+
+.settings-tab-btn:hover {
+  background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+  color: var(--text-primary);
+}
+
+.settings-tab-btn.active {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+  font-weight: 600;
+}
+
+.settings-tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  padding-top: 0.25rem;
+}
+
+.settings-tab-panel[hidden] {
+  display: none !important;
+}
+
+.settings-panel-desc {
+  font-size: 0.88rem;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.input-with-button {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.input-with-button input {
+  flex: 1;
+}
+
+.code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.settings-status-msg {
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.settings-status-msg.success {
+  color: #10b981;
+}
+
+.settings-status-msg.error {
+  color: #ef4444;
+}
+
+.mcp-tokens-header {
+  margin-top: 0.5rem;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 1rem;
+}
+
+.mcp-tokens-header h3 {
+  margin: 0 0 0.25rem 0;
+  font-size: 1.05rem;
+}
+
+.token-alert-box {
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.token-alert-title {
+  font-weight: 600;
+  color: #10b981;
+}
+
+.token-create-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.token-create-row input {
+  flex: 1;
+}
+
+.tokens-list-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.token-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.65rem 0.85rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+}
+
+.token-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.token-item-label {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.token-item-meta {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.portability-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+@media (max-width: 600px) {
+  .portability-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.portability-card {
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.portability-card h4 {
+  margin: 0 0 0.35rem 0;
+  font-size: 1rem;
+}
+
+.portability-card p {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.import-status-banner {
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md);
+  font-size: 0.88rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+}
+
+.import-status-banner.success {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: #10b981;
+}
+
+.import-status-banner.error {
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.35);
+  color: #ef4444;
+}
+
 
 
 

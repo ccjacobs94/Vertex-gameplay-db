@@ -7,7 +7,7 @@ and the shared cross-user game catalog metadata cache.
 import os
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 DEFAULT_SYSTEM_DB_PATH = (
     os.environ.get("VERTEX_SYSTEM_DB_PATH")
@@ -206,4 +206,133 @@ def upsert_catalog_cache_entry(
                 updated_at,
             ),
         )
+
+
+def get_user_connections(user_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    if not user_id:
+        return {"steam_id": "", "xbl_api_key": "", "psn_npsso": ""}
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            "SELECT steam_id, xbl_api_key_encrypted, psn_npsso_encrypted FROM user_connections WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        if not row:
+            return {"steam_id": "", "xbl_api_key": "", "psn_npsso": ""}
+        return {
+            "steam_id": str(row["steam_id"] or ""),
+            "xbl_api_key": str(row["xbl_api_key_encrypted"] or ""),
+            "psn_npsso": str(row["psn_npsso_encrypted"] or ""),
+        }
+
+
+def set_user_connections(
+    user_id: str,
+    steam_id: Optional[str] = None,
+    xbl_api_key: Optional[str] = None,
+    psn_npsso: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    if not user_id:
+        raise ValueError("user_id is required")
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        existing = conn.execute(
+            "SELECT steam_id, xbl_api_key_encrypted, psn_npsso_encrypted FROM user_connections WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+
+        final_steam = steam_id.strip() if steam_id is not None else (existing["steam_id"] if existing else "")
+        final_xbl = xbl_api_key.strip() if xbl_api_key is not None else (existing["xbl_api_key_encrypted"] if existing else "")
+        final_psn = psn_npsso.strip() if psn_npsso is not None else (existing["psn_npsso_encrypted"] if existing else "")
+
+        conn.execute(
+            """
+            INSERT INTO user_connections (user_id, steam_id, xbl_api_key_encrypted, psn_npsso_encrypted, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                steam_id = excluded.steam_id,
+                xbl_api_key_encrypted = excluded.xbl_api_key_encrypted,
+                psn_npsso_encrypted = excluded.psn_npsso_encrypted,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, final_steam, final_xbl, final_psn, now),
+        )
+    return {"steam_id": final_steam, "xbl_api_key": final_xbl, "psn_npsso": final_psn}
+
+
+def list_user_oauth_tokens(user_id: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    if not user_id:
+        return []
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT access_token, client_id, scope, created_at
+            FROM oauth_tokens
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            token = str(r["access_token"])
+            preview = f"{token[:12]}..." if len(token) > 12 else token
+            result.append(
+                {
+                    "access_token": token,
+                    "token_preview": preview,
+                    "client_id": str(r["client_id"] or ""),
+                    "scope": str(r["scope"] or ""),
+                    "created_at": float(r["created_at"] or 0),
+                }
+            )
+        return result
+
+
+def create_personal_access_token(
+    user_id: str,
+    label: str = "Personal Access Token",
+    scope: str = "all",
+    db_path: Optional[str] = None,
+) -> str:
+    if not user_id:
+        raise ValueError("user_id is required")
+    import secrets
+    import time
+
+    token = f"pat_{secrets.token_urlsafe(32)}"
+    refresh_token = f"ref_{secrets.token_urlsafe(32)}"
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO oauth_tokens (access_token, refresh_token, client_id, user_id, scope, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (token, refresh_token, label.strip() or "pat", user_id, scope, time.time()),
+        )
+    return token
+
+
+def revoke_oauth_token(user_id: str, token: str, db_path: Optional[str] = None) -> bool:
+    if not user_id or not token:
+        return False
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM oauth_tokens WHERE user_id = ? AND access_token = ?",
+            (user_id, token),
+        )
+        return cur.rowcount > 0
+
 

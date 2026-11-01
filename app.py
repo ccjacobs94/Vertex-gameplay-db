@@ -4,22 +4,30 @@ Accessible over Local Network (LAN) and Tailscale.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import logging
 import os
-from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
+import re
+import shutil
+import sqlite3
+import tempfile
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
+
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+import httpx
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import mcp_server
 import system_db
+import db
 from context import get_current_user_id, reset_current_user_id, set_current_user_id
 from web_auth import (
     SESSION_COOKIE_NAME,
@@ -262,7 +270,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Unified Game Library Hub",
     description="Cross-platform game library & metrics tracker across Xbox, PC, PS4, and Nintendo Switch",
-    version="1.5.0",
+    version="1.6.0",
     lifespan=lifespan,
 )
 
@@ -353,6 +361,37 @@ class ReconcileDismissRequest(BaseModel):
 
 class PlaytimePromptResolveRequest(BaseModel):
     action: str = Field(..., pattern="^(accept|dismiss|mute)$")
+
+
+class UserConnectionsUpdateRequest(BaseModel):
+    steam_id: Optional[str] = None
+    xbl_api_key: Optional[str] = None
+    psn_npsso: Optional[str] = None
+
+
+class CreateTokenRequest(BaseModel):
+    label: Optional[str] = Field(default="Personal Access Token")
+
+
+def _get_active_user(request: Request) -> Tuple[Optional[str], Optional[str]]:
+    """Return (user_id, username) for the active request."""
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    username = verify_web_session(session_id)
+    if not username and is_local_bypass_enabled() and _is_direct_local_or_tailscale_request(request):
+        username = get_auth_username()
+    user_id = get_current_user_id()
+    if not user_id and username:
+        user_id = system_db.get_user_id_by_username(username)
+        if not user_id:
+            user_id = system_db.ensure_user(username)
+    return user_id, username
+
+
+def _get_active_user_db_path(user_id: Optional[str] = None) -> Path:
+    uid = user_id or get_current_user_id()
+    if uid:
+        return Path(db.USERS_DB_DIR) / str(uid) / "games.db"
+    return Path(db.DEFAULT_DB_PATH)
 
 
 @app.get("/login")
@@ -629,6 +668,295 @@ async def api_resolve_playtime_prompt(
     if not res:
         raise HTTPException(status_code=404, detail="Playtime prompt not found")
     return {"status": "ok", "result": res, "stats": get_library_stats()}
+
+
+@app.get("/api/user/connections")
+async def api_get_user_connections(request: Request) -> Dict[str, Any]:
+    user_id, username = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    conns = system_db.get_user_connections(user_id)
+    xbl_key = conns.get("xbl_api_key", "")
+    psn_token = conns.get("psn_npsso", "")
+
+    return {
+        "user_id": user_id,
+        "username": username,
+        "steam_id": conns.get("steam_id", ""),
+        "has_xbl_api_key": bool(xbl_key),
+        "has_psn_npsso": bool(psn_token),
+        "xbl_api_key_masked": (f"••••••••{xbl_key[-4:]}" if len(xbl_key) >= 4 else ("••••" if xbl_key else "")),
+        "psn_npsso_masked": (f"••••••••{psn_token[-4:]}" if len(psn_token) >= 4 else ("••••" if psn_token else "")),
+        "server_defaults": {
+            "steam": bool(os.environ.get("STEAM_API_KEY") and os.environ.get("STEAM_ID")),
+            "xbox": bool(os.environ.get("XBL_API_KEY")),
+            "psn": bool(os.environ.get("PSN_NPSSO")),
+        },
+    }
+
+
+@app.post("/api/user/connections")
+async def api_update_user_connections(
+    payload: UserConnectionsUpdateRequest, request: Request
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # If key is "__CLEAR__", clear it; if empty string/None, preserve existing
+    xbl = "" if payload.xbl_api_key == "__CLEAR__" else (payload.xbl_api_key if payload.xbl_api_key else None)
+    psn = "" if payload.psn_npsso == "__CLEAR__" else (payload.psn_npsso if payload.psn_npsso else None)
+
+    updated = system_db.set_user_connections(
+        user_id=user_id,
+        steam_id=payload.steam_id,
+        xbl_api_key=xbl,
+        psn_npsso=psn,
+    )
+    return {
+        "status": "ok",
+        "message": "Platform connections saved successfully",
+        "connections": {
+            "steam_id": updated.get("steam_id", ""),
+            "has_xbl_api_key": bool(updated.get("xbl_api_key")),
+            "has_psn_npsso": bool(updated.get("psn_npsso")),
+        },
+    }
+
+
+@app.get("/api/user/mcp")
+async def api_get_user_mcp(request: Request) -> Dict[str, Any]:
+    user_id, username = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    base_domain = os.environ.get("MCP_PUBLIC_DOMAIN", "").strip().rstrip("/")
+    if not base_domain:
+        base_domain = str(request.base_url).rstrip("/")
+    tokens = system_db.list_user_oauth_tokens(user_id)
+    return {
+        "user_id": user_id,
+        "username": username,
+        "mcp_endpoint": f"{base_domain}/mcp",
+        "sse_endpoint": f"{base_domain}/sse",
+        "tokens": tokens,
+    }
+
+
+@app.post("/api/user/mcp/tokens")
+async def api_create_user_mcp_token(
+    payload: CreateTokenRequest, request: Request
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    token = system_db.create_personal_access_token(
+        user_id, label=payload.label or "Personal Access Token"
+    )
+    return {
+        "status": "ok",
+        "token": token,
+        "message": "Personal access token generated successfully. Copy it now, as it won't be shown again in full.",
+    }
+
+
+@app.delete("/api/user/mcp/tokens/{token}")
+async def api_revoke_user_mcp_token(token: str, request: Request) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    revoked = system_db.revoke_oauth_token(user_id, token)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="Token not found")
+    return {"status": "ok", "message": "Token revoked successfully"}
+
+
+@app.get("/api/user/library/export")
+async def api_export_library(request: Request) -> Response:
+    user_id, username = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user_db_path = _get_active_user_db_path(user_id)
+    if not user_db_path.exists():
+        user_db_path.parent.mkdir(parents=True, exist_ok=True)
+        init_db(str(user_db_path))
+
+    tmp_export = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp_export_path = tmp_export.name
+    tmp_export.close()
+
+    try:
+        with sqlite3.connect(str(user_db_path)) as src, sqlite3.connect(tmp_export_path) as dst:
+            src.backup(dst)
+    except Exception as exc:
+        if os.path.exists(tmp_export_path):
+            os.remove(tmp_export_path)
+        logger.error("Failed to backup library for user %s: %s", user_id, exc)
+        raise HTTPException(status_code=500, detail=f"Failed to export library database: {exc}")
+
+    clean_user = re.sub(r"[^a-zA-Z0-9_-]", "", username or "user") or "user"
+    filename = f"games-{clean_user}.db"
+    return FileResponse(
+        path=tmp_export_path,
+        filename=filename,
+        media_type="application/x-sqlite3",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        background=BackgroundTask(os.remove, tmp_export_path),
+    )
+
+
+@app.post("/api/user/library/import")
+async def api_import_library(
+    request: Request,
+    file: UploadFile = File(...),
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    filename = (file.filename or "").lower()
+    if not any(filename.endswith(ext) for ext in (".db", ".sqlite", ".sqlite3")):
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file must be a SQLite database (.db, .sqlite, .sqlite3)",
+        )
+
+    tmp_import = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    tmp_import_path = tmp_import.name
+
+    MAX_DB_SIZE = 150 * 1024 * 1024  # 150 MB
+    bytes_read = 0
+    try:
+        while chunk := await file.read(1024 * 1024):  # 1 MB chunks
+            bytes_read += len(chunk)
+            if bytes_read > MAX_DB_SIZE:
+                raise HTTPException(status_code=400, detail="Database file exceeds 150 MB limit")
+            tmp_import.write(chunk)
+    finally:
+        tmp_import.close()
+
+    # Validate SQLite header and integrity
+    try:
+        with open(tmp_import_path, "rb") as f:
+            header = f.read(16)
+        if not header.startswith(b"SQLite format 3\x00"):
+            raise ValueError("File is not a valid SQLite database header")
+
+        with sqlite3.connect(tmp_import_path) as conn:
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()
+            if not integrity or integrity[0] != "ok":
+                raise ValueError(f"SQLite integrity check failed: {integrity}")
+
+            has_games = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='games'"
+            ).fetchone()
+            if not has_games:
+                raise ValueError("Database does not contain the required 'games' table")
+
+            game_count = conn.execute("SELECT count(*) FROM games").fetchone()[0]
+    except Exception as exc:
+        if os.path.exists(tmp_import_path):
+            os.remove(tmp_import_path)
+        raise HTTPException(status_code=400, detail=f"Invalid database file: {exc}")
+
+    user_db_path = _get_active_user_db_path(user_id)
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    lock = _get_user_sync_lock(user_id)
+    async with lock:
+        # Create safety backup of existing DB if present
+        if user_db_path.exists():
+            ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+            backup_path = user_db_path.with_name(f"games.db.bak-{ts}")
+            try:
+                shutil.copy2(user_db_path, backup_path)
+                logger.info("Created backup of user %s database at %s", user_id, backup_path)
+            except Exception as e:
+                logger.warning("Could not backup existing database: %s", e)
+
+        # Remove existing WAL/SHM files
+        wal = Path(str(user_db_path) + "-wal")
+        shm = Path(str(user_db_path) + "-shm")
+        if wal.exists():
+            try:
+                wal.unlink()
+            except OSError:
+                pass
+        if shm.exists():
+            try:
+                shm.unlink()
+            except OSError:
+                pass
+
+        # Atomic move
+        shutil.move(tmp_import_path, str(user_db_path))
+
+        # Run migrations on the newly imported DB to ensure all columns exist
+        init_db(str(user_db_path))
+
+    return {
+        "status": "ok",
+        "message": "Library imported successfully",
+        "imported_games": game_count,
+        "stats": get_library_stats(),
+    }
+
+
+async def _forward_to_mcp_service(request: Request, target_path: str) -> Response:
+    client = httpx.AsyncClient(base_url=f"http://127.0.0.1:{MCP_PORT}", timeout=httpx.Timeout(60.0, read=None))
+    url = httpx.URL(path=target_path, query=request.url.query.encode("utf-8") if request.url.query else None)
+
+    headers = dict(request.headers)
+    headers.pop("host", None)
+    headers.pop("content-length", None)
+
+    req_body = await request.body()
+    try:
+        req = client.build_request(
+            method=request.method,
+            url=url,
+            headers=headers,
+            content=req_body,
+        )
+        resp = await client.send(req, stream=True)
+    except httpx.RequestError as exc:
+        await client.aclose()
+        logger.warning("MCP proxy forwarding error: %s", exc)
+        return JSONResponse({"error": "mcp_service_unavailable", "detail": str(exc)}, status_code=503)
+
+    resp_headers = dict(resp.headers)
+    resp_headers.pop("content-encoding", None)
+    resp_headers.pop("content-length", None)
+    resp_headers.pop("transfer-encoding", None)
+
+    async def stream_response():
+        try:
+            async for chunk in resp.aiter_bytes():
+                yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        stream_response(),
+        status_code=resp.status_code,
+        headers=resp_headers,
+        media_type=resp.headers.get("content-type"),
+    )
+
+
+@app.api_route("/mcp{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"], include_in_schema=False)
+async def proxy_mcp(request: Request, path: str = ""):
+    return await _forward_to_mcp_service(request, f"/mcp{path}")
+
+
+@app.api_route("/sse{path:path}", methods=["GET", "POST", "OPTIONS", "HEAD"], include_in_schema=False)
+async def proxy_sse(request: Request, path: str = ""):
+    return await _forward_to_mcp_service(request, f"/sse{path}")
+
+
+@app.api_route("/messages{path:path}", methods=["GET", "POST", "OPTIONS", "HEAD"], include_in_schema=False)
+async def proxy_messages(request: Request, path: str = ""):
+    return await _forward_to_mcp_service(request, f"/messages{path}")
 
 
 from oauth_provider import get_oauth_routes

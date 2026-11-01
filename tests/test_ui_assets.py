@@ -71,6 +71,35 @@ class TestUIBrandAssets(unittest.TestCase):
         # Check Game Pass toggle button has brand icon
         self.assertIn("brand-icon-gp", content)
 
+    def test_settings_modal_integration_and_cache_busting(self):
+        index_path = os.path.join(self.static_dir, "index.html")
+        sw_path = os.path.join(self.static_dir, "sw.js")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+        with open(sw_path, "r", encoding="utf-8") as f:
+            sw_js = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+
+        # Cache buster must be bumped to v=22
+        self.assertIn('href="/static/styles.css?v=22"', index_html)
+        self.assertIn('src="/static/app.js?v=22"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v15";', sw_js)
+
+        # Settings dialog markup and buttons
+        self.assertIn('id="settings-dialog"', index_html)
+        self.assertIn('id="btn-open-settings"', index_html)
+        self.assertIn('onclick="window.openSettingsModal && window.openSettingsModal()"', index_html)
+        self.assertIn('id="ssection-connections"', index_html)
+        self.assertIn('id="ssection-mcp"', index_html)
+        self.assertIn('id="ssection-portability"', index_html)
+
+        # JavaScript exports and safety
+        self.assertIn("window.openSettingsModal = openSettingsModal;", app_js)
+        self.assertIn("if (!dialog.open)", app_js)
+
 
 if __name__ == "__main__":
     unittest.main()

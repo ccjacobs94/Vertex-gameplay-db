@@ -2674,6 +2674,256 @@ function buildTriageQueue(sourceGames, scope) {
   return [...sourceGames];
 }
 
+// -----------------------------------------------------------------------------
+// Settings & Connections Modal + Data Portability
+// -----------------------------------------------------------------------------
+
+function switchSettingsTab(tabId) {
+  const tabs = [
+    { btn: "stab-connections", panel: "ssection-connections" },
+    { btn: "stab-mcp", panel: "ssection-mcp" },
+    { btn: "stab-portability", panel: "ssection-portability" },
+  ];
+  for (const t of tabs) {
+    const isTarget = t.btn === tabId;
+    const btnEl = document.getElementById(t.btn);
+    const panelEl = document.getElementById(t.panel);
+    if (btnEl) {
+      btnEl.classList.toggle("active", isTarget);
+      btnEl.setAttribute("aria-selected", isTarget ? "true" : "false");
+    }
+    if (panelEl) {
+      panelEl.hidden = !isTarget;
+    }
+  }
+}
+
+async function loadSettingsConnections() {
+  const statusEl = document.getElementById("connections-status-msg");
+  if (statusEl) statusEl.textContent = "";
+  try {
+    const res = await fetch("/api/user/connections");
+    if (!res.ok) return;
+    const data = await res.json();
+    const steamInput = document.getElementById("setting-steam-id");
+    const xblInput = document.getElementById("setting-xbl-key");
+    const psnInput = document.getElementById("setting-psn-npsso");
+    if (steamInput) steamInput.value = data.steam_id || "";
+    if (xblInput) {
+      xblInput.value = "";
+      xblInput.placeholder = data.has_xbl_api_key
+        ? (data.xbl_api_key_masked || "Configured (enter new to change)")
+        : "Enter key (leave blank to keep current)";
+    }
+    if (psnInput) {
+      psnInput.value = "";
+      psnInput.placeholder = data.has_psn_npsso
+        ? (data.psn_npsso_masked || "Configured (enter new to change)")
+        : "Enter 64-char token (leave blank to keep current)";
+    }
+  } catch (err) {
+    console.error("Failed to load connections:", err);
+  }
+}
+
+async function saveSettingsConnections() {
+  const statusEl = document.getElementById("connections-status-msg");
+  const steamInput = document.getElementById("setting-steam-id");
+  const xblInput = document.getElementById("setting-xbl-key");
+  const psnInput = document.getElementById("setting-psn-npsso");
+
+  const payload = {
+    steam_id: steamInput ? steamInput.value.trim() : "",
+  };
+  if (xblInput && xblInput.value.trim()) {
+    payload.xbl_api_key = xblInput.value.trim();
+  }
+  if (psnInput && psnInput.value.trim()) {
+    payload.psn_npsso = psnInput.value.trim();
+  }
+
+  if (statusEl) {
+    statusEl.className = "settings-status-msg";
+    statusEl.textContent = "Saving...";
+  }
+
+  try {
+    const res = await fetch("/api/user/connections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      if (statusEl) {
+        statusEl.className = "settings-status-msg success";
+        statusEl.textContent = "✓ Connections saved!";
+      }
+      loadSettingsConnections();
+      fetchStats();
+    } else {
+      if (statusEl) {
+        statusEl.className = "settings-status-msg error";
+        statusEl.textContent = data.detail || "Failed to save connections";
+      }
+    }
+  } catch (err) {
+    if (statusEl) {
+      statusEl.className = "settings-status-msg error";
+      statusEl.textContent = "Error saving connections";
+    }
+  }
+}
+
+async function loadSettingsMcp() {
+  const endpointInput = document.getElementById("mcp-endpoint-input");
+  try {
+    const res = await fetch("/api/user/mcp");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (endpointInput) {
+      endpointInput.value = data.mcp_endpoint || "";
+    }
+    renderTokensList(data.tokens || []);
+  } catch (err) {
+    console.error("Failed to load MCP settings:", err);
+  }
+}
+
+function renderTokensList(tokens) {
+  const container = document.getElementById("tokens-list-container");
+  if (!container) return;
+  if (!tokens || tokens.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-secondary);font-size:0.85rem;padding:0.5rem 0;">No personal access tokens generated yet.</div>';
+    return;
+  }
+  container.innerHTML = tokens
+    .map((t) => {
+      const dateStr = t.created_at
+        ? new Date(t.created_at * 1000).toLocaleDateString()
+        : "";
+      return `
+      <div class="token-item">
+        <div class="token-item-info">
+          <span class="token-item-label">${escapeHtml(t.client_id || "Personal Access Token")}</span>
+          <span class="token-item-meta"><code>${escapeHtml(t.token_preview || "")}</code> &bull; Created ${dateStr}</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-outline btn-revoke-token" data-token="${escapeHtml(t.access_token)}">
+          Revoke
+        </button>
+      </div>
+    `;
+    })
+    .join("");
+
+  for (const btn of container.querySelectorAll(".btn-revoke-token")) {
+    btn.addEventListener("click", async () => {
+      const tok = btn.dataset.token;
+      if (!confirm("Revoke this access token? Any AI client using it will lose access.")) return;
+      try {
+        const res = await fetch(`/api/user/mcp/tokens/${encodeURIComponent(tok)}`, { method: "DELETE" });
+        if (res.ok) {
+          loadSettingsMcp();
+        }
+      } catch (err) {
+        console.error("Failed to revoke token:", err);
+      }
+    });
+  }
+}
+
+async function generateMcpToken() {
+  const labelInput = document.getElementById("token-label-input");
+  const alertBox = document.getElementById("new-token-alert");
+  const tokenValInput = document.getElementById("new-token-value");
+  const label = labelInput ? labelInput.value.trim() : "";
+
+  try {
+    const res = await fetch("/api/user/mcp/tokens", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: label || "Personal Access Token" }),
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (tokenValInput) tokenValInput.value = data.token;
+    if (alertBox) alertBox.hidden = false;
+    if (labelInput) labelInput.value = "";
+    loadSettingsMcp();
+  } catch (err) {
+    console.error("Failed to generate token:", err);
+  }
+}
+
+async function handleDatabaseImport(file) {
+  const banner = document.getElementById("import-status-banner");
+  if (!file) return;
+
+  if (
+    !confirm(
+      `Are you sure you want to replace your library with "${file.name}"?\n\nAn automatic safety backup of your existing library will be created before replacement.`
+    )
+  ) {
+    return;
+  }
+
+  if (banner) {
+    banner.className = "import-status-banner";
+    banner.textContent = "Uploading and validating database...";
+    banner.hidden = false;
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+
+  try {
+    const res = await fetch("/api/user/library/import", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json();
+    if (res.ok) {
+      if (banner) {
+        banner.className = "import-status-banner success";
+        banner.textContent = `✓ Library restored successfully (${data.imported_games || 0} games loaded)!`;
+      }
+      await fetchStats();
+      await fetchGames();
+    } else {
+      if (banner) {
+        banner.className = "import-status-banner error";
+        banner.textContent = `Error: ${data.detail || "Database import failed"}`;
+      }
+    }
+  } catch (err) {
+    if (banner) {
+      banner.className = "import-status-banner error";
+      banner.textContent = `Failed to upload database: ${err.message}`;
+    }
+  }
+}
+
+function openSettingsModal() {
+  const dialog = document.getElementById("settings-dialog");
+  if (!dialog) return;
+  if (!dialog.open) {
+    try {
+      dialog.showModal();
+    } catch (e) {
+      console.error("Failed to show settings dialog:", e);
+    }
+  }
+  dialog.scrollTop = 0;
+  switchSettingsTab("stab-connections");
+  const alertBox = document.getElementById("new-token-alert");
+  if (alertBox) alertBox.hidden = true;
+  const banner = document.getElementById("import-status-banner");
+  if (banner) banner.hidden = true;
+  loadSettingsConnections();
+  loadSettingsMcp();
+}
+window.openSettingsModal = openSettingsModal;
+
 async function openTriageModal() {
   const dialog = document.getElementById("triage-dialog");
   const scopeSelect = document.getElementById("triage-scope");
@@ -3848,6 +4098,105 @@ document.addEventListener("DOMContentLoaded", () => {
   triageDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
   reconcileDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
   addDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
+
+  // Settings & Connections Dialog
+  const settingsDialog = document.getElementById("settings-dialog");
+  const btnOpenSettings = document.getElementById("btn-open-settings");
+  if (btnOpenSettings) {
+    btnOpenSettings.addEventListener("click", openSettingsModal);
+  }
+  const btnCloseSettings = document.getElementById("btn-close-settings");
+  if (btnCloseSettings && settingsDialog) {
+    btnCloseSettings.addEventListener("click", () => settingsDialog.close());
+  }
+  const btnCloseSettingsFooter = document.getElementById("btn-close-settings-footer");
+  if (btnCloseSettingsFooter && settingsDialog) {
+    btnCloseSettingsFooter.addEventListener("click", () => settingsDialog.close());
+  }
+  if (settingsDialog) {
+    settingsDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
+  }
+
+  const stabConn = document.getElementById("stab-connections");
+  if (stabConn) stabConn.addEventListener("click", () => switchSettingsTab("stab-connections"));
+  const stabMcp = document.getElementById("stab-mcp");
+  if (stabMcp) stabMcp.addEventListener("click", () => switchSettingsTab("stab-mcp"));
+  const stabPort = document.getElementById("stab-portability");
+  if (stabPort) stabPort.addEventListener("click", () => switchSettingsTab("stab-portability"));
+
+  const btnToggleXbl = document.getElementById("btn-toggle-xbl");
+  if (btnToggleXbl) {
+    btnToggleXbl.addEventListener("click", () => {
+      const inp = document.getElementById("setting-xbl-key");
+      if (!inp) return;
+      const isPw = inp.type === "password";
+      inp.type = isPw ? "text" : "password";
+      btnToggleXbl.textContent = isPw ? "Hide" : "Show";
+    });
+  }
+
+  const btnTogglePsn = document.getElementById("btn-toggle-psn");
+  if (btnTogglePsn) {
+    btnTogglePsn.addEventListener("click", () => {
+      const inp = document.getElementById("setting-psn-npsso");
+      if (!inp) return;
+      const isPw = inp.type === "password";
+      inp.type = isPw ? "text" : "password";
+      btnTogglePsn.textContent = isPw ? "Hide" : "Show";
+    });
+  }
+
+  const btnSaveConn = document.getElementById("btn-save-connections");
+  if (btnSaveConn) {
+    btnSaveConn.addEventListener("click", saveSettingsConnections);
+  }
+
+  const btnCopyMcp = document.getElementById("btn-copy-mcp-endpoint");
+  if (btnCopyMcp) {
+    btnCopyMcp.addEventListener("click", async () => {
+      const inp = document.getElementById("mcp-endpoint-input");
+      if (!inp || !inp.value) return;
+      try {
+        await navigator.clipboard.writeText(inp.value);
+        btnCopyMcp.textContent = "Copied!";
+        setTimeout(() => { btnCopyMcp.textContent = "Copy URL"; }, 2000);
+      } catch (e) {
+        console.error("Clipboard copy failed:", e);
+      }
+    });
+  }
+
+  const btnGenTok = document.getElementById("btn-generate-token");
+  if (btnGenTok) {
+    btnGenTok.addEventListener("click", generateMcpToken);
+  }
+
+  const btnCopyNewTok = document.getElementById("btn-copy-new-token");
+  if (btnCopyNewTok) {
+    btnCopyNewTok.addEventListener("click", async () => {
+      const inp = document.getElementById("new-token-value");
+      if (!inp || !inp.value) return;
+      try {
+        await navigator.clipboard.writeText(inp.value);
+        btnCopyNewTok.textContent = "Copied!";
+        setTimeout(() => { btnCopyNewTok.textContent = "Copy Token"; }, 2000);
+      } catch (e) {
+        console.error("Clipboard copy failed:", e);
+      }
+    });
+  }
+
+  const btnTriggerImport = document.getElementById("btn-trigger-import-db");
+  const fileImportInput = document.getElementById("import-db-file");
+  if (btnTriggerImport && fileImportInput) {
+    btnTriggerImport.addEventListener("click", () => fileImportInput.click());
+    fileImportInput.addEventListener("change", (e) => {
+      if (e.target.files && e.target.files.length) {
+        handleDatabaseImport(e.target.files[0]);
+      }
+      e.target.value = "";
+    });
+  }
 
   // Floating Scroll-to-Top Button
   const scrollTopBtn = document.getElementById("btn-scroll-top");
