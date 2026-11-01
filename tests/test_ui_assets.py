@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be present
-        self.assertRegex(index_html, r'href="/static/styles\.css\?v=\d+"')
-        self.assertRegex(index_html, r'src="/static/app\.js\?v=\d+"')
-        self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v\d+";')
+        # Cache buster must be bumped to v=23 and sw to v19
+        self.assertIn('href="/static/styles.css?v=23"', index_html)
+        self.assertIn('src="/static/app.js?v=23"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v19";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -95,9 +95,14 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn('id="ssection-connections"', index_html)
         self.assertIn('id="ssection-mcp"', index_html)
         self.assertIn('id="ssection-portability"', index_html)
+        self.assertIn('id="ssection-account"', index_html)
+        self.assertIn('id="stab-account"', index_html)
+        self.assertIn('onclick="window.switchSettingsTab && window.switchSettingsTab(\'stab-account\')"', index_html)
 
         # JavaScript exports and safety
         self.assertIn("window.openSettingsModal = openSettingsModal;", app_js)
+        self.assertIn("window.switchSettingsTab = switchSettingsTab;", app_js)
+        self.assertIn("window.loadAccountInfo = loadAccountInfo;", app_js)
         self.assertIn("if (!dialog.open)", app_js)
 
 

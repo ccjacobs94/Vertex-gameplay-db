@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=22">
+  <link rel="stylesheet" href="/static/styles.css?v=23">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -880,19 +880,19 @@
       </header>
 
       <div class="settings-tabs-bar" role="tablist">
-        <button type="button" class="settings-tab-btn active" role="tab" id="stab-connections" aria-selected="true" aria-controls="ssection-connections">
+        <button type="button" class="settings-tab-btn active" role="tab" id="stab-connections" aria-selected="true" aria-controls="ssection-connections" onclick="window.switchSettingsTab && window.switchSettingsTab('stab-connections')">
           🔌 Connections
         </button>
-        <button type="button" class="settings-tab-btn" role="tab" id="stab-mcp" aria-selected="false" aria-controls="ssection-mcp">
+        <button type="button" class="settings-tab-btn" role="tab" id="stab-mcp" aria-selected="false" aria-controls="ssection-mcp" onclick="window.switchSettingsTab && window.switchSettingsTab('stab-mcp')">
           🤖 MCP &amp; Tokens
         </button>
-        <button type="button" class="settings-tab-btn" role="tab" id="stab-portability" aria-selected="false" aria-controls="ssection-portability">
+        <button type="button" class="settings-tab-btn" role="tab" id="stab-portability" aria-selected="false" aria-controls="ssection-portability" onclick="window.switchSettingsTab && window.switchSettingsTab('stab-portability')">
           💾 Portability
         </button>
-        <button type="button" class="settings-tab-btn" role="tab" id="stab-account" aria-selected="false" aria-controls="ssection-account">
+        <button type="button" class="settings-tab-btn" role="tab" id="stab-account" aria-selected="false" aria-controls="ssection-account" onclick="window.switchSettingsTab && window.switchSettingsTab('stab-account')">
           👤 Account
         </button>
-        <button type="button" class="settings-tab-btn" role="tab" id="stab-admin-users" aria-selected="false" aria-controls="ssection-admin-users" hidden>
+        <button type="button" class="settings-tab-btn" role="tab" id="stab-admin-users" aria-selected="false" aria-controls="ssection-admin-users" hidden onclick="window.switchSettingsTab && window.switchSettingsTab('stab-admin-users')">
           👥 Users
         </button>
       </div>
@@ -1365,6 +1365,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=22"></script>
+  <script src="/static/app.js?v=23"></script>
 </body>
 </html>

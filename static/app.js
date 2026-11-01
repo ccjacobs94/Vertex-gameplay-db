@@ -2704,7 +2704,13 @@ function switchSettingsTab(tabId) {
       panelEl.hidden = !isTarget;
     }
   }
+  if (tabId === "stab-account") {
+    loadAccountInfo();
+  } else if (tabId === "stab-admin-users") {
+    loadAdminUsers();
+  }
 }
+window.switchSettingsTab = switchSettingsTab;
 
 async function loadSettingsConnections() {
   const statusEl = document.getElementById("connections-status-msg");
@@ -3305,6 +3311,8 @@ function openSettingsModal() {
 }
 
 window.openSettingsModal = openSettingsModal;
+window.loadAccountInfo = loadAccountInfo;
+window.loadAdminUsers = loadAdminUsers;
 
 async function openTriageModal() {
   const dialog = document.getElementById("triage-dialog");
