@@ -102,17 +102,39 @@ def _get_user_sync_lock(user_id: Any = None) -> asyncio.Lock:
     return lock
 
 
+async def run_scheduled_sync_iteration() -> Dict[str, Any]:
+    """Execute a single scheduled sync iteration across all active users."""
+    active_uids = system_db.list_active_user_ids()
+    if not active_uids:
+        default_user = get_auth_username()
+        active_uids = [default_user]
+
+    results: Dict[str, Any] = {}
+    for uid in active_uids:
+        lock = _get_user_sync_lock(uid)
+        async with lock:
+            async with _sync_semaphore:
+                token = set_current_user_id(uid)
+                try:
+                    init_db()
+                    logger.info("Running scheduled sync for user %s...", uid)
+                    user_results = await sync_all_platforms()
+                    results[uid] = user_results
+                    logger.info("Scheduled sync finished for user %s: %s", uid, user_results)
+                except Exception as exc:
+                    logger.error("Scheduled sync error for user %s: %s", uid, exc)
+                    results[uid] = {"error": str(exc)}
+                finally:
+                    reset_current_user_id(token)
+    return results
+
+
 async def _periodic_sync_loop() -> None:
     """Background loop that automatically syncs Steam, Xbox, and PSN every N hours."""
     await asyncio.sleep(3)
     while True:
         try:
-            lock = _get_user_sync_lock()
-            async with lock:
-                async with _sync_semaphore:
-                    logger.info("Running scheduled multi-platform library sync...")
-                    results = await sync_all_platforms()
-                    logger.info("Scheduled sync finished: %s", results)
+            await run_scheduled_sync_iteration()
         except Exception as exc:
             logger.error("Error in scheduled sync loop: %s", exc)
         await asyncio.sleep(max(SYNC_INTERVAL_HOURS, 0.5) * 3600)

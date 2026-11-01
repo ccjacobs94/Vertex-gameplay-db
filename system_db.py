@@ -148,6 +148,22 @@ def ensure_user(
         return assigned_id
 
 
+def list_active_user_ids(db_path: Optional[str] = None) -> List[str]:
+    """Return all user IDs that are active. In instances before status columns, returns all user IDs."""
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+        if "status" in cols:
+            rows = conn.execute(
+                "SELECT id FROM users WHERE status = 'active' ORDER BY created_at ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT id FROM users ORDER BY created_at ASC").fetchall()
+        return [str(r["id"]) for r in rows]
+
+
+
 def get_catalog_cache_entry(
     normalized_title: str, db_path: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
