@@ -71,9 +71,18 @@ def _resolve_credentials(
     db_xbl_key = (user_conn.get("xbl_api_key") or "").strip()
     db_psn_npsso = (user_conn.get("psn_npsso") or "").strip()
 
-    def_steam_id = db_steam_id or env_steam_id
-    def_xbl_key = db_xbl_key or env_xbl_key
-    def_psn_npsso = db_psn_npsso or env_psn_npsso
+    from web_auth import get_auth_username
+    default_user = get_auth_username()
+    is_owner_or_legacy = (uid is None or uid == default_user)
+
+    if is_owner_or_legacy:
+        def_steam_id = db_steam_id or env_steam_id
+        def_xbl_key = db_xbl_key or env_xbl_key
+        def_psn_npsso = db_psn_npsso or env_psn_npsso
+    else:
+        def_steam_id = db_steam_id
+        def_xbl_key = db_xbl_key
+        def_psn_npsso = db_psn_npsso
 
     if credentials is None:
         return UserCredentials(
