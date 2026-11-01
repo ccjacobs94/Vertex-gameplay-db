@@ -227,6 +227,9 @@ textarea:focus {
 }
 
 .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
   padding-block: 0.45rem;
   padding-inline: 0.85rem;
   background-color: var(--bg-input);
@@ -448,6 +451,9 @@ textarea:focus {
   position: absolute;
   inset-block-start: 0.5rem;
   inset-inline-start: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   padding-block: 0.2rem;
   padding-inline: 0.55rem;
   border-radius: var(--radius-sm);
@@ -462,8 +468,12 @@ textarea:focus {
   position: absolute;
   inset-block-start: 2.15rem;
   inset-inline-start: 0.5rem;
-  padding-block: 0.16rem;
-  padding-inline: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  padding-block: 0.18rem;
+  padding-inline: 0.45rem;
   border-radius: var(--radius-sm);
   font-size: 0.66rem;
   font-weight: 800;
@@ -601,6 +611,132 @@ textarea:focus {
   background-color: rgba(16, 124, 16, 0.85);
   color: #ecfdf5;
   border: 1px solid rgba(74, 222, 128, 0.5);
+}
+
+/* Brand Vector Logos & Icons (Steam, Xbox, PlayStation, Switch, Game Pass) */
+.brand-icon {
+  display: inline-block;
+  inline-size: 1rem;
+  block-size: 1rem;
+  flex-shrink: 0;
+  vertical-align: -0.15em;
+  fill: currentColor;
+}
+
+.brand-icon-gp {
+  color: #107c10;
+  transition: color 0.15s ease;
+}
+
+.btn-chip-gp[aria-pressed="true"] .brand-icon-gp {
+  color: #86efac;
+}
+
+.platform-brand-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.badge-brand-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.cover-wrapper .platform-badge .brand-icon {
+  inline-size: 0.85rem;
+  block-size: 0.85rem;
+  vertical-align: -0.08em;
+}
+
+.brand-logo-gp {
+  display: block;
+  inline-size: auto;
+  block-size: 0.82rem;
+  max-inline-size: 78px;
+  fill: #ffffff;
+}
+
+.card-list-plat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.card-list-plat .brand-icon {
+  inline-size: 0.85rem;
+  block-size: 0.85rem;
+}
+
+.card-list-gp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.card-list-gp .brand-icon {
+  inline-size: 0.75rem;
+  block-size: 0.75rem;
+  color: #86efac;
+}
+
+.edit-header-badge.plat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.edit-header-badge.plat .brand-icon {
+  inline-size: 0.9rem;
+  block-size: 0.9rem;
+}
+
+.edit-header-badge.gp {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.edit-header-badge.gp .brand-icon {
+  inline-size: 0.9rem;
+  block-size: 0.9rem;
+  color: #86efac;
+}
+
+#triage-plat {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+#triage-plat .brand-icon {
+  inline-size: 0.9rem;
+  block-size: 0.9rem;
+}
+
+#btn-triage-gamepass {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+#btn-triage-gamepass .brand-icon {
+  inline-size: 0.85rem;
+  block-size: 0.85rem;
+}
+
+.system-pill-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.system-pill-badge .brand-icon {
+  inline-size: 0.9rem;
+  block-size: 0.9rem;
 }
 
 .linked-copy-ownership-select {

@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "vertex-pwa-v11";
+const CACHE_NAME = "vertex-pwa-v12";
 const STATIC_ASSETS = [
   "/manifest.webmanifest",
   "/static/vertex_logo.svg",
@@ -8,6 +8,11 @@ const STATIC_ASSETS = [
   "/static/icons/icon-512.png",
   "/static/icons/icon-maskable-512.png",
   "/static/icons/apple-touch-icon.png",
+  "/static/icons/steam.svg",
+  "/static/icons/xbox.svg",
+  "/static/icons/playstation.svg",
+  "/static/icons/switch.svg",
+  "/static/icons/gamepass.svg",
 ];
 
 self.addEventListener("install", (event) => {
