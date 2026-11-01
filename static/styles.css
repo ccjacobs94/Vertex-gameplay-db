@@ -60,7 +60,7 @@ body {
 .site-header {
   background-color: var(--bg-surface);
   border-block-end: 1px solid var(--border-subtle);
-  padding-block: 1rem;
+  padding-block: 0.85rem;
   padding-inline: 1.5rem;
   position: sticky;
   inset-block-start: 0;
@@ -71,16 +71,18 @@ body {
   max-inline-size: 1400px;
   margin-inline: auto;
   display: flex;
-  flex-wrap: wrap;
-  align-items: safe center;
+  flex-wrap: nowrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 1.25rem;
 }
 
 .brand-group {
   display: flex;
   align-items: center;
   gap: 0.85rem;
+  min-inline-size: 0;
+  flex-shrink: 1;
 }
 
 .brand-logo {
@@ -100,6 +102,7 @@ body {
 .brand-text {
   display: flex;
   flex-direction: column;
+  min-inline-size: 0;
 }
 
 .brand-group h1 {
@@ -110,18 +113,49 @@ body {
   background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 45%, #38bdf8 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
+  line-height: 1.2;
 }
 
 .subtitle {
   margin: 0;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.55rem;
+  flex-shrink: 0;
+}
+
+.header-actions .btn {
+  padding-block: 0.45rem;
+  padding-inline: 0.85rem;
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+
+.btn-settings {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+@media (max-width: 1200px) {
+  .btn-settings-label {
+    display: none;
+  }
+  .header-actions {
+    gap: 0.45rem;
+  }
+  .header-actions .btn {
+    padding-inline: 0.75rem;
+  }
 }
 
 .btn-logout {
