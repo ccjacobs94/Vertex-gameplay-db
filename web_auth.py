@@ -35,6 +35,10 @@ PUBLIC_PATH_PREFIXES = (
     "/static/vertex_logo",
     "/oauth/",
     "/.well-known/",
+    "/mcp",
+    "/sse",
+    "/messages",
+    "/api/stats",
 )
 
 
