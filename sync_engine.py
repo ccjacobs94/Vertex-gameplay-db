@@ -9,15 +9,17 @@ Supports:
 """
 
 import asyncio
+from dataclasses import dataclass
 import json
 import logging
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 
+import system_db
 from db import (
     DEFAULT_DB_PATH,
     get_connection,
@@ -33,6 +35,53 @@ from taxonomy import merge_lists, validate_genres
 logger = logging.getLogger("gamehub.sync")
 
 USER_AGENT = "GameHubApp/1.0 (https://localhost; admin@localhost.localdomain) httpx/0.27"
+
+
+@dataclass
+class UserCredentials:
+    steam_id: Optional[str] = None
+    steam_api_key: Optional[str] = None
+    xbl_api_key: Optional[str] = None
+    psn_npsso: Optional[str] = None
+
+
+def _resolve_credentials(
+    credentials: Optional[Union[UserCredentials, Dict[str, Any]]] = None
+) -> UserCredentials:
+    """
+    Resolve user-specific credentials from a UserCredentials instance or dict,
+    falling back to server-wide environment defaults where appropriate.
+    """
+    env_steam_key = os.environ.get("STEAM_API_KEY", "").strip()
+    env_steam_id = os.environ.get("STEAM_ID", "").strip()
+    env_xbl_key = os.environ.get("XBL_API_KEY", "").strip()
+    env_psn_npsso = os.environ.get("PSN_NPSSO", "").strip()
+
+    if credentials is None:
+        return UserCredentials(
+            steam_id=env_steam_id,
+            steam_api_key=env_steam_key,
+            xbl_api_key=env_xbl_key,
+            psn_npsso=env_psn_npsso,
+        )
+
+    if isinstance(credentials, dict):
+        raw_steam_id = credentials.get("steam_id")
+        raw_steam_key = credentials.get("steam_api_key")
+        raw_xbl_key = credentials.get("xbl_api_key")
+        raw_psn_npsso = credentials.get("psn_npsso")
+    else:
+        raw_steam_id = getattr(credentials, "steam_id", None)
+        raw_steam_key = getattr(credentials, "steam_api_key", None)
+        raw_xbl_key = getattr(credentials, "xbl_api_key", None)
+        raw_psn_npsso = getattr(credentials, "psn_npsso", None)
+
+    return UserCredentials(
+        steam_id=raw_steam_id.strip() if raw_steam_id is not None else env_steam_id,
+        steam_api_key=(raw_steam_key.strip() if raw_steam_key and raw_steam_key.strip() else env_steam_key),
+        xbl_api_key=raw_xbl_key.strip() if raw_xbl_key is not None else env_xbl_key,
+        psn_npsso=raw_psn_npsso.strip() if raw_psn_npsso is not None else env_psn_npsso,
+    )
 
 
 def _make_async_client(timeout: float = 20.0, extra_headers: Optional[Dict[str, str]] = None) -> httpx.AsyncClient:
@@ -97,7 +146,7 @@ async def sync_steam_achievements_for_game(
     steam_id: str,
     game_id: int,
     appid: int,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     try:
         r = await client.get(
@@ -167,7 +216,7 @@ async def sync_xbox_achievements_for_game(
     game_id: int,
     title_id: str,
     platform: str = "Xbox",
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     try:
         r = await client.get(
@@ -246,9 +295,13 @@ async def sync_xbox_achievements_for_game(
     return None
 
 
-async def sync_steam(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
-    api_key = os.environ.get("STEAM_API_KEY", "").strip()
-    steam_id_raw = os.environ.get("STEAM_ID", "").strip()
+async def sync_steam(
+    db_path: Optional[str] = None,
+    credentials: Optional[Union[UserCredentials, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    creds = _resolve_credentials(credentials)
+    api_key = (creds.steam_api_key or "").strip()
+    steam_id_raw = (creds.steam_id or "").strip()
 
     if not api_key or not steam_id_raw:
         return {"source": "Steam", "status": "skipped", "games_synced": 0, "message": "STEAM_API_KEY or STEAM_ID not set"}
@@ -328,8 +381,12 @@ async def sync_steam(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
         return {"source": "Steam", "status": "error", "games_synced": 0, "message": str(exc)}
 
 
-async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
-    xbl_key = os.environ.get("XBL_API_KEY", "").strip()
+async def sync_xbox(
+    db_path: Optional[str] = None,
+    credentials: Optional[Union[UserCredentials, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    creds = _resolve_credentials(credentials)
+    xbl_key = (creds.xbl_api_key or "").strip()
     if not xbl_key:
         return {"source": "Xbox", "status": "skipped", "games_synced": 0, "message": "XBL_API_KEY not set"}
 
@@ -525,7 +582,7 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
         return {"source": "Xbox", "status": "error", "games_synced": 0, "message": str(exc)}
 
 
-def _sync_psn_blocking(npsso: str, db_path: str = DEFAULT_DB_PATH) -> int:
+def _sync_psn_blocking(npsso: str, db_path: Optional[str] = None) -> int:
     from psnawp_api import PSNAWP
 
     psnawp = PSNAWP(npsso)
@@ -633,7 +690,7 @@ def _sync_psn_achievements_for_single_game(
     ext_id: str,
     title: str,
     platform: str,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     from psnawp_api import PSNAWP
     psnawp = PSNAWP(npsso)
@@ -693,7 +750,8 @@ def _sync_psn_achievements_for_single_game(
 
 async def sync_game_achievements_on_demand(
     game_id: int,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
+    credentials: Optional[Union[UserCredentials, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     On-demand live achievement sync for a game and its cross-platform linked copies.
@@ -708,10 +766,11 @@ async def sync_game_achievements_on_demand(
         }
 
     linked_copies = game.get("linked_games") or [game]
-    steam_key = os.environ.get("STEAM_API_KEY", "").strip()
-    steam_id_raw = os.environ.get("STEAM_ID", "").strip()
-    xbl_key = os.environ.get("XBL_API_KEY", "").strip()
-    npsso = os.environ.get("PSN_NPSSO", "").strip()
+    creds = _resolve_credentials(credentials)
+    steam_key = (creds.steam_api_key or "").strip()
+    steam_id_raw = (creds.steam_id or "").strip()
+    xbl_key = (creds.xbl_api_key or "").strip()
+    npsso = (creds.psn_npsso or "").strip()
 
     steam_id = None
     async with _make_async_client(timeout=25.0) as client:
@@ -755,8 +814,12 @@ async def sync_game_achievements_on_demand(
     return get_game_achievements(game_id, db_path=db_path)
 
 
-async def sync_psn(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
-    npsso = os.environ.get("PSN_NPSSO", "").strip()
+async def sync_psn(
+    db_path: Optional[str] = None,
+    credentials: Optional[Union[UserCredentials, Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    creds = _resolve_credentials(credentials)
+    npsso = (creds.psn_npsso or "").strip()
     if not npsso:
         return {"source": "PSN", "status": "skipped", "games_synced": 0, "message": "PSN_NPSSO not set"}
 
@@ -772,10 +835,13 @@ async def sync_psn(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
         return {"source": "PSN", "status": "error", "games_synced": 0, "message": str(exc)}
 
 
-async def sync_all_platforms(db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
+async def sync_all_platforms(
+    db_path: Optional[str] = None,
+    credentials: Optional[Union[UserCredentials, Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     results = []
     for fn in (sync_steam, sync_xbox, sync_psn):
-        res = await fn(db_path=db_path)
+        res = await fn(db_path=db_path, credentials=credentials)
         results.append(res)
     try:
         enrich_res = await enrich_missing_metadata(db_path=db_path, limit=500)
@@ -1175,16 +1241,19 @@ async def _find_steam_appid_by_title(
 
 
 async def enrich_missing_metadata(
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
     limit: int = 500,
     force: bool = False,
+    system_db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Automatically enrich games that have empty genres ('[]') using free, keyless sources:
-      1. Steam Store appdetails API (direct appid lookup for Steam games + normalized title lookup for Xbox/PSN/Switch)
-      2. Optional RAWG API (if RAWG_API_KEY is set)
-      3. Wikidata P136 & Wikipedia API fallback (for console exclusives not on Steam)
-    Propagates discovered genres across linked/reconciled games and normalized title siblings.
+      1. Shared catalog_cache in system.db (instant cross-user metadata reuse without external API calls)
+      2. Steam Store appdetails API (direct appid lookup for Steam games + normalized title lookup for Xbox/PSN/Switch)
+      3. Optional RAWG API (if RAWG_API_KEY is set)
+      4. Wikidata P136 & Wikipedia API fallback (for console exclusives not on Steam)
+    Propagates discovered genres across linked/reconciled games and normalized title siblings,
+    and writes discovered metadata back to catalog_cache in system.db.
     Merge, never replace: discovered genres are added to a game's
     existing genres (validated against taxonomy.GENRES first).
     Existing genres are never dropped, even with force=True.
@@ -1208,6 +1277,7 @@ async def enrich_missing_metadata(
                     "genres": g_list,
                     "release_year": r.get("release_year"),
                     "critic_score": r.get("critic_score"),
+                    "cover_url": r.get("cover_url"),
                 }
 
     # Filter rows needing enrichment
@@ -1249,9 +1319,35 @@ async def enrich_missing_metadata(
             norm = normalize_game_title(title)
 
             meta: Optional[Dict[str, Any]] = None
+            resolved_steam_appid: Optional[str] = None
+            from_catalog_cache = False
 
-            # 1. Reuse already-discovered metadata for the same normalized title
-            if norm and norm in norm_to_meta:
+            if ext_id.startswith("steam:"):
+                appid_part = ext_id.split(":", 1)[1]
+                if appid_part.isdigit():
+                    resolved_steam_appid = appid_part
+
+            # 0. Check shared catalog_cache in system.db first (unless force=True)
+            if norm and not force:
+                try:
+                    cached = system_db.get_catalog_cache_entry(norm, db_path=system_db_path)
+                    if cached:
+                        cached_genres = json.loads(cached.get("genres_json") or "[]")
+                        if cached_genres:
+                            meta = {
+                                "genres": cached_genres,
+                                "release_year": cached.get("release_year"),
+                                "critic_score": cached.get("critic_score"),
+                                "cover_url": cached.get("cover_url"),
+                            }
+                            if cached.get("steam_appid"):
+                                resolved_steam_appid = str(cached["steam_appid"])
+                            from_catalog_cache = True
+                except Exception as exc:
+                    logger.debug("Catalog cache read error for '%s': %s", norm, exc)
+
+            # 1. Reuse already-discovered metadata for the same normalized title in-memory
+            if not meta and norm and norm in norm_to_meta:
                 meta = norm_to_meta[norm]
 
             # 2. Direct Steam appid lookup
@@ -1259,6 +1355,7 @@ async def enrich_missing_metadata(
                 appid_str = ext_id.split(":", 1)[1]
                 if appid_str.isdigit():
                     appid = int(appid_str)
+                    resolved_steam_appid = appid_str
                     if appid in steam_appid_cache:
                         meta = steam_appid_cache[appid]
                     else:
@@ -1271,6 +1368,7 @@ async def enrich_missing_metadata(
             if (not meta or not meta.get("genres")) and not ext_id.startswith("steam:"):
                 matched_appid = await _find_steam_appid_by_title(client, title)
                 if matched_appid:
+                    resolved_steam_appid = str(matched_appid)
                     if matched_appid in steam_appid_cache:
                         meta = steam_appid_cache[matched_appid]
                     else:
@@ -1296,7 +1394,29 @@ async def enrich_missing_metadata(
                 rel_year = meta.get("release_year")
                 c_score = meta.get("critic_score")
                 if norm:
-                    norm_to_meta[norm] = meta
+                    norm_to_meta[norm] = {
+                        "genres": discovered,
+                        "release_year": rel_year,
+                        "critic_score": c_score,
+                        "cover_url": meta.get("cover_url") or row.get("cover_url"),
+                    }
+                    if not from_catalog_cache:
+                        try:
+                            cover_for_cache = meta.get("cover_url") or row.get("cover_url")
+                            if not cover_for_cache and resolved_steam_appid:
+                                cover_for_cache = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{resolved_steam_appid}/library_600x900.jpg"
+                            system_db.upsert_catalog_cache_entry(
+                                normalized_title=norm,
+                                steam_appid=resolved_steam_appid,
+                                genres_json=json.dumps(discovered),
+                                release_year=rel_year,
+                                critic_score=c_score,
+                                cover_url=cover_for_cache,
+                                updated_at=now,
+                                db_path=system_db_path,
+                            )
+                        except Exception as exc:
+                            logger.debug("Catalog cache write error for '%s': %s", norm, exc)
 
                 # Merge, never replace. The discovered genres are added
                 # to whatever the game already has; existing genres are
