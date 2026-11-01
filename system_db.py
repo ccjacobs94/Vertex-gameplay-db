@@ -145,8 +145,26 @@ def init_system_db(db_path: Optional[str] = None) -> None:
                 used_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_invites_used ON invites(used_by);
+
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                customer_id TEXT,
+                subscription_id TEXT,
+                status TEXT NOT NULL,
+                current_period_end TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(customer_id);
+
+            CREATE TABLE IF NOT EXISTS billing_events_seen (
+                event_id TEXT PRIMARY KEY,
+                received_at TEXT NOT NULL
+            );
             """
         )
+
 
 
 
@@ -820,6 +838,90 @@ def consume_invite(code: str, user_id: str, db_path: Optional[str] = None) -> bo
             (user_id, now_str, code_hash, now_str),
         )
         return cur.rowcount > 0
+
+
+def get_user_subscription(user_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not user_id:
+        return None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute("SELECT * FROM subscriptions WHERE user_id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_customer_id(customer_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not customer_id:
+        return None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            """
+            SELECT u.* FROM users u
+            JOIN subscriptions s ON u.id = s.user_id
+            WHERE s.customer_id = ?
+            """,
+            (customer_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_user_subscription(
+    user_id: str,
+    provider: str,
+    status: str,
+    customer_id: Optional[str] = None,
+    subscription_id: Optional[str] = None,
+    current_period_end: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> None:
+    if not user_id:
+        raise ValueError("user_id is required")
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO subscriptions (user_id, provider, customer_id, subscription_id, status, current_period_end, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                provider = excluded.provider,
+                customer_id = COALESCE(excluded.customer_id, subscriptions.customer_id),
+                subscription_id = COALESCE(excluded.subscription_id, subscriptions.subscription_id),
+                status = excluded.status,
+                current_period_end = COALESCE(excluded.current_period_end, subscriptions.current_period_end),
+                updated_at = excluded.updated_at
+            """,
+            (user_id, provider, customer_id, subscription_id, status, current_period_end, now),
+        )
+
+
+def is_billing_event_seen(event_id: str, db_path: Optional[str] = None) -> bool:
+    if not event_id:
+        return False
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM billing_events_seen WHERE event_id = ?", (event_id,)
+        ).fetchone()
+        return bool(row)
+
+
+def record_billing_event_seen(event_id: str, db_path: Optional[str] = None) -> None:
+    if not event_id:
+        return
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO billing_events_seen (event_id, received_at) VALUES (?, ?)",
+            (event_id, now),
+        )
+
 
 
 

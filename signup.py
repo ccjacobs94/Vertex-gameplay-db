@@ -423,9 +423,18 @@ async def handle_signup_post(request: Request) -> Response:
                 default_invite=invite_code,
             )
 
-    # Determine status based on policy
-    status = "pending" if policy == "approval" else "active"
-    status_reason = "awaiting_approval" if policy == "approval" else None
+    edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
+
+    # Determine status based on edition and policy
+    if edition == "hosted":
+        status = "pending"
+        status_reason = "awaiting_payment"
+    elif policy == "approval":
+        status = "pending"
+        status_reason = "awaiting_approval"
+    else:
+        status = "active"
+        status_reason = None
 
     try:
         user_id = system_db.create_user(
@@ -449,6 +458,21 @@ async def handle_signup_post(request: Request) -> Response:
         system_db.consume_invite(invite_code, user_id)
 
     if status == "pending":
+        if status_reason == "awaiting_payment":
+            system_db.record_login(user_id)
+            session_id = web_auth.create_web_session(username, request.headers.get("user-agent", ""))
+            response = RedirectResponse(url="/billing", status_code=303)
+            response.set_cookie(
+                key=web_auth.SESSION_COOKIE_NAME,
+                value=session_id,
+                max_age=web_auth.SESSION_MAX_AGE_SECONDS,
+                httponly=True,
+                secure=web_auth._is_https_request(request),
+                samesite="lax",
+                path="/",
+            )
+            logger.info("New hosted user registered; redirecting to billing: %r", username)
+            return response
         return render_approval_notice_page(username)
 
     # Active user: create session and log in immediately

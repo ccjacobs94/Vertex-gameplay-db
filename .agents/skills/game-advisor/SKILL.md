@@ -34,3 +34,7 @@ If MCP tools are not loaded in the current session, query the local REST API on 
 When adding a new game (such as a Nintendo Switch or PS4 title):
 1. First search `/api/search-external?q=<title>` to get the high-resolution `cover_url` and `release_year`.
 2. Add the game via `POST http://localhost:8095/api/games` or the `add_game_to_library` MCP tool.
+
+## 4. Authentication & Account Status
+
+All API calls and MCP tools require an active user account. If an account is pending, suspended, or its hosted subscription lapses, REST endpoints return `401 Unauthorized`, `402 Payment Required`, or `403 Forbidden`, and MCP Bearer token verification rejects requests. Users with `awaiting_payment` or `subscription_lapsed` statuses can manage their billing at `/billing`.
