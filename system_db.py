@@ -116,6 +116,11 @@ def init_system_db(db_path: Optional[str] = None) -> None:
         if "username" not in sess_cols:
             conn.execute("ALTER TABLE web_sessions ADD COLUMN username TEXT")
 
+        # Additive migration for user_connections table
+        conn_cols = {r["name"] for r in conn.execute("PRAGMA table_info(user_connections)")}
+        if "onboarding_completed" not in conn_cols:
+            conn.execute("ALTER TABLE user_connections ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0")
+
         # New tables for account auditing and instance settings
         conn.executescript(
             """
@@ -605,20 +610,21 @@ def upsert_catalog_cache_entry(
 
 def get_user_connections(user_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
     if not user_id:
-        return {"steam_id": "", "xbl_api_key": "", "psn_npsso": ""}
+        return {"steam_id": "", "xbl_api_key": "", "psn_npsso": "", "onboarding_completed": False}
     target_path = db_path or DEFAULT_SYSTEM_DB_PATH
     init_system_db(target_path)
     with get_system_connection(target_path) as conn:
         row = conn.execute(
-            "SELECT steam_id, xbl_api_key_encrypted, psn_npsso_encrypted FROM user_connections WHERE user_id = ?",
+            "SELECT steam_id, xbl_api_key_encrypted, psn_npsso_encrypted, onboarding_completed FROM user_connections WHERE user_id = ?",
             (user_id,),
         ).fetchone()
         if not row:
-            return {"steam_id": "", "xbl_api_key": "", "psn_npsso": ""}
+            return {"steam_id": "", "xbl_api_key": "", "psn_npsso": "", "onboarding_completed": False}
         return {
             "steam_id": str(row["steam_id"] or ""),
             "xbl_api_key": str(row["xbl_api_key_encrypted"] or ""),
             "psn_npsso": str(row["psn_npsso_encrypted"] or ""),
+            "onboarding_completed": bool(row["onboarding_completed"]),
         }
 
 
@@ -627,6 +633,7 @@ def set_user_connections(
     steam_id: Optional[str] = None,
     xbl_api_key: Optional[str] = None,
     psn_npsso: Optional[str] = None,
+    onboarding_completed: Optional[bool] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not user_id:
@@ -638,27 +645,47 @@ def set_user_connections(
     now = datetime.now(timezone.utc).isoformat()
     with get_system_connection(target_path) as conn:
         existing = conn.execute(
-            "SELECT steam_id, xbl_api_key_encrypted, psn_npsso_encrypted FROM user_connections WHERE user_id = ?",
+            "SELECT steam_id, xbl_api_key_encrypted, psn_npsso_encrypted, onboarding_completed FROM user_connections WHERE user_id = ?",
             (user_id,),
         ).fetchone()
 
         final_steam = steam_id.strip() if steam_id is not None else (existing["steam_id"] if existing else "")
         final_xbl = xbl_api_key.strip() if xbl_api_key is not None else (existing["xbl_api_key_encrypted"] if existing else "")
         final_psn = psn_npsso.strip() if psn_npsso is not None else (existing["psn_npsso_encrypted"] if existing else "")
+        final_onboarding = int(onboarding_completed) if onboarding_completed is not None else (existing["onboarding_completed"] if existing else 0)
 
         conn.execute(
             """
-            INSERT INTO user_connections (user_id, steam_id, xbl_api_key_encrypted, psn_npsso_encrypted, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO user_connections (user_id, steam_id, xbl_api_key_encrypted, psn_npsso_encrypted, updated_at, onboarding_completed)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 steam_id = excluded.steam_id,
                 xbl_api_key_encrypted = excluded.xbl_api_key_encrypted,
                 psn_npsso_encrypted = excluded.psn_npsso_encrypted,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                onboarding_completed = excluded.onboarding_completed
             """,
-            (user_id, final_steam, final_xbl, final_psn, now),
+            (user_id, final_steam, final_xbl, final_psn, now, final_onboarding),
         )
-    return {"steam_id": final_steam, "xbl_api_key": final_xbl, "psn_npsso": final_psn}
+    return {
+        "steam_id": final_steam,
+        "xbl_api_key": final_xbl,
+        "psn_npsso": final_psn,
+        "onboarding_completed": bool(final_onboarding),
+    }
+
+
+def set_user_onboarding_completed(user_id: str, completed: bool = True, db_path: Optional[str] = None) -> None:
+    if not user_id:
+        return
+    set_user_connections(user_id, onboarding_completed=completed, db_path=db_path)
+
+
+def is_user_onboarding_completed(user_id: str, db_path: Optional[str] = None) -> bool:
+    if not user_id:
+        return False
+    conns = get_user_connections(user_id, db_path=db_path)
+    return bool(conns.get("onboarding_completed"))
 
 
 def list_user_oauth_tokens(user_id: str, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
