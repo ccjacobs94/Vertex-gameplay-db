@@ -102,6 +102,61 @@ const state = {
   currentAchSearch: "",
 };
 
+const BRAND_ICONS = {
+  steam: `<svg class="brand-icon brand-icon-steam" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.911c0 .052.004.105.004.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 15.27C1.862 20.307 6.486 24 11.979 24c6.627 0 11.999-5.373 11.999-12S18.605 0 11.979 0zM7.54 18.21l-1.473-.61c.262.543.714.999 1.314 1.25 1.297.539 2.793-.076 3.332-1.375.263-.63.264-1.319.005-1.949s-.75-1.121-1.377-1.383c-.624-.26-1.29-.249-1.878-.03l1.523.63c.956.4 1.409 1.5 1.009 2.455-.397.957-1.497 1.41-2.454 1.012H7.54zm11.415-9.303c0-1.662-1.353-3.015-3.015-3.015-1.665 0-3.015 1.353-3.015 3.015 0 1.665 1.35 3.015 3.015 3.015 1.663 0 3.015-1.35 3.015-3.015zm-5.273-.005c0-1.252 1.013-2.266 2.265-2.266 1.249 0 2.266 1.014 2.266 2.266 0 1.251-1.017 2.265-2.266 2.265-1.253 0-2.265-1.014-2.265-2.265z"/></svg>`,
+  xbox: `<svg class="brand-icon brand-icon-xbox" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4.102 21.033C6.211 22.881 8.977 24 12 24c3.026 0 5.789-1.119 7.902-2.967 1.877-1.912-4.316-8.709-7.902-11.417-3.582 2.708-9.779 9.505-7.898 11.417zm11.16-14.406c2.5 2.961 7.484 10.313 6.076 12.912C23.002 17.48 24 14.861 24 12.004c0-3.34-1.365-6.362-3.57-8.536 0 0-.027-.022-.082-.042-.063-.022-.152-.045-.281-.045-.592 0-1.985.434-4.805 3.246zM3.654 3.426c-.057.02-.082.041-.086.042C1.365 5.642 0 8.664 0 12.004c0 2.854.998 5.473 2.661 7.533-1.401-2.605 3.579-9.951 6.08-12.91-2.82-2.813-4.216-3.245-4.806-3.245-.131 0-.223.021-.281.046v-.002zM12 3.551S9.055 1.828 6.755 1.746c-.903-.033-1.454.295-1.521.339C7.379.646 9.659 0 11.984 0H12c2.334 0 4.605.646 6.766 2.085-.068-.046-.615-.372-1.52-.339C14.946 1.828 12 3.545 12 3.545v.006z"/></svg>`,
+  playstation: `<svg class="brand-icon brand-icon-playstation" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.984 2.596v17.547l3.915 1.261V6.688c0-.69.304-1.151.794-.991.636.18.76.814.76 1.505v5.875c2.441 1.193 4.362-.002 4.362-3.152 0-3.237-1.126-4.675-4.438-5.827-1.307-.448-3.728-1.186-5.39-1.502zm4.656 16.241l6.296-2.275c.715-.258.826-.625.246-.818-.586-.192-1.637-.139-2.357.123l-4.205 1.5V14.98l.24-.085s1.201-.42 2.913-.615c1.696-.18 3.785.03 5.437.661 1.848.601 2.04 1.472 1.576 2.072-.465.6-1.622 1.036-1.622 1.036l-8.544 3.107V18.86zM1.807 18.6c-1.9-.545-2.214-1.668-1.352-2.32.801-.586 2.16-1.052 2.16-1.052l5.615-2.013v2.313L4.205 17c-.705.271-.825.632-.239.826.586.195 1.637.15 2.343-.12L8.247 17v2.074c-.12.03-.256.044-.39.073-1.939.331-3.996.196-6.038-.479z"/></svg>`,
+  switch: `<svg class="brand-icon brand-icon-switch" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M14.176 24h3.674c3.376 0 6.15-2.774 6.15-6.15V6.15C24 2.775 21.226 0 17.85 0H14.1c-.074 0-.15.074-.15.15v23.7c-.001.076.075.15.226.15zm4.574-13.199c1.351 0 2.399 1.125 2.399 2.398 0 1.352-1.125 2.4-2.399 2.4-1.35 0-2.4-1.049-2.4-2.4-.075-1.349 1.05-2.398 2.4-2.398zM11.4 0H6.15C2.775 0 0 2.775 0 6.15v11.7C0 21.226 2.775 24 6.15 24h5.25c.074 0 .15-.074.15-.149V.15c.001-.076-.075-.15-.15-.15zM9.676 22.051H6.15c-2.326 0-4.201-1.875-4.201-4.201V6.15c0-2.326 1.875-4.201 4.201-4.201H9.6l.076 20.102zM3.75 7.199c0 1.275.975 2.25 2.25 2.25s2.25-.975 2.25-2.25c0-1.273-.975-2.25-2.25-2.25s-2.25.977-2.25 2.25z"/></svg>`,
+  gamepass: `<svg class="brand-icon brand-icon-gp" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4.102 21.033C6.211 22.881 8.977 24 12 24c3.026 0 5.789-1.119 7.902-2.967 1.877-1.912-4.316-8.709-7.902-11.417-3.582 2.708-9.779 9.505-7.898 11.417zm11.16-14.406c2.5 2.961 7.484 10.313 6.076 12.912C23.002 17.48 24 14.861 24 12.004c0-3.34-1.365-6.362-3.57-8.536 0 0-.027-.022-.082-.042-.063-.022-.152-.045-.281-.045-.592 0-1.985.434-4.805 3.246zM3.654 3.426c-.057.02-.082.041-.086.042C1.365 5.642 0 8.664 0 12.004c0 2.854.998 5.473 2.661 7.533-1.401-2.605 3.579-9.951 6.08-12.91-2.82-2.813-4.216-3.245-4.806-3.245-.131 0-.223.021-.281.046v-.002zM12 3.551S9.055 1.828 6.755 1.746c-.903-.033-1.454.295-1.521.339C7.379.646 9.659 0 11.984 0H12c2.334 0 4.605.646 6.766 2.085-.068-.046-.615-.372-1.52-.339C14.946 1.828 12 3.545 12 3.545v.006z"/></svg>`,
+  gamepass_logo: `<svg class="brand-logo-gp" viewBox="0 0 261.629 44.604" height="12" aria-hidden="true" focusable="false"><path fill="currentColor" d="M238.473,234.386a.135.135,0,0,1,.073.036c6.669,5.073,18.09,17.622,14.608,21.167a22.3,22.3,0,0,1-29.361,0c-3.482-3.545,7.937-16.094,14.606-21.167A.14.14,0,0,1,238.473,234.386Zm11.618-14.623a22.312,22.312,0,0,0-23.235,0,.085.085,0,0,0-.037.111.088.088,0,0,0,.108.039c4.318-.933,10.878,2.8,11.5,3.171a.073.073,0,0,0,.094,0c.622-.374,7.181-4.1,11.5-3.171a.088.088,0,0,0,.108-.039A.085.085,0,0,0,250.091,219.763ZM222.863,222.9a.411.411,0,0,0-.1.075,22.3,22.3,0,0,0-2.032,29.338.1.1,0,0,0,.119.036.092.092,0,0,0,.026-.115c-1.7-5.256,6.992-18,11.481-23.342a.1.1,0,0,0,.03-.064.1.1,0,0,0-.039-.074C225.547,221.987,223.237,222.706,222.863,222.9Zm21.734,5.855a.1.1,0,0,0-.038.074.1.1,0,0,0,.03.064c4.489,5.343,13.181,18.086,11.481,23.342a.092.092,0,0,0,.026.115.1.1,0,0,0,.119-.036,22.3,22.3,0,0,0-2.032-29.338.409.409,0,0,0-.1-.075C253.709,222.706,251.4,221.987,244.6,228.754Zm69.8-3.023h-4.633L299.3,252.54h4.252l2.59-6.945h11.882l2.59,6.945h4.252Zm-6.951,16.293,4.635-12.273,4.635,12.273Zm-10.292-3.6v14.119H293.3V249.03a9.674,9.674,0,0,1-3.641,3.065,11.618,11.618,0,0,1-5.047,1.046,13.375,13.375,0,0,1-5.205-.97,11.059,11.059,0,0,1-4.022-2.91,12.738,12.738,0,0,1-2.626-4.452,18.88,18.88,0,0,1,.009-11.392,12.507,12.507,0,0,1,2.655-4.444,11.305,11.305,0,0,1,4.106-2.882,14.008,14.008,0,0,1,5.308-.96,12.823,12.823,0,0,1,8.171,2.561,10.6,10.6,0,0,1,3.844,6.9l.007.045h-4.207l-.006-.031a6.883,6.883,0,0,0-2.669-4.256,8.345,8.345,0,0,0-5.1-1.569,7.9,7.9,0,0,0-6.352,2.8,13.13,13.13,0,0,0,0,15.116,8.121,8.121,0,0,0,6.427,2.8,8.455,8.455,0,0,0,5.867-2.167,7.351,7.351,0,0,0,2.5-5.413h-7.882V238.42Zm65.565-9.007v7.768h13.317v3.42H362.719v8.256h15.054v3.683h-19.15V225.731h19.15v3.683Zm-8.191-3.683V252.54h-3.945V231.266c-.507,1.493-1.187,3.344-2.026,5.518L342.5,252.54H339.07l-.01-.025-6.119-15.73c-.728-1.942-1.4-3.767-1.989-5.442v21.2h-3.945V225.731h5.622l5.491,14.253c1.1,2.887,2.01,5.388,2.7,7.437.813-2.435,1.735-5.062,2.741-7.811l5.3-13.879Zm51.668,2.282a9.53,9.53,0,0,0-6.784-2.282H388V252.54h4.1v-9.874h7.319a9.53,9.53,0,0,0,6.784-2.282,9.129,9.129,0,0,0,0-12.371Zm-14.1,1.325h7.244a5.266,5.266,0,0,1,3.8,1.265,4.828,4.828,0,0,1,1.3,3.613,4.764,4.764,0,0,1-1.3,3.594,5.315,5.315,0,0,1-3.8,1.247h-7.244ZM453.955,245.1a7.076,7.076,0,0,1-2.774,5.888c-1.838,1.425-4.416,2.148-7.664,2.148-3.522,0-6.3-.811-8.265-2.412a8.7,8.7,0,0,1-3-7.05v-.04h4.1v.039a5.635,5.635,0,0,0,1.863,4.475,8.338,8.338,0,0,0,5.381,1.493,7.746,7.746,0,0,0,4.538-1.138,3.814,3.814,0,0,0,1.579-3.291,3.143,3.143,0,0,0-1.3-2.69,13.578,13.578,0,0,0-4.715-1.7l-2.29-.488a13.2,13.2,0,0,1-6.25-2.712,6.655,6.655,0,0,1-2.115-5.21,6.388,6.388,0,0,1,2.568-5.306,11.111,11.111,0,0,1,6.932-1.979c3.5,0,6.164.761,7.928,2.262a7.985,7.985,0,0,1,2.735,6.224v.04h-4.056l0-.036a5.082,5.082,0,0,0-1.693-3.783c-1-.8-2.642-1.212-4.874-1.212a6.945,6.945,0,0,0-3.994.969,3.169,3.169,0,0,0-1.372,2.746,3.244,3.244,0,0,0,1.223,2.747,11.45,11.45,0,0,0,4.565,1.72l2.327.488c3.046.649,5.269,1.6,6.607,2.825A6.456,6.456,0,0,1,453.955,245.1Zm23.846,0a7.076,7.076,0,0,1-2.774,5.888c-1.838,1.425-4.416,2.148-7.664,2.148-3.522,0-6.3-.811-8.265-2.412a8.7,8.7,0,0,1-3-7.05v-.04h4.1v.039a5.634,5.634,0,0,0,1.863,4.475,8.338,8.338,0,0,0,5.381,1.493,7.745,7.745,0,0,0,4.538-1.138,3.814,3.814,0,0,0,1.579-3.291,3.142,3.142,0,0,0-1.3-2.69,13.577,13.577,0,0,0-4.715-1.7l-2.29-.488a13.2,13.2,0,0,1-6.25-2.712,6.654,6.654,0,0,1-2.115-5.21,6.388,6.388,0,0,1,2.568-5.306,11.111,11.111,0,0,1,6.932-1.979c3.5,0,6.164.761,7.928,2.262a7.985,7.985,0,0,1,2.736,6.224v.04h-4.056l0-.036a5.083,5.083,0,0,0-1.694-3.783c-1-.8-2.642-1.212-4.875-1.212a6.944,6.944,0,0,0-3.994.969,3.169,3.169,0,0,0-1.372,2.746,3.244,3.244,0,0,0,1.223,2.747,11.449,11.449,0,0,0,4.565,1.72l2.327.488c3.046.649,5.269,1.6,6.607,2.825A6.456,6.456,0,0,1,477.8,245.1Zm-56.944-19.373h-4.632L405.757,252.54h4.252l2.59-6.945h11.882l2.59,6.945h4.252Zm-6.951,16.293,4.635-12.273,4.635,12.273Z" transform="translate(-216.172 -216.5)"/></svg>`,
+};
+
+function getPlatformBrands(platformStr) {
+  if (!platformStr) return [];
+  const s = String(platformStr).toLowerCase();
+  const brands = [];
+  if (s.includes("steam")) brands.push("steam");
+  if (s.includes("xbox")) brands.push("xbox");
+  if (s.includes("playstation") || s.includes("ps4") || s.includes("ps5")) brands.push("playstation");
+  if (s.includes("switch") || s.includes("nintendo")) brands.push("switch");
+  return brands;
+}
+
+function getGamePlatformBrands(game) {
+  if (!game) return [];
+  const brands = new Set();
+  if (Array.isArray(game.linked_games) && game.linked_games.length > 0) {
+    for (const lg of game.linked_games) {
+      for (const b of getPlatformBrands(lg.platform || lg.source)) {
+        brands.add(b);
+      }
+    }
+  } else {
+    for (const b of getPlatformBrands(game.platform || game.source)) {
+      brands.add(b);
+    }
+  }
+  return Array.from(brands);
+}
+
+function createPlatformBrandIconsSpan(gameOrPlatform, extraClass = "") {
+  const brands = typeof gameOrPlatform === "object" && gameOrPlatform !== null
+    ? getGamePlatformBrands(gameOrPlatform)
+    : getPlatformBrands(gameOrPlatform);
+  if (brands.length === 0) return null;
+  const span = document.createElement("span");
+  span.className = `platform-brand-icons ${extraClass}`.trim();
+  for (const b of brands) {
+    if (BRAND_ICONS[b]) {
+      const iconWrap = document.createElement("span");
+      iconWrap.className = `badge-brand-icon badge-brand-${b}`;
+      iconWrap.innerHTML = BRAND_ICONS[b];
+      span.appendChild(iconWrap);
+    }
+  }
+  return span;
+}
+
 function makeFallbackAchIcon(name) {
   const char = (name || "A").trim().charAt(0).toUpperCase() || "🏆";
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
@@ -420,11 +475,13 @@ function renderHabitsDashboard(data) {
     } else {
       for (const plat of data.platforms) {
         let pillClass = "system-pill-other";
+        let brandKey = "";
         const pLower = plat.name.toLowerCase();
-        if (pLower.includes("steam")) pillClass = "system-pill-steam";
-        else if (pLower.includes("xbox")) pillClass = "system-pill-xbox";
-        else if (pLower.includes("playstation")) pillClass = "system-pill-playstation";
-        else if (pLower.includes("switch")) pillClass = "system-pill-switch";
+        if (pLower.includes("steam")) { pillClass = "system-pill-steam"; brandKey = "steam"; }
+        else if (pLower.includes("xbox")) { pillClass = "system-pill-xbox"; brandKey = "xbox"; }
+        else if (pLower.includes("playstation")) { pillClass = "system-pill-playstation"; brandKey = "playstation"; }
+        else if (pLower.includes("switch")) { pillClass = "system-pill-switch"; brandKey = "switch"; }
+        const brandSvg = BRAND_ICONS[brandKey] || "";
 
         const card = document.createElement("div");
         card.className = `system-row-card ${state.platform === plat.name ? "active-filter" : ""}`;
@@ -444,7 +501,7 @@ function renderHabitsDashboard(data) {
         card.innerHTML = `
           <div class="system-row-header">
             <div class="system-title-group">
-              <span class="system-pill-badge ${pillClass}">${escapeHtml(plat.name)}</span>
+              <span class="system-pill-badge ${pillClass}">${brandSvg}<span>${escapeHtml(plat.name)}</span></span>
               <span class="system-hours-text">${plat.hours.toLocaleString()} hrs</span>
             </div>
             <span class="badge-subtle">${plat.completion_rate}% Finished</span>
@@ -660,7 +717,7 @@ function renderHabitsDashboard(data) {
           <div class="hof-card-body">
             <div class="hof-card-title">${escapeHtml(g.title)}</div>
             <div class="hof-card-meta">
-              <span class="system-pill-badge system-pill-other" style="font-size: 0.68rem; padding: 0.1rem 0.4rem;">${escapeHtml(g.platform)}</span>
+              <span class="system-pill-badge system-pill-other" style="font-size: 0.68rem; padding: 0.1rem 0.4rem;">${createPlatformBrandIconsSpan(g)?.outerHTML || ""}<span>${escapeHtml(g.platform)}</span></span>
               <span class="hof-hours-tag">${g.playtime_hours} hrs</span>
             </div>
           </div>
@@ -703,7 +760,7 @@ function renderHabitsDashboard(data) {
           <div class="hof-card-body">
             <div class="hof-card-title">${escapeHtml(g.title)}</div>
             <div class="hof-card-meta">
-              <span class="system-pill-badge system-pill-other" style="font-size: 0.68rem; padding: 0.1rem 0.4rem;">${escapeHtml(g.platform)}</span>
+              <span class="system-pill-badge system-pill-other" style="font-size: 0.68rem; padding: 0.1rem 0.4rem;">${createPlatformBrandIconsSpan(g)?.outerHTML || ""}<span>${escapeHtml(g.platform)}</span></span>
               <span style="color: var(--accent-amber); font-weight: 700;">${escapeHtml(g.completion_status)}</span>
             </div>
           </div>
@@ -1077,14 +1134,19 @@ function renderGames() {
 
     const platBadge = document.createElement("span");
     platBadge.className = "platform-badge";
-    platBadge.textContent = game.platform;
+    const brandIcons = createPlatformBrandIconsSpan(game);
+    if (brandIcons) platBadge.appendChild(brandIcons);
+    const platText = document.createElement("span");
+    platText.className = "platform-label-text";
+    platText.textContent = game.platform;
+    platBadge.appendChild(platText);
     wrapper.appendChild(platBadge);
 
     if (game.is_game_pass) {
       const gpBadge = document.createElement("span");
       gpBadge.className = "gamepass-badge";
-      gpBadge.textContent = "GP";
       gpBadge.title = "Currently available on Xbox Game Pass";
+      gpBadge.innerHTML = `${BRAND_ICONS.gamepass_logo}<span class="sr-only">Game Pass</span>`;
       wrapper.appendChild(gpBadge);
     }
 
@@ -1147,14 +1209,18 @@ function renderGames() {
 
     const listPlat = document.createElement("span");
     listPlat.className = "card-list-plat";
-    listPlat.textContent = game.platform;
+    const listBrandIcons = createPlatformBrandIconsSpan(game);
+    if (listBrandIcons) listPlat.appendChild(listBrandIcons);
+    const listPlatText = document.createElement("span");
+    listPlatText.textContent = game.platform;
+    listPlat.appendChild(listPlatText);
     subrow.appendChild(listPlat);
 
     if (game.is_game_pass) {
       const listGp = document.createElement("span");
       listGp.className = "card-list-gp";
-      listGp.textContent = "GP";
       listGp.title = "Currently on Game Pass";
+      listGp.innerHTML = `${BRAND_ICONS.gamepass} <span>GP</span>`;
       subrow.appendChild(listGp);
     }
 
@@ -1875,13 +1941,17 @@ function openEditModal(game) {
     badgesEl.innerHTML = "";
     const platBadge = document.createElement("span");
     platBadge.className = "edit-header-badge plat";
-    platBadge.textContent = game.platform;
+    const editBrands = createPlatformBrandIconsSpan(game);
+    if (editBrands) platBadge.appendChild(editBrands);
+    const platText = document.createElement("span");
+    platText.textContent = game.platform;
+    platBadge.appendChild(platText);
     badgesEl.appendChild(platBadge);
 
     if (game.is_game_pass) {
       const gpBadge = document.createElement("span");
       gpBadge.className = "edit-header-badge gp";
-      gpBadge.textContent = "On Game Pass";
+      gpBadge.innerHTML = `${BRAND_ICONS.gamepass} <span>On Game Pass</span>`;
       badgesEl.appendChild(gpBadge);
     }
 
@@ -2691,7 +2761,15 @@ function renderTriageCard() {
     preload.src = queue[idx + 1].cover_url;
   }
 
-  document.getElementById("triage-plat").textContent = game.platform;
+  const triagePlatEl = document.getElementById("triage-plat");
+  if (triagePlatEl) {
+    triagePlatEl.innerHTML = "";
+    const triageBrands = createPlatformBrandIconsSpan(game);
+    if (triageBrands) triagePlatEl.appendChild(triageBrands);
+    const platText = document.createElement("span");
+    platText.textContent = game.platform;
+    triagePlatEl.appendChild(platText);
+  }
   document.getElementById("triage-title").textContent = game.title;
 
   const metaParts = [game.source];
@@ -2715,7 +2793,7 @@ function renderTriageCard() {
   const gpBtn = document.getElementById("btn-triage-gamepass");
   if (gpBtn) {
     const isGp = Boolean(game.is_game_pass);
-    gpBtn.textContent = isGp ? "On GP" : "Off";
+    gpBtn.innerHTML = `${BRAND_ICONS.gamepass} <span>${isGp ? "On GP" : "Off"}</span>`;
     gpBtn.classList.toggle("active", isGp);
   }
 
