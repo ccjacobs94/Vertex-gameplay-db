@@ -4593,6 +4593,310 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   background: rgba(16, 185, 129, 0.15);
 }
 
+/* ==========================================================================
+   Onboarding Wizard & Platform Connection Testing Styles
+   ========================================================================== */
+
+.btn-connections {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.btn-connections-icon {
+  font-size: 1.05rem;
+}
+
+/* Empty Library Welcome Banner */
+.empty-library-welcome {
+  background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 2rem;
+  margin-bottom: 2rem;
+  box-shadow: var(--shadow-md);
+  text-align: center;
+}
+
+.welcome-banner-content {
+  max-width: 600px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.welcome-banner-icon {
+  font-size: 3rem;
+  line-height: 1;
+}
+
+.welcome-banner-text h3 {
+  margin: 0 0 0.5rem 0;
+  font-size: 1.4rem;
+  color: var(--text-primary);
+}
+
+.welcome-banner-text p {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Onboarding Dialog */
+.onboarding-modal {
+  inline-size: min(680px, 94dvw);
+}
+
+.onboarding-modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.wizard-stepper {
+  display: flex;
+  border-bottom: 1px solid var(--border-subtle);
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.wizard-step-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 0.5rem 0.85rem;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.wizard-step-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.wizard-step-btn.active {
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--accent-blue);
+  font-weight: 600;
+}
+
+.wizard-step-btn.completed {
+  color: #34d399;
+}
+
+.step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.75rem;
+}
+
+.wizard-step-btn.active .step-num {
+  background: var(--accent-blue);
+  color: #0f172a;
+  border-color: var(--accent-blue);
+  font-weight: bold;
+}
+
+.wizard-step-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+}
+
+.platform-connect-card {
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.platform-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.platform-card-header h3 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.card-desc {
+  margin: 0.2rem 0 0 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.sso-action-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.75rem;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: var(--radius-md);
+}
+
+.btn-steam-sso {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: #171a21;
+  color: #c7d5e0;
+  border: 1px solid #2a475e;
+  padding: 0.65rem 1.25rem;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: all var(--transition-fast);
+}
+
+.btn-steam-sso:hover {
+  background: #2a475e;
+  color: #ffffff;
+}
+
+.btn-steam-sso .brand-icon {
+  width: 18px;
+  height: 18px;
+}
+
+.or-divider {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.guidance-box {
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+}
+
+.guidance-box h4 {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.guidance-box ol {
+  margin: 0 0 0.75rem 1.25rem;
+  padding: 0;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.guidance-steps-buttons {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.verification-badge-card {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+}
+
+.verification-badge-card.success {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
+.verification-badge-card.error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #f87171;
+}
+
+.verification-badge-card.loading {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: var(--accent-blue);
+}
+
+.verification-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--border-subtle);
+}
+
+.ready-sync-card {
+  text-align: center;
+  align-items: center;
+  padding: 2rem 1.5rem;
+}
+
+.ready-sync-icon {
+  font-size: 2.75rem;
+}
+
+.connected-summary-list {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 1rem 0;
+}
+
+.connected-summary-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: 9999px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  font-size: 0.85rem;
+}
+
+.connected-summary-pill.active {
+  border-color: #34d399;
+  color: #34d399;
+}
+
+.wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.wizard-footer-right {
+  display: flex;
+  gap: 0.5rem;
+}
+
+
 
 
 

@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=23 and sw to v19
-        self.assertIn('href="/static/styles.css?v=23"', index_html)
-        self.assertIn('src="/static/app.js?v=23"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v19";', sw_js)
+        # Cache buster must be bumped to v=24 and sw to v20
+        self.assertIn('href="/static/styles.css?v=24"', index_html)
+        self.assertIn('src="/static/app.js?v=24"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v20";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -99,10 +99,19 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn('id="stab-account"', index_html)
         self.assertIn('onclick="window.switchSettingsTab && window.switchSettingsTab(\'stab-account\')"', index_html)
 
+        # Onboarding wizard & connected accounts integration
+        self.assertIn('id="onboarding-dialog"', index_html)
+        self.assertIn('id="btn-open-connections"', index_html)
+        self.assertIn('id="empty-library-welcome"', index_html)
+        self.assertIn('onclick="window.openConnectionsModal && window.openConnectionsModal()"', index_html)
+        self.assertIn('onclick="window.openOnboardingWizard && window.openOnboardingWizard()"', index_html)
+
         # JavaScript exports and safety
         self.assertIn("window.openSettingsModal = openSettingsModal;", app_js)
         self.assertIn("window.switchSettingsTab = switchSettingsTab;", app_js)
         self.assertIn("window.loadAccountInfo = loadAccountInfo;", app_js)
+        self.assertIn("window.openOnboardingWizard = openOnboardingWizard;", app_js)
+        self.assertIn("window.openConnectionsModal = openConnectionsModal;", app_js)
         self.assertIn("if (!dialog.open)", app_js)
 
 
