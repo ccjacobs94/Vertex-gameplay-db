@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 from starlette.middleware.base import BaseHTTPMiddleware
 
+import billing
 import mcp_server
 import passwords
 import signup
@@ -323,7 +324,32 @@ class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
         username = verify_web_session(session_id)
         if not username and is_local_bypass_enabled() and _is_direct_local_or_tailscale_request(request):
             username = get_auth_username()
-        user_id = system_db.get_user_id_by_username(username) if username else None
+        user = system_db.get_user_by_username(username) if username else None
+        user_id = user["id"] if user else None
+
+        if user and user.get("status") != "active":
+            if user.get("status_reason") in ("awaiting_payment", "subscription_lapsed"):
+                allowed = (
+                    path.startswith("/billing")
+                    or path.startswith("/static/")
+                    or path in ("/logout", "/manifest.webmanifest", "/sw.js")
+                )
+                if not allowed:
+                    if path.startswith("/api/"):
+                        return JSONResponse(
+                            {"error": "subscription_required", "detail": "Active subscription required"},
+                            status_code=402,
+                        )
+                    return RedirectResponse(url="/billing", status_code=303)
+            else:
+                if not is_public_path(path):
+                    if path.startswith("/api/"):
+                        return JSONResponse(
+                            {"error": "account_inactive", "detail": "Account is inactive or pending"},
+                            status_code=403,
+                        )
+                    return RedirectResponse(url="/login", status_code=303)
+
         user_ctx_token = set_current_user_id(user_id) if user_id else None
         if user_id:
             try:
@@ -499,6 +525,142 @@ async def signup_page(request: Request) -> Response:
 @app.post("/signup")
 async def signup_submit(request: Request) -> Response:
     return await signup.handle_signup_post(request)
+
+
+def _get_session_user(request: Request) -> Optional[Dict[str, Any]]:
+    session_id = request.cookies.get(SESSION_COOKIE_NAME)
+    username = verify_web_session(session_id)
+    if not username and is_local_bypass_enabled() and _is_direct_local_or_tailscale_request(request):
+        username = get_auth_username()
+    if not username:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+            from oauth_provider import verify_bearer_token
+            uid = verify_bearer_token(token)
+            if uid:
+                return system_db.get_user(uid)
+            expected = get_auth_password()
+            if expected and secrets.compare_digest(token, expected):
+                username = get_auth_username()
+    if not username:
+        return None
+    return system_db.get_user_by_username(username)
+
+
+def _require_hosted_edition() -> None:
+    edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
+    if edition != "hosted":
+        raise HTTPException(status_code=404, detail="Billing is only available on hosted edition")
+
+
+@app.get("/billing")
+async def billing_page(request: Request) -> Response:
+    _require_hosted_edition()
+    user = _get_session_user(request)
+    if not user:
+        return RedirectResponse(url="/login?next=%2Fbilling", status_code=303)
+    subscription = system_db.get_user_subscription(user["id"])
+    error_msg = request.query_params.get("error", "")
+    return billing.render_billing_page(user, subscription, error_msg=error_msg)
+
+
+@app.post("/billing/checkout")
+async def billing_checkout(request: Request) -> Response:
+    _require_hosted_edition()
+    user = _get_session_user(request)
+    if not user:
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return RedirectResponse(url="/login?next=%2Fbilling", status_code=303)
+
+    provider = billing.get_billing_provider()
+    base_url = str(request.base_url).rstrip("/")
+    return_url = f"{base_url}/billing"
+    try:
+        checkout_url = provider.create_checkout_url(user, return_url=return_url)
+    except billing.BillingNotConfiguredError as exc:
+        logger.error("Checkout failed: %s", exc)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"error": "billing_not_configured", "detail": str(exc)}, status_code=503)
+        return billing.render_billing_page(
+            user, system_db.get_user_subscription(user["id"]), error_msg=str(exc)
+        )
+    except Exception as exc:
+        logger.error("Checkout creation error: %s", exc)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"error": "checkout_error", "detail": str(exc)}, status_code=500)
+        return billing.render_billing_page(
+            user,
+            system_db.get_user_subscription(user["id"]),
+            error_msg=f"Could not initialize checkout: {exc}",
+        )
+
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"url": checkout_url})
+    return RedirectResponse(url=checkout_url, status_code=303)
+
+
+@app.post("/billing/portal")
+async def billing_portal(request: Request) -> Response:
+    _require_hosted_edition()
+    user = _get_session_user(request)
+    if not user:
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return RedirectResponse(url="/login?next=%2Fbilling", status_code=303)
+
+    provider = billing.get_billing_provider()
+    base_url = str(request.base_url).rstrip("/")
+    return_url = f"{base_url}/billing"
+    try:
+        portal_url = provider.create_portal_url(user, return_url=return_url)
+    except billing.BillingNotConfiguredError as exc:
+        logger.error("Portal failed: %s", exc)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"error": "billing_not_configured", "detail": str(exc)}, status_code=503)
+        return billing.render_billing_page(
+            user, system_db.get_user_subscription(user["id"]), error_msg=str(exc)
+        )
+    except Exception as exc:
+        logger.error("Portal creation error: %s", exc)
+        if "application/json" in request.headers.get("accept", ""):
+            return JSONResponse({"error": "portal_error", "detail": str(exc)}, status_code=500)
+        return billing.render_billing_page(
+            user,
+            system_db.get_user_subscription(user["id"]),
+            error_msg=f"Could not open billing portal: {exc}",
+        )
+
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse({"url": portal_url})
+    return RedirectResponse(url=portal_url, status_code=303)
+
+
+@app.post("/billing/webhook")
+async def billing_webhook(request: Request) -> Response:
+    payload = await request.body()
+    signature_header = request.headers.get("stripe-signature", "")
+    provider = billing.get_billing_provider()
+    try:
+        event = provider.verify_and_parse_webhook(payload, signature_header)
+    except billing.BillingNotConfiguredError as exc:
+        logger.warning("Billing webhook rejected: billing not configured (%s)", exc)
+        return JSONResponse({"error": "billing_not_configured"}, status_code=503)
+    except Exception as exc:
+        logger.error("Billing webhook signature error: %s", exc)
+        return JSONResponse({"error": "invalid_payload"}, status_code=400)
+
+    if event is None:
+        return JSONResponse({"error": "invalid_signature"}, status_code=400)
+
+    try:
+        billing.apply_billing_event(event)
+    except Exception as exc:
+        logger.error("Failed to apply billing event %s: %s", event.event_id, exc)
+        return JSONResponse({"error": "processing_failed", "detail": str(exc)}, status_code=500)
+
+    return JSONResponse({"received": True, "event_id": event.event_id})
 
 
 
@@ -902,6 +1064,8 @@ async def api_admin_update_user(
                 reason=payload.status_reason,
                 actor_id=actor_id,
             )
+            if payload.status != "active":
+                web_auth.revoke_sessions_for_username(target["username"])
         if payload.role is not None:
             system_db.set_user_role(target_user_id, payload.role, actor_id=actor_id)
     except ValueError as ve:

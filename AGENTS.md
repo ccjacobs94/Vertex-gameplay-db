@@ -27,6 +27,7 @@ Game Hub is a self-hosted, multi-platform game library tracker and MCP server ru
   ```
 - **Preserve User Edits**: When modifying `db.py` or `sync_engine.py`, never overwrite a game's `completion_status` during automated syncs if `status_locked = 1`, never overwrite `ownership_status` on existing games during automated syncs (it is self-reported by the user, while `is_game_pass` is an independent catalog availability field tracked by sync), and never overwrite `user_rating`, `notes`, or `favorite`.
 - **Genres & Tags**: Genres are broad categories, tags are mechanics/modes/themes (see `taxonomy.py`). Enrichment and syncs merge, never replace: discovered genres/tags are added to the existing lists, existing entries are never dropped. The `update_game_genres` MCP tool defaults to merge mode for the same reason. Labels outside the controlled taxonomy are ignored, never written silently.
+- **Account Lifecycles & Billing Protection**: User accounts support `active`, `pending` (`awaiting_approval`, `awaiting_payment`), and `inactive` (`admin_suspended`, `subscription_lapsed`). Automated billing webhooks or self-service activations MUST NEVER override an `admin_suspended` state. Inactive and awaiting-payment users are blocked from library/analytics APIs and MCP tokens, but users with `awaiting_payment` or `subscription_lapsed` are granted billing-only sessions restricted to `/billing` to initiate checkout or manage payment methods.
 
 ---
 

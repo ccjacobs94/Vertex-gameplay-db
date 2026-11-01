@@ -31,6 +31,7 @@ PUBLIC_PATH_PREFIXES = (
     "/login",
     "/logout",
     "/signup",
+    "/billing/webhook",
     "/manifest.webmanifest",
     "/sw.js",
     "/static/icons/",
@@ -156,7 +157,7 @@ def verify_web_session(session_id: Optional[str]) -> Optional[str]:
         with system_db.get_system_connection() as conn:
             row = conn.execute(
                 """
-                SELECT ws.session_id, ws.user_id, ws.username, ws.expires_at, u.username as u_username, u.status
+                SELECT ws.session_id, ws.user_id, ws.username, ws.expires_at, u.username as u_username, u.status, u.status_reason
                 FROM web_sessions ws
                 LEFT JOIN users u ON ws.user_id = u.id
                 WHERE ws.session_id = ?
@@ -167,11 +168,13 @@ def verify_web_session(session_id: Optional[str]) -> Optional[str]:
                 if row["expires_at"] < now:
                     conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
                     return None
-                # Non-active user sessions are rejected and pruned immediately
+                # Allow billing-only sessions for awaiting_payment and subscription_lapsed
                 if row["status"] and row["status"] != "active":
-                    conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
-                    return None
+                    if row["status_reason"] not in ("awaiting_payment", "subscription_lapsed"):
+                        conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+                        return None
                 return str(row["u_username"] or row["username"])
+
     except Exception:
         pass
 
@@ -190,11 +193,12 @@ def verify_web_session(session_id: Optional[str]) -> Optional[str]:
                 conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
                 return None
             username = str(row["username"])
-            # Ensure user status in system_db is active
+            # Ensure user status in system_db is active (or billing-only)
             user = system_db.get_user_by_username(username)
             if user and user.get("status") != "active":
-                conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
-                return None
+                if user.get("status_reason") not in ("awaiting_payment", "subscription_lapsed"):
+                    conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+                    return None
             return username
     except Exception:
         return None
@@ -594,6 +598,29 @@ async def handle_login_post(request: Request) -> Response:
         )
 
     if user.get("status") != "active":
+        if user.get("status_reason") in ("awaiting_payment", "subscription_lapsed"):
+            system_db.record_login(user["id"])
+            session_id = create_web_session(
+                username=user["username"],
+                user_agent=request.headers.get("user-agent", ""),
+            )
+            response = RedirectResponse(url="/billing", status_code=303)
+            response.set_cookie(
+                key=SESSION_COOKIE_NAME,
+                value=session_id,
+                max_age=SESSION_MAX_AGE_SECONDS,
+                httponly=True,
+                secure=_is_https_request(request),
+                samesite="lax",
+                path="/",
+            )
+            logger.info(
+                "Billing-only web login for subscriber=%r (reason=%s)",
+                user["username"],
+                user.get("status_reason"),
+            )
+            return response
+
         logger.warning(
             "Login rejected for non-active user=%r (status=%s, reason=%s)",
             user["username"],
@@ -605,6 +632,7 @@ async def handle_login_post(request: Request) -> Response:
             error_msg="This account is not active. Contact your administrator.",
             default_username=username,
         )
+
 
     system_db.record_login(user["id"])
 
