@@ -34,6 +34,33 @@ from sync_engine import enrich_missing_metadata, sync_game_achievements_on_deman
 
 init_db()
 
+# Keys that may carry credentials or internal diagnostics; never exposed to AI clients.
+_SENSITIVE_KEY_PARTS = (
+    "token", "secret", "password", "passwd", "api_key", "apikey", "npsso",
+    "credential", "authorization", "cookie",
+)
+
+
+def _sanitize_output(value: Any) -> Any:
+    """Recursively drop credential-like keys and internal sync-log messages from tool output."""
+    if isinstance(value, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, val in value.items():
+            if any(part in str(key).lower() for part in _SENSITIVE_KEY_PARTS):
+                continue
+            if key == "last_syncs" and isinstance(val, list):
+                # Keep status metadata only; sync_logs.message holds raw internal log/error text.
+                val = [
+                    {k: v for k, v in row.items() if k != "message"} if isinstance(row, dict) else row
+                    for row in val
+                ]
+            cleaned[key] = _sanitize_output(val)
+        return cleaned
+    if isinstance(value, list):
+        return [_sanitize_output(v) for v in value]
+    return value
+
+
 mcp = FastMCP("GameHub-Library-Assistant")
 
 
@@ -44,7 +71,7 @@ def get_gaming_profile_and_metrics() -> Dict[str, Any]:
     completion status breakdown, top genres, top 10 most-played games, and recently played titles.
     Use this first to understand the user's gaming habits and history.
     """
-    return get_library_stats()
+    return _sanitize_output(get_library_stats())
 
 
 @mcp.tool()
@@ -491,7 +518,7 @@ async def enrich_library_genres(limit: int = 500, force: bool = False) -> Dict[s
     Merge, never replace: discovered genres are added to a game's
     existing genres; existing genres are never dropped, even with force=True.
     """
-    return await enrich_missing_metadata(limit=limit, force=force)
+    return _sanitize_output(await enrich_missing_metadata(limit=limit, force=force))
 
 
 @mcp.tool()
@@ -508,7 +535,7 @@ async def get_game_achievements_detail(title: str) -> Dict[str, Any]:
     res["game_title"] = target["title"]
     res["game_id"] = target["id"]
     res["platform"] = target["platform"]
-    return res
+    return _sanitize_output(res)
 
 
 @mcp.tool()
