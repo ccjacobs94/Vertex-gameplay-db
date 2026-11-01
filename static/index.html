@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=21">
+  <link rel="stylesheet" href="/static/styles.css?v=22">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -48,7 +48,7 @@
         <button type="button" id="btn-sync" class="btn btn-secondary">
           Sync Libraries
         </button>
-        <button type="button" id="btn-open-settings" class="btn btn-secondary btn-settings" title="Settings &amp; Connections">
+        <button type="button" id="btn-open-settings" class="btn btn-secondary btn-settings" title="Settings &amp; Connections" onclick="window.openSettingsModal && window.openSettingsModal()">
           <span class="btn-settings-icon" aria-hidden="true">⚙️</span>
           <span class="btn-settings-label">Settings</span>
         </button>
@@ -876,7 +876,7 @@
           <h2 id="settings-modal-title">⚙️ Settings &amp; Connections</h2>
           <p class="modal-subtitle">Platform integrations, MCP AI agents, and personal library backup</p>
         </div>
-        <button type="button" id="btn-close-settings" class="btn-icon" aria-label="Close modal">✕</button>
+        <button type="button" id="btn-close-settings" class="btn-icon" aria-label="Close modal" onclick="document.getElementById('settings-dialog') &amp;&amp; document.getElementById('settings-dialog').close()">✕</button>
       </header>
 
       <div class="settings-tabs-bar" role="tablist">
@@ -1002,7 +1002,7 @@
       </section>
 
       <footer class="modal-footer">
-        <button type="button" id="btn-close-settings-footer" class="btn btn-secondary">Done</button>
+        <button type="button" id="btn-close-settings-footer" class="btn btn-secondary" onclick="document.getElementById('settings-dialog') &amp;&amp; document.getElementById('settings-dialog').close()">Done</button>
       </footer>
     </div>
   </dialog>
@@ -1190,6 +1190,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=21"></script>
+  <script src="/static/app.js?v=22"></script>
 </body>
 </html>

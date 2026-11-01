@@ -60,7 +60,7 @@ body {
 .site-header {
   background-color: var(--bg-surface);
   border-block-end: 1px solid var(--border-subtle);
-  padding-block: 0.85rem;
+  padding-block: 1rem;
   padding-inline: 1.5rem;
   position: sticky;
   inset-block-start: 0;
@@ -129,14 +129,14 @@ body {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 0.55rem;
+  gap: 0.65rem;
   flex-shrink: 0;
 }
 
 .header-actions .btn {
-  padding-block: 0.45rem;
-  padding-inline: 0.85rem;
-  font-size: 0.88rem;
+  padding-block: 0.55rem;
+  padding-inline: 0.95rem;
+  font-size: 0.9rem;
   white-space: nowrap;
 }
 
