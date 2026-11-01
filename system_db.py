@@ -4,10 +4,17 @@ Stores accounts, encrypted platform credentials, web sessions, OAuth tokens,
 and the shared cross-user game catalog metadata cache.
 """
 
+import hashlib
 import os
+import re
+import secrets
 import sqlite3
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import passwords
 
 DEFAULT_SYSTEM_DB_PATH = (
     os.environ.get("VERTEX_SYSTEM_DB_PATH")
@@ -16,8 +23,9 @@ DEFAULT_SYSTEM_DB_PATH = (
 )
 
 
-def get_system_connection(db_path: str = DEFAULT_SYSTEM_DB_PATH) -> sqlite3.Connection:
-    path = Path(db_path)
+def get_system_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
+    target = db_path or DEFAULT_SYSTEM_DB_PATH
+    path = Path(target)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=15.0)
     conn.row_factory = sqlite3.Row
@@ -26,8 +34,9 @@ def get_system_connection(db_path: str = DEFAULT_SYSTEM_DB_PATH) -> sqlite3.Conn
     return conn
 
 
-def init_system_db(db_path: str = DEFAULT_SYSTEM_DB_PATH) -> None:
-    with get_system_connection(db_path) as conn:
+def init_system_db(db_path: Optional[str] = None) -> None:
+    target = db_path or DEFAULT_SYSTEM_DB_PATH
+    with get_system_connection(target) as conn:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -89,6 +98,76 @@ def init_system_db(db_path: str = DEFAULT_SYSTEM_DB_PATH) -> None:
             conn.execute("ALTER TABLE oauth_tokens ADD COLUMN scope TEXT DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_id ON oauth_tokens(user_id)")
 
+        # Additive migrations for users table (account lifecycle & roles)
+        user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+        if "status" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+        if "status_reason" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN status_reason TEXT")
+        if "role" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+        if "updated_at" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
+        if "last_login_at" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+
+        # Additive migration for web_sessions table
+        sess_cols = {r["name"] for r in conn.execute("PRAGMA table_info(web_sessions)")}
+        if "username" not in sess_cols:
+            conn.execute("ALTER TABLE web_sessions ADD COLUMN username TEXT")
+
+        # New tables for account auditing and instance settings
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS account_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                actor_id TEXT,
+                event TEXT NOT NULL,
+                detail TEXT DEFAULT '',
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_account_events_user ON account_events(user_id);
+
+            CREATE TABLE IF NOT EXISTS instance_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS invites (
+                code_hash TEXT PRIMARY KEY,
+                created_by TEXT NOT NULL,
+                note TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                used_by TEXT,
+                used_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_invites_used ON invites(used_by);
+
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                customer_id TEXT,
+                subscription_id TEXT,
+                status TEXT NOT NULL,
+                current_period_end TEXT,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_subscriptions_customer ON subscriptions(customer_id);
+
+            CREATE TABLE IF NOT EXISTS billing_events_seen (
+                event_id TEXT PRIMARY KEY,
+                received_at TEXT NOT NULL
+            );
+            """
+        )
+
+
+
+
 
 def get_user_id_by_username(username: str, db_path: Optional[str] = None) -> Optional[str]:
     if not username:
@@ -97,9 +176,309 @@ def get_user_id_by_username(username: str, db_path: Optional[str] = None) -> Opt
     init_system_db(target_path)
     with get_system_connection(target_path) as conn:
         row = conn.execute(
-            "SELECT id FROM users WHERE LOWER(username) = LOWER(?)", (username,)
+            "SELECT id FROM users WHERE LOWER(username) = LOWER(?)", (username.strip(),)
         ).fetchone()
         return str(row["id"]) if row else None
+
+
+def get_user(user_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not user_id:
+        return None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_username(username: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not username:
+        return None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (username.strip(),)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def validate_username(username: str) -> None:
+    """Validate username syntax for safety and directory name compatibility."""
+    if not username:
+        raise ValueError("Username cannot be empty")
+    cleaned = username.strip()
+    if len(cleaned) < 3 or len(cleaned) > 32:
+        raise ValueError("Username must be between 3 and 32 characters long")
+    if not re.match(r"^[a-zA-Z0-9_.-]+$", cleaned):
+        raise ValueError(
+            "Username can only contain alphanumeric characters, underscores, hyphens, and periods"
+        )
+    if ".." in cleaned or cleaned.startswith(".") or cleaned.startswith("-"):
+        raise ValueError("Invalid username format")
+
+
+def create_user(
+    username: str,
+    password: str,
+    email: Optional[str] = None,
+    role: str = "user",
+    status: str = "active",
+    status_reason: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> str:
+    validate_username(username)
+    if role not in ("admin", "user"):
+        raise ValueError(f"Invalid role: {role}")
+    if status not in ("active", "pending", "inactive"):
+        raise ValueError(f"Invalid status: {status}")
+
+    pw_err = passwords.validate_password_policy(password)
+    if pw_err:
+        raise ValueError(pw_err)
+
+    clean_user = username.strip()
+    clean_id = clean_user.lower()
+    clean_email = email.strip() if email else None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+
+    hashed = passwords.hash_password(password)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with get_system_connection(target_path) as conn:
+        existing = conn.execute(
+            "SELECT id FROM users WHERE LOWER(username) = LOWER(?)", (clean_user,)
+        ).fetchone()
+        if existing:
+            raise ValueError(f"Username '{clean_user}' is already taken")
+
+        conn.execute(
+            """
+            INSERT INTO users (id, username, email, password_hash, role, status, status_reason, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (clean_id, clean_user, clean_email, hashed, role, status, status_reason, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO account_events (user_id, actor_id, event, detail, created_at)
+            VALUES (?, ?, 'user_created', ?, ?)
+            """,
+            (clean_id, actor_id, f"role={role},status={status}", now),
+        )
+
+    # Initialize the user's personal games.db so it's ready for immediate use
+    try:
+        import db as gdb
+        user_db_file = Path(gdb.USERS_DB_DIR) / clean_id / "games.db"
+        gdb.init_db(str(user_db_file))
+    except Exception:
+        pass
+
+    return clean_id
+
+
+def set_user_password(
+    user_id: str,
+    password: str,
+    actor_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> None:
+    pw_err = passwords.validate_password_policy(password)
+    if pw_err:
+        raise ValueError(pw_err)
+
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    hashed = passwords.hash_password(password)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with get_system_connection(target_path) as conn:
+        res = conn.execute(
+            "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+            (hashed, now, user_id),
+        )
+        if res.rowcount == 0:
+            raise ValueError(f"User '{user_id}' not found")
+        conn.execute(
+            """
+            INSERT INTO account_events (user_id, actor_id, event, detail, created_at)
+            VALUES (?, ?, 'password_changed', '', ?)
+            """,
+            (user_id, actor_id, now),
+        )
+
+
+def set_user_status(
+    user_id: str,
+    status: str,
+    reason: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> None:
+    if status not in ("active", "pending", "inactive"):
+        raise ValueError(f"Invalid status: {status}")
+
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with get_system_connection(target_path) as conn:
+        user = conn.execute("SELECT id, role, status FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not user:
+            raise ValueError(f"User '{user_id}' not found")
+
+        # Guardrails: cannot deactivate last admin or self
+        if status != "active" and user["role"] == "admin" and user["status"] == "active":
+            admins_count = conn.execute(
+                "SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND status = 'active'"
+            ).fetchone()["c"]
+            if admins_count <= 1:
+                raise ValueError("Cannot deactivate the last active admin")
+
+        if actor_id and actor_id == user_id and status != "active":
+            raise ValueError("Cannot deactivate your own account")
+
+        conn.execute(
+            "UPDATE users SET status = ?, status_reason = ?, updated_at = ? WHERE id = ?",
+            (status, reason, now, user_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO account_events (user_id, actor_id, event, detail, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, actor_id, f"status_{status}", reason or "", now),
+        )
+
+        # On deactivation: revoke web sessions and OAuth/PAT tokens
+        if status != "active":
+            conn.execute("DELETE FROM web_sessions WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM oauth_tokens WHERE user_id = ?", (user_id,))
+
+
+def set_user_role(
+    user_id: str,
+    role: str,
+    actor_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> None:
+    if role not in ("admin", "user"):
+        raise ValueError(f"Invalid role: {role}")
+
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now = datetime.now(timezone.utc).isoformat()
+
+    with get_system_connection(target_path) as conn:
+        user = conn.execute("SELECT id, role, status FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not user:
+            raise ValueError(f"User '{user_id}' not found")
+
+        # Guardrail: cannot demote last active admin
+        if user["role"] == "admin" and role != "admin" and user["status"] == "active":
+            admins_count = conn.execute(
+                "SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND status = 'active'"
+            ).fetchone()["c"]
+            if admins_count <= 1:
+                raise ValueError("Cannot demote the last active admin")
+
+        conn.execute("UPDATE users SET role = ?, updated_at = ? WHERE id = ?", (role, now, user_id))
+        conn.execute(
+            """
+            INSERT INTO account_events (user_id, actor_id, event, detail, created_at)
+            VALUES (?, ?, ?, '', ?)
+            """,
+            (user_id, actor_id, f"role_{role}", now),
+        )
+
+
+def count_active_users(db_path: Optional[str] = None) -> int:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute("SELECT COUNT(*) as c FROM users WHERE status = 'active'").fetchone()
+        return int(row["c"]) if row else 0
+
+
+def count_active_admins(db_path: Optional[str] = None) -> int:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND status = 'active'"
+        ).fetchone()
+        return int(row["c"]) if row else 0
+
+
+def list_users(status: Optional[str] = None, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        if status:
+            rows = conn.execute(
+                """
+                SELECT id, username, email, role, status, status_reason, created_at, updated_at, last_login_at
+                FROM users WHERE status = ? ORDER BY created_at ASC
+                """,
+                (status,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id, username, email, role, status, status_reason, created_at, updated_at, last_login_at
+                FROM users ORDER BY created_at ASC
+                """
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def record_login(user_id: str, db_path: Optional[str] = None) -> None:
+    if not user_id:
+        return
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (now, user_id))
+
+
+def get_setting(key: str, default: Optional[str] = None, db_path: Optional[str] = None) -> Optional[str]:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute("SELECT value FROM instance_settings WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row else default
+
+
+def set_setting(key: str, value: str, db_path: Optional[str] = None) -> None:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO instance_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+            """,
+            (key, str(value), now),
+        )
+
+
+def ensure_bootstrap_admin(username: str, db_path: Optional[str] = None) -> str:
+    """Ensure bootstrap user exists and has role='admin' and status='active'."""
+    clean_user = (username or "chameleon94").strip()
+    uid = ensure_user(clean_user, db_path=db_path)
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            "UPDATE users SET role = 'admin', status = 'active' WHERE id = ?",
+            (uid,),
+        )
+    return uid
 
 
 def get_username_by_user_id(user_id: str, db_path: Optional[str] = None) -> Optional[str]:
@@ -146,6 +525,22 @@ def ensure_user(
             (assigned_id, username.strip(), email, password_hash, now),
         )
         return assigned_id
+
+
+def list_active_user_ids(db_path: Optional[str] = None) -> List[str]:
+    """Return all user IDs that are active. In instances before status columns, returns all user IDs."""
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)")}
+        if "status" in cols:
+            rows = conn.execute(
+                "SELECT id FROM users WHERE status = 'active' ORDER BY created_at ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT id FROM users ORDER BY created_at ASC").fetchall()
+        return [str(r["id"]) for r in rows]
+
 
 
 def get_catalog_cache_entry(
@@ -334,5 +729,199 @@ def revoke_oauth_token(user_id: str, token: str, db_path: Optional[str] = None) 
             (user_id, token),
         )
         return cur.rowcount > 0
+
+
+def get_registration_policy(db_path: Optional[str] = None) -> str:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    val = get_setting(
+        "registration_policy", os.environ.get("VERTEX_REGISTRATION", "disabled"), db_path=target_path
+    )
+    val = (val or "disabled").strip().lower()
+    return val if val in ("disabled", "invite", "approval", "open") else "disabled"
+
+
+def set_registration_policy(policy: str, db_path: Optional[str] = None) -> None:
+    pol = (policy or "").strip().lower()
+    if pol not in ("disabled", "invite", "approval", "open"):
+        raise ValueError(f"Invalid registration policy: {policy}")
+    set_setting("registration_policy", pol, db_path=db_path)
+
+
+def create_invite(
+    created_by: str,
+    note: str = "",
+    ttl_days: int = 7,
+    db_path: Optional[str] = None,
+) -> str:
+    if not created_by:
+        raise ValueError("created_by is required")
+    code = secrets.token_urlsafe(16)
+    code_hash = hashlib.sha256(code.encode("ascii")).hexdigest()
+    now_dt = datetime.now(timezone.utc)
+    now_str = now_dt.isoformat()
+    expires_dt = now_dt + timedelta(days=ttl_days) if ttl_days > 0 else None
+    expires_str = expires_dt.isoformat() if expires_dt else None
+
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO invites (code_hash, created_by, note, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (code_hash, created_by, (note or "").strip(), now_str, expires_str),
+        )
+    return code
+
+
+def list_invites(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now_str = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT code_hash, created_by, note, created_at, expires_at, used_by, used_at
+            FROM invites ORDER BY created_at DESC
+            """
+        ).fetchall()
+        result = []
+        for r in rows:
+            is_used = bool(r["used_by"])
+            is_expired = bool(r["expires_at"] and r["expires_at"] < now_str)
+            status = "used" if is_used else ("expired" if is_expired else "active")
+            result.append(
+                {
+                    "code_hash": r["code_hash"],
+                    "code_preview": f"{r['code_hash'][:8]}...",
+                    "created_by": r["created_by"],
+                    "note": r["note"] or "",
+                    "created_at": r["created_at"],
+                    "expires_at": r["expires_at"],
+                    "used_by": r["used_by"],
+                    "used_at": r["used_at"],
+                    "status": status,
+                }
+            )
+        return result
+
+
+def revoke_invite(code_hash: str, db_path: Optional[str] = None) -> bool:
+    if not code_hash:
+        return False
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM invites WHERE code_hash = ? AND used_by IS NULL", (code_hash,)
+        )
+        return cur.rowcount > 0
+
+
+def consume_invite(code: str, user_id: str, db_path: Optional[str] = None) -> bool:
+    if not code or not user_id:
+        return False
+    code_hash = hashlib.sha256(code.strip().encode("ascii")).hexdigest()
+    now_str = datetime.now(timezone.utc).isoformat()
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        cur = conn.execute(
+            """
+            UPDATE invites
+            SET used_by = ?, used_at = ?
+            WHERE code_hash = ?
+              AND used_by IS NULL
+              AND (expires_at IS NULL OR expires_at > ?)
+            """,
+            (user_id, now_str, code_hash, now_str),
+        )
+        return cur.rowcount > 0
+
+
+def get_user_subscription(user_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not user_id:
+        return None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute("SELECT * FROM subscriptions WHERE user_id = ?", (user_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_user_by_customer_id(customer_id: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if not customer_id:
+        return None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            """
+            SELECT u.* FROM users u
+            JOIN subscriptions s ON u.id = s.user_id
+            WHERE s.customer_id = ?
+            """,
+            (customer_id,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_user_subscription(
+    user_id: str,
+    provider: str,
+    status: str,
+    customer_id: Optional[str] = None,
+    subscription_id: Optional[str] = None,
+    current_period_end: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> None:
+    if not user_id:
+        raise ValueError("user_id is required")
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO subscriptions (user_id, provider, customer_id, subscription_id, status, current_period_end, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                provider = excluded.provider,
+                customer_id = COALESCE(excluded.customer_id, subscriptions.customer_id),
+                subscription_id = COALESCE(excluded.subscription_id, subscriptions.subscription_id),
+                status = excluded.status,
+                current_period_end = COALESCE(excluded.current_period_end, subscriptions.current_period_end),
+                updated_at = excluded.updated_at
+            """,
+            (user_id, provider, customer_id, subscription_id, status, current_period_end, now),
+        )
+
+
+def is_billing_event_seen(event_id: str, db_path: Optional[str] = None) -> bool:
+    if not event_id:
+        return False
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM billing_events_seen WHERE event_id = ?", (event_id,)
+        ).fetchone()
+        return bool(row)
+
+
+def record_billing_event_seen(event_id: str, db_path: Optional[str] = None) -> None:
+    if not event_id:
+        return
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO billing_events_seen (event_id, received_at) VALUES (?, ?)",
+            (event_id, now),
+        )
+
+
 
 

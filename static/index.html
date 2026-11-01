@@ -881,13 +881,19 @@
 
       <div class="settings-tabs-bar" role="tablist">
         <button type="button" class="settings-tab-btn active" role="tab" id="stab-connections" aria-selected="true" aria-controls="ssection-connections">
-          🔌 Platform Connections
+          🔌 Connections
         </button>
         <button type="button" class="settings-tab-btn" role="tab" id="stab-mcp" aria-selected="false" aria-controls="ssection-mcp">
-          🤖 MCP Server &amp; Tokens
+          🤖 MCP &amp; Tokens
         </button>
         <button type="button" class="settings-tab-btn" role="tab" id="stab-portability" aria-selected="false" aria-controls="ssection-portability">
-          💾 Library Portability
+          💾 Portability
+        </button>
+        <button type="button" class="settings-tab-btn" role="tab" id="stab-account" aria-selected="false" aria-controls="ssection-account">
+          👤 Account
+        </button>
+        <button type="button" class="settings-tab-btn" role="tab" id="stab-admin-users" aria-selected="false" aria-controls="ssection-admin-users" hidden>
+          👥 Users
         </button>
       </div>
 
@@ -999,6 +1005,175 @@
         </div>
 
         <div id="import-status-banner" class="import-status-banner" aria-live="polite" hidden></div>
+      </section>
+
+      <!-- Section 4: Account & Security -->
+      <section id="ssection-account" class="settings-tab-panel" role="tabpanel" aria-labelledby="stab-account" hidden>
+        <p class="settings-panel-desc">
+          Manage your personal account credentials and security settings.
+        </p>
+
+        <div class="account-summary-card">
+          <div class="account-info-line">
+            <span class="account-label">Signed in as:</span>
+            <strong id="account-display-username" class="account-value">—</strong>
+            <span id="account-display-role" class="badge-role badge-role-user">User</span>
+            <span id="account-display-status" class="badge-status badge-status-active">Active</span>
+          </div>
+        </div>
+
+        <form id="form-change-password" class="settings-form" onsubmit="return false;">
+          <h4 style="margin: 1.25rem 0 0.5rem 0; font-size: 0.98rem;">Change Password</h4>
+          <div class="form-group">
+            <label for="input-current-password">Current Password</label>
+            <input type="password" id="input-current-password" placeholder="Enter current password" autocomplete="current-password" required />
+          </div>
+          <div class="form-group">
+            <label for="input-new-password">New Password</label>
+            <input type="password" id="input-new-password" placeholder="Minimum 8 characters" autocomplete="new-password" minlength="8" required />
+          </div>
+          <div class="form-group">
+            <label for="input-confirm-password">Confirm New Password</label>
+            <input type="password" id="input-confirm-password" placeholder="Re-type new password" autocomplete="new-password" minlength="8" required />
+          </div>
+          <button type="button" id="btn-submit-change-password" class="btn btn-primary">Update Password</button>
+          <div id="password-status-msg" class="connections-status-msg" aria-live="polite"></div>
+        </form>
+      </section>
+
+      <!-- Section 5: Admin User Management -->
+      <section id="ssection-admin-users" class="settings-tab-panel" role="tabpanel" aria-labelledby="stab-admin-users" hidden>
+        <div class="admin-users-header">
+          <div>
+            <h3 style="margin: 0; font-size: 1.05rem;">👥 Instance Users</h3>
+            <p class="settings-panel-desc" style="margin: 0.25rem 0 0.75rem 0;">
+              Manage accounts, roles, access permissions, and passwords on this Vertex instance.
+            </p>
+          </div>
+          <button type="button" id="btn-toggle-create-user" class="btn btn-primary btn-sm">+ Create User</button>
+        </div>
+
+        <!-- Registration Policy Control -->
+        <div class="admin-policy-card" style="background: var(--bg-card-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.85rem 1rem; margin-bottom: 1rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <div>
+              <strong>Self-Registration Policy:</strong>
+              <p class="settings-panel-desc" style="margin: 0.2rem 0 0 0; font-size: 0.8rem;">
+                Control how new users can join this self-hosted instance.
+              </p>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <select id="select-reg-policy" style="background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-primary); border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem;">
+                <option value="disabled">Disabled (Admin only)</option>
+                <option value="invite">Invite Only (Code required)</option>
+                <option value="approval">Admin Approval (Pending queue)</option>
+                <option value="open">Open Registration</option>
+              </select>
+              <button type="button" id="btn-save-reg-policy" class="btn btn-sm btn-secondary">Save Policy</button>
+            </div>
+          </div>
+          <div id="reg-policy-status-msg" class="connections-status-msg" style="margin-top: 0.35rem;" aria-live="polite"></div>
+        </div>
+
+        <!-- Inline Create User Form -->
+        <div id="admin-create-user-card" class="admin-create-user-card" hidden>
+          <h4 style="margin: 0 0 0.75rem 0; font-size: 0.95rem;">Add New User</h4>
+          <form id="form-admin-create-user" onsubmit="return false;">
+            <div class="form-row-2col">
+              <div class="form-group">
+                <label for="new-user-username">Username</label>
+                <input type="text" id="new-user-username" placeholder="e.g. alex" autocomplete="off" required />
+              </div>
+              <div class="form-group">
+                <label for="new-user-role">Role</label>
+                <select id="new-user-role">
+                  <option value="user">User</option>
+                  <option value="admin">Administrator</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="new-user-password">Password (leave blank to auto-generate temporary password)</label>
+              <input type="password" id="new-user-password" placeholder="Optional: min 8 characters" autocomplete="new-password" />
+            </div>
+            <div class="admin-form-actions">
+              <button type="button" id="btn-submit-create-user" class="btn btn-primary btn-sm">Create Account</button>
+              <button type="button" id="btn-cancel-create-user" class="btn btn-secondary btn-sm">Cancel</button>
+            </div>
+          </form>
+        </div>
+
+        <!-- Admin Temp Password Alert Banner -->
+        <div id="admin-temp-pw-alert" class="admin-temp-pw-alert" hidden>
+          <span class="alert-icon">🔑</span>
+          <div class="alert-body">
+            <strong>Account Created / Password Reset:</strong>
+            <p style="margin: 0.25rem 0;">Temporary Password: <code id="admin-temp-pw-display" style="font-size: 1rem; color: #38bdf8;"></code></p>
+            <span style="font-size: 0.8rem; color: #94a3b8;">Copy this now. It will not be shown again.</span>
+          </div>
+          <button type="button" class="btn-icon btn-sm" onclick="document.getElementById('admin-temp-pw-alert').hidden = true;">✕</button>
+        </div>
+
+        <!-- Users Table -->
+        <div class="table-responsive" style="margin-top: 1rem;">
+          <table class="admin-users-table">
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Role</th>
+                <th>Status</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="admin-users-tbody">
+              <tr><td colspan="5" style="text-align:center; padding:1.5rem; color:#64748b;">Loading users...</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Invites Management Section -->
+        <div class="admin-invites-section" style="margin-top: 1.5rem; border-top: 1px solid var(--border-subtle); padding-top: 1.25rem;">
+          <div class="admin-users-header">
+            <div>
+              <h4 style="margin: 0; font-size: 0.98rem;">🎟️ Registration Invites</h4>
+              <p class="settings-panel-desc" style="margin: 0.2rem 0 0.5rem 0; font-size: 0.8rem;">
+                Single-use invitation links for onboarding new users.
+              </p>
+            </div>
+            <button type="button" id="btn-create-invite" class="btn btn-secondary btn-sm">+ Generate Invite</button>
+          </div>
+
+          <!-- New Invite Created Alert -->
+          <div id="admin-new-invite-alert" class="admin-temp-pw-alert" hidden>
+            <span class="alert-icon">🔗</span>
+            <div class="alert-body" style="flex: 1;">
+              <strong>Invitation Link Created:</strong>
+              <div style="display: flex; gap: 0.5rem; margin-top: 0.35rem; align-items: center;">
+                <input type="text" id="admin-invite-link-input" readonly style="font-size: 0.85rem; padding: 0.4rem 0.6rem; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 6px; width: 100%; color: #38bdf8;" />
+                <button type="button" id="btn-copy-invite-link" class="btn btn-sm btn-primary" style="white-space: nowrap;">Copy Link</button>
+              </div>
+            </div>
+            <button type="button" class="btn-icon btn-sm" onclick="document.getElementById('admin-new-invite-alert').hidden = true;">✕</button>
+          </div>
+
+          <div class="table-responsive">
+            <table class="admin-users-table">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Created</th>
+                  <th>Expires</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="admin-invites-tbody">
+                <tr><td colspan="5" style="text-align:center; padding:1rem; color:#64748b;">Loading invites...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
 
       <footer class="modal-footer">

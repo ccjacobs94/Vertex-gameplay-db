@@ -16,6 +16,7 @@ from urllib.parse import quote, urlparse
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
+import passwords
 import system_db
 from db import get_connection
 
@@ -29,6 +30,8 @@ SESSION_MAX_AGE_SECONDS = 90 * 24 * 3600  # 90 days for installed mobile PWA per
 PUBLIC_PATH_PREFIXES = (
     "/login",
     "/logout",
+    "/signup",
+    "/billing/webhook",
     "/manifest.webmanifest",
     "/sw.js",
     "/static/icons/",
@@ -57,6 +60,14 @@ def get_auth_password() -> str:
 
 
 def is_web_auth_enabled() -> bool:
+    edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
+    if edition == "hosted":
+        return True
+    reg_policy = system_db.get_setting(
+        "registration_policy", os.environ.get("VERTEX_REGISTRATION", "disabled")
+    )
+    if reg_policy != "disabled":
+        return True
     flag = os.environ.get("VERTEX_REQUIRE_AUTH", "true").strip().lower()
     if flag in ("0", "false", "no", "off"):
         return False
@@ -67,10 +78,21 @@ def is_local_bypass_enabled() -> bool:
     """
     If VERTEX_AUTH_BYPASS_LOCAL=true (the default), direct requests from private
     LAN / Tailscale IPs without a reverse-proxy domain header can bypass the login prompt,
-    while https://vertex.crjacobs.cc (via Caddy / Cloudflare) always enforces login.
+    provided this is a single-user self-hosted instance. If multiple active accounts exist
+    or if hosted mode is enabled, login is always required.
     """
     flag = os.environ.get("VERTEX_AUTH_BYPASS_LOCAL", "true").strip().lower()
-    return flag in ("1", "true", "yes", "on")
+    if flag not in ("1", "true", "yes", "on"):
+        return False
+    edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
+    if edition != "selfhosted":
+        return False
+    try:
+        if system_db.count_active_users() > 1:
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def _init_web_sessions_table() -> None:
@@ -89,47 +111,139 @@ def _init_web_sessions_table() -> None:
 
 
 def create_web_session(username: str, user_agent: str = "") -> str:
-    _init_web_sessions_table()
     session_id = secrets.token_urlsafe(32)
     now = time.time()
     expires_at = now + SESSION_MAX_AGE_SECONDS
-    with get_connection() as conn:
-        # Opportunistically prune expired sessions
+
+    # Store in system_db (with foreign key cascade to user)
+    system_db.init_system_db()
+    user_id = system_db.get_user_id_by_username(username) or system_db.ensure_user(username)
+    with system_db.get_system_connection() as conn:
         conn.execute("DELETE FROM web_sessions WHERE expires_at < ?", (now,))
         conn.execute(
             """
-            INSERT INTO web_sessions (session_id, username, created_at, expires_at, user_agent)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO web_sessions (session_id, user_id, username, created_at, expires_at, user_agent)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (session_id, username, now, expires_at, (user_agent or "")[:255]),
+            (session_id, user_id, username, now, expires_at, (user_agent or "")[:255]),
         )
+
+    # Also record in legacy table for backwards-compatibility
+    try:
+        _init_web_sessions_table()
+        with get_connection() as conn:
+            conn.execute("DELETE FROM web_sessions WHERE expires_at < ?", (now,))
+            conn.execute(
+                """
+                INSERT INTO web_sessions (session_id, username, created_at, expires_at, user_agent)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (session_id, username, now, expires_at, (user_agent or "")[:255]),
+            )
+    except Exception:
+        pass
+
     return session_id
 
 
 def verify_web_session(session_id: Optional[str]) -> Optional[str]:
     if not session_id:
         return None
-    _init_web_sessions_table()
-    now = time.time()
-    with get_connection() as conn:
-        row = conn.execute(
-            "SELECT username, expires_at FROM web_sessions WHERE session_id = ?",
-            (session_id,),
-        ).fetchone()
-        if not row:
-            return None
-        if row["expires_at"] < now:
-            conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
-            return None
-        return row["username"]
+
+    # First check system.db web_sessions joined with users table
+    try:
+        system_db.init_system_db()
+        now = time.time()
+        with system_db.get_system_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT ws.session_id, ws.user_id, ws.username, ws.expires_at, u.username as u_username, u.status, u.status_reason
+                FROM web_sessions ws
+                LEFT JOIN users u ON ws.user_id = u.id
+                WHERE ws.session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+            if row:
+                if row["expires_at"] < now:
+                    conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+                    return None
+                # Allow billing-only sessions for awaiting_payment and subscription_lapsed
+                if row["status"] and row["status"] != "active":
+                    if row["status_reason"] not in ("awaiting_payment", "subscription_lapsed"):
+                        conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+                        return None
+                return str(row["u_username"] or row["username"])
+
+    except Exception:
+        pass
+
+    # Fallback to games.db web_sessions
+    try:
+        _init_web_sessions_table()
+        now = time.time()
+        with get_connection() as conn:
+            row = conn.execute(
+                "SELECT username, expires_at FROM web_sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if not row:
+                return None
+            if row["expires_at"] < now:
+                conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+                return None
+            username = str(row["username"])
+            # Ensure user status in system_db is active (or billing-only)
+            user = system_db.get_user_by_username(username)
+            if user and user.get("status") != "active":
+                if user.get("status_reason") not in ("awaiting_payment", "subscription_lapsed"):
+                    conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+                    return None
+            return username
+    except Exception:
+        return None
 
 
 def revoke_web_session(session_id: Optional[str]) -> None:
     if not session_id:
         return
-    _init_web_sessions_table()
-    with get_connection() as conn:
-        conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+    try:
+        system_db.init_system_db()
+        with system_db.get_system_connection() as conn:
+            conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+    except Exception:
+        pass
+    try:
+        _init_web_sessions_table()
+        with get_connection() as conn:
+            conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+    except Exception:
+        pass
+
+
+def revoke_sessions_for_username(username: str) -> None:
+    if not username:
+        return
+    try:
+        system_db.init_system_db()
+        uid = system_db.get_user_id_by_username(username)
+        with system_db.get_system_connection() as conn:
+            if uid:
+                conn.execute(
+                    "DELETE FROM web_sessions WHERE user_id = ? OR LOWER(username) = LOWER(?)",
+                    (uid, username),
+                )
+            else:
+                conn.execute("DELETE FROM web_sessions WHERE LOWER(username) = LOWER(?)", (username,))
+    except Exception:
+        pass
+    try:
+        _init_web_sessions_table()
+        with get_connection() as conn:
+            conn.execute("DELETE FROM web_sessions WHERE LOWER(username) = LOWER(?)", (username,))
+    except Exception:
+        pass
+
 
 
 def is_public_path(path: str) -> bool:
@@ -205,6 +319,16 @@ def render_login_page(next_url: str = "/", error_msg: str = "", default_username
               <span>{html.escape(error_msg)}</span>
             </div>"""
         if error_msg
+        else ""
+    )
+
+    policy = system_db.get_registration_policy()
+    signup_link_html = (
+        """<div style="margin-top:0.85rem; font-size:0.84rem; text-align:center;">
+             <span style="color:#94a3b8;">Don't have an account?</span>
+             <a href="/signup" style="color:#38bdf8; text-decoration:none; font-weight:600; margin-left:0.35rem;">Create an account</a>
+           </div>"""
+        if policy != "disabled"
         else ""
     )
 
@@ -390,6 +514,7 @@ def render_login_page(next_url: str = "/", error_msg: str = "", default_username
       </div>
       <button type="submit" class="btn-submit">Sign In</button>
     </form>
+    {signup_link_html}
     <div class="login-footer">
       Protected session &bull; Remains signed in for 90 days on this device
     </div>
@@ -401,6 +526,7 @@ def render_login_page(next_url: str = "/", error_msg: str = "", default_username
   </script>
 </body>
 </html>"""
+
     return HTMLResponse(
         content=content,
         status_code=200 if not error_msg else 401,
@@ -421,13 +547,45 @@ async def handle_login_post(request: Request) -> Response:
     password = str(form.get("password") or "").strip()
     next_url = _sanitize_next_url(str(form.get("next") or "/"))
 
-    expected_user = get_auth_username()
-    expected_pass = get_auth_password()
+    bootstrap_user = get_auth_username()
+    bootstrap_pass = get_auth_password()
+    fallback_allowed = os.environ.get(
+        "VERTEX_ENV_PASSWORD_FALLBACK", "true"
+    ).strip().lower() not in ("0", "false", "no")
 
-    user_ok = secrets.compare_digest(username.lower(), expected_user.lower())
-    pass_ok = bool(expected_pass) and secrets.compare_digest(password, expected_pass)
+    system_db.init_system_db()
+    user = system_db.get_user_by_username(username)
+    authenticated = False
 
-    if not (user_ok and pass_ok):
+    if user:
+        if passwords.verify_password(password, user.get("password_hash")):
+            authenticated = True
+        elif (
+            fallback_allowed
+            and secrets.compare_digest(username.lower(), bootstrap_user.lower())
+            and bool(bootstrap_pass)
+            and secrets.compare_digest(password, bootstrap_pass)
+        ):
+            authenticated = True
+            # Upgrade placeholder or legacy hash to scrypt
+            system_db.set_user_password(user["id"], password)
+            system_db.ensure_bootstrap_admin(user["username"])
+    elif (
+        secrets.compare_digest(username.lower(), bootstrap_user.lower())
+        and bool(bootstrap_pass)
+        and secrets.compare_digest(password, bootstrap_pass)
+    ):
+        # Initial provision of bootstrap admin
+        uid = system_db.create_user(
+            username=bootstrap_user,
+            password=password,
+            role="admin",
+            status="active",
+        )
+        user = system_db.get_user(uid)
+        authenticated = True
+
+    if not authenticated or not user:
         logger.warning(
             "Failed web login attempt for username=%r from IP=%s",
             username,
@@ -436,14 +594,50 @@ async def handle_login_post(request: Request) -> Response:
         return render_login_page(
             next_url=next_url,
             error_msg="Invalid username or password.",
-            default_username=username or expected_user,
+            default_username=username or bootstrap_user,
         )
 
-    # Ensure user exists in system.db
-    system_db.ensure_user(expected_user)
+    if user.get("status") != "active":
+        if user.get("status_reason") in ("awaiting_payment", "subscription_lapsed"):
+            system_db.record_login(user["id"])
+            session_id = create_web_session(
+                username=user["username"],
+                user_agent=request.headers.get("user-agent", ""),
+            )
+            response = RedirectResponse(url="/billing", status_code=303)
+            response.set_cookie(
+                key=SESSION_COOKIE_NAME,
+                value=session_id,
+                max_age=SESSION_MAX_AGE_SECONDS,
+                httponly=True,
+                secure=_is_https_request(request),
+                samesite="lax",
+                path="/",
+            )
+            logger.info(
+                "Billing-only web login for subscriber=%r (reason=%s)",
+                user["username"],
+                user.get("status_reason"),
+            )
+            return response
+
+        logger.warning(
+            "Login rejected for non-active user=%r (status=%s, reason=%s)",
+            user["username"],
+            user.get("status"),
+            user.get("status_reason"),
+        )
+        return render_login_page(
+            next_url=next_url,
+            error_msg="This account is not active. Contact your administrator.",
+            default_username=username,
+        )
+
+
+    system_db.record_login(user["id"])
 
     session_id = create_web_session(
-        username=expected_user,
+        username=user["username"],
         user_agent=request.headers.get("user-agent", ""),
     )
     response = RedirectResponse(url=next_url, status_code=303)
@@ -456,8 +650,9 @@ async def handle_login_post(request: Request) -> Response:
         samesite="lax",
         path="/",
     )
-    logger.info("Successful web login for user=%r", expected_user)
+    logger.info("Successful web login for user=%r", user["username"])
     return response
+
 
 
 async def handle_logout(request: Request) -> Response:

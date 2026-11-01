@@ -84,8 +84,7 @@ def _verify_refresh_token(refresh_token: str, db_path: Optional[str] = None) -> 
 def verify_bearer_token(token: str, db_path: Optional[str] = None) -> Optional[str]:
     """Return the user_id bound to an access token, or None if invalid.
 
-    Tokens without a user binding (legacy rows, the shared MCP_CLIENT_SECRET) are rejected
-    so every MCP request is scoped to exactly one tenant.
+    Tokens without a user binding or bound to an inactive user are rejected.
     """
     if not token:
         return None
@@ -98,17 +97,22 @@ def verify_bearer_token(token: str, db_path: Optional[str] = None) -> Optional[s
         ).fetchone()
         if not row or not row["user_id"]:
             return None
-        return str(row["user_id"])
+        uid = str(row["user_id"])
+        user = system_db.get_user(uid, db_path=path)
+        if not user or user.get("status") != "active":
+            return None
+        return uid
 
 
 def _resolve_session_user_id(request: Request, db_path: Optional[str] = None) -> Optional[str]:
-    """Map the Vertex web session cookie to a system.db user id (None if not signed in)."""
+    """Map the Vertex web session cookie to an active system.db user id (None if not signed in or not active)."""
     username = verify_web_session(request.cookies.get(SESSION_COOKIE_NAME))
     if not username:
         return None
-    user_id = system_db.get_user_id_by_username(username, db_path=db_path)
-    if not user_id:
-        user_id = system_db.ensure_user(username, db_path=db_path)
+    user = system_db.get_user_by_username(username, db_path=db_path)
+    if user and user.get("status") != "active":
+        return None
+    user_id = user["id"] if user else system_db.ensure_user(username, db_path=db_path)
     return user_id
 
 
