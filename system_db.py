@@ -7,6 +7,7 @@ and the shared cross-user game catalog metadata cache.
 import os
 import sqlite3
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 DEFAULT_SYSTEM_DB_PATH = (
     os.environ.get("VERTEX_SYSTEM_DB_PATH")
@@ -81,3 +82,64 @@ def init_system_db(db_path: str = DEFAULT_SYSTEM_DB_PATH) -> None:
             );
             """
         )
+
+
+def get_catalog_cache_entry(
+    normalized_title: str, db_path: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    if not normalized_title:
+        return None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM catalog_cache WHERE normalized_title = ?",
+            (normalized_title,),
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def upsert_catalog_cache_entry(
+    normalized_title: str,
+    steam_appid: Optional[str] = None,
+    genres_json: str = "[]",
+    release_year: Optional[int] = None,
+    critic_score: Optional[int] = None,
+    cover_url: Optional[str] = None,
+    updated_at: str = "",
+    db_path: Optional[str] = None,
+) -> None:
+    if not normalized_title:
+        return
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO catalog_cache (
+                normalized_title, steam_appid, genres_json,
+                release_year, critic_score, cover_url, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(normalized_title) DO UPDATE SET
+                steam_appid = COALESCE(excluded.steam_appid, catalog_cache.steam_appid),
+                genres_json = CASE
+                    WHEN excluded.genres_json IS NOT NULL AND excluded.genres_json != '[]' AND excluded.genres_json != ''
+                    THEN excluded.genres_json
+                    ELSE catalog_cache.genres_json
+                END,
+                release_year = COALESCE(excluded.release_year, catalog_cache.release_year),
+                critic_score = COALESCE(excluded.critic_score, catalog_cache.critic_score),
+                cover_url = COALESCE(excluded.cover_url, catalog_cache.cover_url),
+                updated_at = excluded.updated_at
+            """,
+            (
+                normalized_title,
+                steam_appid,
+                genres_json,
+                release_year,
+                critic_score,
+                cover_url,
+                updated_at,
+            ),
+        )
+

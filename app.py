@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import mcp_server
+from context import get_current_user_id
 from web_auth import (
     handle_login_get,
     handle_login_post,
@@ -64,7 +65,25 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 SYNC_INTERVAL_HOURS = float(os.environ.get("SYNC_INTERVAL_HOURS", "6"))
 MCP_PORT = int(os.environ.get("MCP_PORT", "8096"))
 
-_sync_lock = asyncio.Lock()
+_user_sync_locks: Dict[int, asyncio.Lock] = {}
+_sync_semaphore = asyncio.Semaphore(5)
+
+
+def _get_user_sync_lock(user_id: Any = None) -> asyncio.Lock:
+    raw_uid = user_id if user_id is not None else get_current_user_id()
+    if raw_uid is None or raw_uid == "":
+        key: Any = 0
+    elif isinstance(raw_uid, int):
+        key = raw_uid
+    elif isinstance(raw_uid, str) and raw_uid.isdigit():
+        key = int(raw_uid)
+    else:
+        key = raw_uid
+    lock = _user_sync_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _user_sync_locks[key] = lock
+    return lock
 
 
 async def _periodic_sync_loop() -> None:
@@ -72,10 +91,12 @@ async def _periodic_sync_loop() -> None:
     await asyncio.sleep(3)
     while True:
         try:
-            async with _sync_lock:
-                logger.info("Running scheduled multi-platform library sync...")
-                results = await sync_all_platforms()
-                logger.info("Scheduled sync finished: %s", results)
+            lock = _get_user_sync_lock()
+            async with lock:
+                async with _sync_semaphore:
+                    logger.info("Running scheduled multi-platform library sync...")
+                    results = await sync_all_platforms()
+                    logger.info("Scheduled sync finished: %s", results)
         except Exception as exc:
             logger.error("Error in scheduled sync loop: %s", exc)
         await asyncio.sleep(max(SYNC_INTERVAL_HOURS, 0.5) * 3600)
@@ -201,7 +222,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Unified Game Library Hub",
     description="Cross-platform game library & metrics tracker across Xbox, PC, PS4, and Nintendo Switch",
-    version="1.3.0",
+    version="1.4.0",
     lifespan=lifespan,
 )
 
@@ -467,10 +488,12 @@ async def api_sync_game_achievements(game_id: int) -> Dict[str, Any]:
 
 @app.post("/api/sync")
 async def api_trigger_sync() -> Dict[str, Any]:
-    if _sync_lock.locked():
+    lock = _get_user_sync_lock()
+    if lock.locked():
         return {"status": "running", "message": "A sync is already in progress."}
-    async with _sync_lock:
-        results = await sync_all_platforms()
+    async with lock:
+        async with _sync_semaphore:
+            results = await sync_all_platforms()
     return {"status": "completed", "results": results, "stats": get_library_stats()}
 
 
@@ -479,10 +502,12 @@ async def api_enrich_metadata(
     limit: int = Query(default=500, ge=1, le=2000),
     force: bool = Query(default=False),
 ) -> Dict[str, Any]:
-    if _sync_lock.locked():
+    lock = _get_user_sync_lock()
+    if lock.locked():
         return {"status": "running", "message": "A sync or enrichment job is already in progress."}
-    async with _sync_lock:
-        result = await enrich_missing_metadata(limit=limit, force=force)
+    async with lock:
+        async with _sync_semaphore:
+            result = await enrich_missing_metadata(limit=limit, force=force)
     return {"status": "completed", "result": result, "stats": get_library_stats()}
 
 
