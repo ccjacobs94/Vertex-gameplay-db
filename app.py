@@ -235,6 +235,7 @@ class ManualGameCreate(BaseModel):
     platform: str = Field(default="Nintendo Switch")
     completion_status: str = Field(default="Not Played")
     ownership_status: str = Field(default="Owned")
+    is_game_pass: bool = Field(default=False)
     playtime_hours: float = Field(default=0.0, ge=0.0)
     user_rating: Optional[int] = Field(default=None, ge=1, le=10)
     critic_score: Optional[int] = Field(default=None, ge=0, le=100)
@@ -252,6 +253,7 @@ class GameUpdateRequest(BaseModel):
     playtime_hours: Optional[float] = Field(default=None, ge=0.0)
     completion_status: Optional[str] = None
     ownership_status: Optional[str] = None
+    is_game_pass: Optional[bool] = None
     achievements_unlocked: Optional[int] = Field(default=None, ge=0)
     achievements_total: Optional[int] = Field(default=None, ge=0)
     user_rating: Optional[int] = Field(default=None, ge=1, le=10)
@@ -332,6 +334,7 @@ async def api_list_games(
     genre: Optional[str] = Query(default=None),
     tag: Optional[str] = Query(default=None),
     ownership: Optional[str] = Query(default=None),
+    is_game_pass: Optional[bool] = Query(default=None),
     favorite_only: bool = Query(default=False),
     sort_by: str = Query(default="playtime_desc"),
     limit: int = Query(default=500, le=5000),
@@ -344,6 +347,7 @@ async def api_list_games(
         genre=genre,
         tag=tag,
         ownership=ownership,
+        is_game_pass=is_game_pass,
         favorite_only=favorite_only,
         sort_by=sort_by,
         limit=limit,
@@ -373,6 +377,7 @@ async def api_get_analytics(
     genre: Optional[str] = Query(default=None),
     tag: Optional[str] = Query(default=None),
     ownership: Optional[str] = Query(default=None),
+    is_game_pass: Optional[bool] = Query(default=None),
     favorite_only: bool = Query(default=False),
 ) -> Dict[str, Any]:
     return get_habits_analytics(
@@ -382,6 +387,7 @@ async def api_get_analytics(
         genre=genre,
         tag=tag,
         ownership=ownership,
+        is_game_pass=is_game_pass,
         favorite_only=favorite_only,
     )
 
@@ -393,6 +399,7 @@ async def api_create_game(payload: ManualGameCreate) -> Dict[str, Any]:
         platform=payload.platform.strip(),
         completion_status=payload.completion_status,
         ownership_status=payload.ownership_status,
+        is_game_pass=payload.is_game_pass,
         playtime_hours=payload.playtime_hours,
         user_rating=payload.user_rating,
         critic_score=payload.critic_score,

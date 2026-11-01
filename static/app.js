@@ -77,6 +77,7 @@ const state = {
   platform: "",
   status: "",
   ownership: "",
+  gamePassOnly: false,
   genre: "",
   tag: "",
   search: "",
@@ -158,6 +159,7 @@ function updateActiveFiltersUI() {
     (state.tag ? 1 : 0) +
     (state.status ? 1 : 0) +
     (state.ownership ? 1 : 0) +
+    (state.gamePassOnly ? 1 : 0) +
     (state.favoriteOnly ? 1 : 0) +
     (state.sortBy !== "playtime_desc" ? 1 : 0);
 
@@ -174,6 +176,7 @@ function updateActiveFiltersUI() {
       !state.tag &&
       !state.status &&
       !state.ownership &&
+      !state.gamePassOnly &&
       !state.favoriteOnly &&
       !state.platform &&
       !state.search &&
@@ -212,6 +215,8 @@ function syncFilterInputs() {
   if (qInput) qInput.value = state.search;
   const favBtn = document.getElementById("btn-fav-toggle");
   if (favBtn) favBtn.setAttribute("aria-pressed", String(state.favoriteOnly));
+  const gpBtn = document.getElementById("btn-gamepass-toggle");
+  if (gpBtn) gpBtn.setAttribute("aria-pressed", String(state.gamePassOnly));
 }
 
 function refreshActiveView() {
@@ -275,6 +280,7 @@ async function fetchHabitsAnalytics() {
   if (state.platform) params.set("platform", state.platform);
   if (state.status) params.set("status", state.status);
   if (state.ownership) params.set("ownership", state.ownership);
+  if (state.gamePassOnly) params.set("is_game_pass", "true");
   if (state.genre) params.set("genre", state.genre);
   if (state.tag) params.set("tag", state.tag);
   if (state.favoriteOnly) params.set("favorite_only", "true");
@@ -982,6 +988,7 @@ async function fetchGames() {
   if (state.platform) params.set("platform", state.platform);
   if (state.status) params.set("status", state.status);
   if (state.ownership) params.set("ownership", state.ownership);
+  if (state.gamePassOnly) params.set("is_game_pass", "true");
   if (state.genre) params.set("genre", state.genre);
   if (state.tag) params.set("tag", state.tag);
   if (state.favoriteOnly) params.set("favorite_only", "true");
@@ -1073,19 +1080,21 @@ function renderGames() {
     platBadge.textContent = game.platform;
     wrapper.appendChild(platBadge);
 
+    if (game.is_game_pass) {
+      const gpBadge = document.createElement("span");
+      gpBadge.className = "gamepass-badge";
+      gpBadge.textContent = "GP";
+      gpBadge.title = "Currently available on Xbox Game Pass";
+      wrapper.appendChild(gpBadge);
+    }
+
     const ownStatus = game.ownership_status || "Owned";
     if (ownStatus !== "Owned") {
       const ownBadge = document.createElement("span");
       const ownSlug = ownStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
       ownBadge.className = `ownership-badge ${ownSlug}`;
       ownBadge.textContent = ownStatus;
-      ownBadge.title = `Access via ${ownStatus}`;
-      wrapper.appendChild(ownBadge);
-    } else if (game.has_game_pass_copy) {
-      const ownBadge = document.createElement("span");
-      ownBadge.className = "ownership-badge has-gp-sub";
-      ownBadge.textContent = "Owned + GP";
-      ownBadge.title = "Owned on a linked platform + played on Game Pass";
+      ownBadge.title = `Ownership: ${ownStatus}`;
       wrapper.appendChild(ownBadge);
     }
 
@@ -1140,6 +1149,14 @@ function renderGames() {
     listPlat.className = "card-list-plat";
     listPlat.textContent = game.platform;
     subrow.appendChild(listPlat);
+
+    if (game.is_game_pass) {
+      const listGp = document.createElement("span");
+      listGp.className = "card-list-gp";
+      listGp.textContent = "GP";
+      listGp.title = "Currently on Game Pass";
+      subrow.appendChild(listGp);
+    }
 
     if (ownStatus !== "Owned") {
       const listOwn = document.createElement("span");
@@ -1440,7 +1457,7 @@ function renderEditLinkedCopies(game) {
     const copyOwn = copy.ownership_status || "Owned";
     ownSelect.dataset.ownership = copyOwn;
     ownSelect.setAttribute("aria-label", `Ownership for ${copy.title} on ${copy.platform}`);
-    for (const oVal of ["Owned", "Game Pass", "PS Plus", "Subscription"]) {
+    for (const oVal of ["Owned", "Subscription", "Borrowed", "None"]) {
       const opt = document.createElement("option");
       opt.value = oVal;
       opt.textContent = oVal;
@@ -1458,6 +1475,35 @@ function renderEditLinkedCopies(game) {
       }
     });
     right.appendChild(ownSelect);
+
+    const gpWrap = document.createElement("label");
+    gpWrap.className = "linked-copy-gp-wrap";
+    gpWrap.style.display = "inline-flex";
+    gpWrap.style.alignItems = "center";
+    gpWrap.style.gap = "0.25rem";
+    gpWrap.style.cursor = "pointer";
+    gpWrap.title = "Toggle Xbox Game Pass availability for this copy";
+
+    const gpCheck = document.createElement("input");
+    gpCheck.type = "checkbox";
+    gpCheck.checked = Boolean(copy.is_game_pass);
+    gpCheck.setAttribute("aria-label", `Game Pass for ${copy.title} on ${copy.platform}`);
+    gpCheck.addEventListener("change", async (ev) => {
+      const nextGp = ev.target.checked;
+      const updated = await quickPatchGame(copy.id, { is_game_pass: nextGp });
+      if (updated) {
+        await fetchGames();
+        const refreshed = state.games.find((g) => g.id === game.id) || updated;
+        if (refreshed) openEditModal(refreshed);
+      }
+    });
+
+    const gpBadge = document.createElement("span");
+    gpBadge.className = "badge-gp-mini";
+    gpBadge.textContent = "GP";
+    gpWrap.appendChild(gpCheck);
+    gpWrap.appendChild(gpBadge);
+    right.appendChild(gpWrap);
 
     const hrs = document.createElement("span");
     hrs.className = "reconcile-copy-hours";
@@ -1832,6 +1878,13 @@ function openEditModal(game) {
     platBadge.textContent = game.platform;
     badgesEl.appendChild(platBadge);
 
+    if (game.is_game_pass) {
+      const gpBadge = document.createElement("span");
+      gpBadge.className = "edit-header-badge gp";
+      gpBadge.textContent = "On Game Pass";
+      badgesEl.appendChild(gpBadge);
+    }
+
     const ownStatus = game.ownership_status || "Owned";
     if (ownStatus !== "Owned") {
       const ownBadge = document.createElement("span");
@@ -1925,6 +1978,17 @@ function openEditModal(game) {
     if (editOwnGroup) {
       editOwnGroup.title = isMultiCopy
         ? "Ownership is managed per linked copy in the Cross-Platform Copies section below."
+        : "";
+    }
+  }
+  const editGpEl = document.getElementById("edit-gamepass");
+  const editGpGroup = editGpEl ? editGpEl.closest(".form-group") : null;
+  if (editGpEl) {
+    editGpEl.checked = Boolean(game.is_game_pass);
+    editGpEl.disabled = isMultiCopy;
+    if (editGpGroup) {
+      editGpGroup.title = isMultiCopy
+        ? "Game Pass availability is managed per linked copy in the Cross-Platform Copies section below."
         : "";
     }
   }
@@ -2648,6 +2712,13 @@ function renderTriageCard() {
   statusEl.textContent = curStatus;
   statusEl.dataset.status = curStatus;
 
+  const gpBtn = document.getElementById("btn-triage-gamepass");
+  if (gpBtn) {
+    const isGp = Boolean(game.is_game_pass);
+    gpBtn.textContent = isGp ? "On GP" : "Off";
+    gpBtn.classList.toggle("active", isGp);
+  }
+
   const ownBtn = document.getElementById("btn-triage-ownership");
   if (ownBtn) {
     const curOwn = game.ownership_status || "Owned";
@@ -2712,12 +2783,34 @@ async function toggleTriageFavorite() {
   showTriageToast(nextFav ? `★ Favorited ${game.title}` : `Removed favorite`);
 }
 
+async function toggleTriageGamePass() {
+  const queue = state.triageQueue;
+  if (state.triageIndex >= queue.length) return;
+  const game = queue[state.triageIndex];
+  const nextGp = !game.is_game_pass;
+  game.is_game_pass = nextGp;
+  renderTriageCard();
+  let targetId = game.id;
+  if (Array.isArray(game.linked_games) && game.linked_games.length > 1) {
+    const xboxCopy = game.linked_games.find(
+      (lg) => (lg.platform || "").toLowerCase().includes("xbox") || lg.source === "Xbox"
+    );
+    if (xboxCopy) targetId = xboxCopy.id;
+  }
+  const updated = await quickPatchGame(targetId, { is_game_pass: nextGp });
+  if (updated) {
+    queue[state.triageIndex] = updated;
+    renderTriageCard();
+  }
+  showTriageToast(`Game Pass: ${game.title} → ${nextGp ? "On" : "Off"}`);
+}
+
 async function toggleTriageOwnership() {
   const queue = state.triageQueue;
   if (state.triageIndex >= queue.length) return;
   const game = queue[state.triageIndex];
   const curOwn = game.ownership_status || "Owned";
-  const nextOwn = curOwn === "Game Pass" ? "Owned" : "Game Pass";
+  const nextOwn = curOwn === "Owned" ? "Subscription" : "Owned";
   game.ownership_status = nextOwn;
   game.ownership_locked = true;
   renderTriageCard();
@@ -3054,6 +3147,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.platform = "";
       state.status = "";
       state.ownership = "";
+      state.gamePassOnly = false;
       state.genre = "";
       state.tag = "";
       state.search = "";
@@ -3069,6 +3163,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (tf) tf.value = "";
       document.getElementById("sort-select").value = "playtime_desc";
       document.getElementById("btn-fav-toggle").setAttribute("aria-pressed", "false");
+      document.getElementById("btn-gamepass-toggle")?.setAttribute("aria-pressed", "false");
       for (const p of document.querySelectorAll("#platform-pills .pill")) {
         p.classList.toggle("active", p.dataset.platform === "");
       }
@@ -3142,6 +3237,16 @@ document.addEventListener("DOMContentLoaded", () => {
     favBtn.setAttribute("aria-pressed", String(state.favoriteOnly));
     refreshActiveView();
   });
+
+  // Game Pass toggle
+  const gpFilterBtn = document.getElementById("btn-gamepass-toggle");
+  if (gpFilterBtn) {
+    gpFilterBtn.addEventListener("click", () => {
+      state.gamePassOnly = !state.gamePassOnly;
+      gpFilterBtn.setAttribute("aria-pressed", String(state.gamePassOnly));
+      refreshActiveView();
+    });
+  }
 
   // Trigger Sync (Header + Mobile Bottom Nav)
   const syncBtn = document.getElementById("btn-sync");
@@ -3224,6 +3329,7 @@ document.addEventListener("DOMContentLoaded", () => {
       platform: document.getElementById("add-platform").value,
       completion_status: document.getElementById("add-status").value,
       ownership_status: document.getElementById("add-ownership")?.value || "Owned",
+      is_game_pass: Boolean(document.getElementById("add-gamepass")?.checked),
       playtime_hours: parseFloat(document.getElementById("add-hours").value || "0"),
       user_rating: ratingVal ? parseInt(ratingVal, 10) : null,
       cover_url: document.getElementById("add-cover").value.trim() || null,
@@ -3391,6 +3497,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const editOwnEl = document.getElementById("edit-ownership");
     if (editOwnEl && !editOwnEl.disabled) {
       payload.ownership_status = editOwnEl.value || "Owned";
+    }
+
+    const editGpEl = document.getElementById("edit-gamepass");
+    if (editGpEl && !editGpEl.disabled) {
+      payload.is_game_pass = editGpEl.checked;
     }
 
     if (hoursInput && hoursInput.dataset.unlocked === "true") {
@@ -3594,6 +3705,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   document.getElementById("btn-triage-fav").addEventListener("click", toggleTriageFavorite);
+  const triageGpBtn = document.getElementById("btn-triage-gamepass");
+  if (triageGpBtn) {
+    triageGpBtn.addEventListener("click", toggleTriageGamePass);
+  }
   const triageOwnBtn = document.getElementById("btn-triage-ownership");
   if (triageOwnBtn) {
     triageOwnBtn.addEventListener("click", toggleTriageOwnership);
@@ -3723,6 +3838,9 @@ document.addEventListener("DOMContentLoaded", () => {
       e.preventDefault();
       applyTriageStatus(keyToStatus[e.key]);
     } else if (e.key === "g" || e.key === "G") {
+      e.preventDefault();
+      toggleTriageGamePass();
+    } else if (e.key === "o" || e.key === "O") {
       e.preventDefault();
       toggleTriageOwnership();
     } else if (e.key === "f" || e.key === "F") {
