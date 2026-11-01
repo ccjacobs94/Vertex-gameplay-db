@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=24 and sw to v20
-        self.assertIn('href="/static/styles.css?v=24"', index_html)
-        self.assertIn('src="/static/app.js?v=24"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v20";', sw_js)
+        # Cache buster must be bumped to v=25 and sw to v21
+        self.assertIn('href="/static/styles.css?v=25"', index_html)
+        self.assertIn('src="/static/app.js?v=25"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v21";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -102,6 +102,7 @@ class TestUIBrandAssets(unittest.TestCase):
         # Onboarding wizard & connected accounts integration
         self.assertIn('id="onboarding-dialog"', index_html)
         self.assertIn('id="btn-open-connections"', index_html)
+        self.assertIn('id="btn-wizard-dismiss-forever"', index_html)
         self.assertIn('id="empty-library-welcome"', index_html)
         self.assertIn('onclick="window.openConnectionsModal && window.openConnectionsModal()"', index_html)
         self.assertIn('onclick="window.openOnboardingWizard && window.openOnboardingWizard()"', index_html)
@@ -111,6 +112,8 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.switchSettingsTab = switchSettingsTab;", app_js)
         self.assertIn("window.loadAccountInfo = loadAccountInfo;", app_js)
         self.assertIn("window.openOnboardingWizard = openOnboardingWizard;", app_js)
+        self.assertIn("window.closeOnboardingWizard = closeOnboardingWizard;", app_js)
+        self.assertIn("window.dismissWizardForever = dismissWizardForever;", app_js)
         self.assertIn("window.openConnectionsModal = openConnectionsModal;", app_js)
         self.assertIn("if (!dialog.open)", app_js)
 
