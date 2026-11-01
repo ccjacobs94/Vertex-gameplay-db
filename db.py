@@ -11,14 +11,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from context import current_user_id
+
 DEFAULT_DB_PATH = os.environ.get(
     "GAMEHUB_DB_PATH",
     str(Path(__file__).resolve().parent / "data" / "games.db"),
 )
+USERS_DB_DIR = os.environ.get("GAMEHUB_USERS_DIR", "/app/data/users")
 
 
-def get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
-    path = Path(db_path)
+def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
+    if db_path is not None:
+        resolved_path = db_path
+    else:
+        user_id = current_user_id.get()
+        if user_id:
+            resolved_path = str(Path(USERS_DB_DIR) / str(user_id) / "games.db")
+        else:
+            resolved_path = DEFAULT_DB_PATH
+    path = Path(resolved_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path), timeout=15.0)
     conn.row_factory = sqlite3.Row
@@ -27,7 +38,7 @@ def get_connection(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
+def init_db(db_path: Optional[str] = None) -> None:
     with get_connection(db_path) as conn:
         conn.executescript(
             """
@@ -323,7 +334,7 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
 
 def _consolidate_dicts(
     raw_games: List[Dict[str, Any]],
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Consolidate raw game dicts sharing a canonical_id into unified cross-platform entries.
@@ -574,7 +585,7 @@ def upsert_synced_game(
     cover_url: Optional[str] = None,
     ownership_status: Optional[str] = None,
     is_game_pass: Optional[bool] = None,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Insert or update a game from an automated sync source.
@@ -781,7 +792,7 @@ def add_manual_game(
     favorite: bool = False,
     ownership_status: str = "Owned",
     is_game_pass: bool = False,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     slug = "".join(c if c.isalnum() else "-" for c in title.lower()).strip("-")
@@ -848,7 +859,7 @@ def add_manual_game(
 def update_game(
     game_id: int,
     updates: Dict[str, Any],
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     allowed = {
         "title",
@@ -979,7 +990,7 @@ def update_game(
     return get_game_by_id(game_id, db_path)
 
 
-def delete_game(game_id: int, db_path: str = DEFAULT_DB_PATH) -> bool:
+def delete_game(game_id: int, db_path: Optional[str] = None) -> bool:
     with get_connection(db_path) as conn:
         row = conn.execute("SELECT canonical_id FROM games WHERE id = ?", (game_id,)).fetchone()
         cid = row["canonical_id"] if row else None
@@ -1004,7 +1015,7 @@ def delete_game(game_id: int, db_path: str = DEFAULT_DB_PATH) -> bool:
         return deleted
 
 
-def get_game_by_id(game_id: int, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[str, Any]]:
+def get_game_by_id(game_id: int, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
     with get_connection(db_path) as conn:
         row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
         if not row:
@@ -1031,7 +1042,7 @@ def query_games(
     sort_by: str = "playtime_desc",
     limit: int = 500,
     include_unconsolidated: bool = False,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     with get_connection(db_path) as conn:
         rows = conn.execute("SELECT * FROM games").fetchall()
@@ -1159,7 +1170,7 @@ def _make_pair_key(id1: int, id2: int) -> str:
 
 def get_reconcile_candidates(
     cross_platform_only: bool = False,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Detect candidate groups of games across platforms or editions that appear to be the same game.
@@ -1292,7 +1303,7 @@ def reconcile_games(
     primary_id: Optional[int] = None,
     custom_title: Optional[str] = None,
     completion_status: Optional[str] = None,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Link 2 or more games as the same game across platforms/editions, consolidating their playtime
@@ -1439,7 +1450,7 @@ def reconcile_games(
     return get_game_by_id(chosen_primary_id, db_path)
 
 
-def unlink_game(game_id: int, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[str, Any]]:
+def unlink_game(game_id: int, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Remove a single platform entry from its reconciled group so its playtime is tracked separately again.
     """
@@ -1476,7 +1487,7 @@ def unlink_game(game_id: int, db_path: str = DEFAULT_DB_PATH) -> Optional[Dict[s
     return get_game_by_id(game_id, db_path)
 
 
-def dismiss_reconcile_group(game_ids: List[int], db_path: str = DEFAULT_DB_PATH) -> int:
+def dismiss_reconcile_group(game_ids: List[int], db_path: Optional[str] = None) -> int:
     """
     Record that a set of candidate games are NOT the same game so they won't be suggested together again.
     """
@@ -1497,13 +1508,13 @@ def dismiss_reconcile_group(game_ids: List[int], db_path: str = DEFAULT_DB_PATH)
     return count
 
 
-def reset_reconcile_dismissals(db_path: str = DEFAULT_DB_PATH) -> int:
+def reset_reconcile_dismissals(db_path: Optional[str] = None) -> int:
     with get_connection(db_path) as conn:
         cursor = conn.execute("DELETE FROM reconcile_dismissals")
         return cursor.rowcount
 
 
-def get_pending_playtime_prompts(db_path: str = DEFAULT_DB_PATH) -> List[Dict[str, Any]]:
+def get_pending_playtime_prompts(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Return all pending playtime increase prompts for games whose status is not 'Playing'
     and that have not been muted. Automatically prunes stale prompts.
@@ -1554,7 +1565,7 @@ def get_pending_playtime_prompts(db_path: str = DEFAULT_DB_PATH) -> List[Dict[st
 def resolve_playtime_prompt(
     prompt_id: int,
     action: str,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Resolve a playtime prompt:
@@ -1613,7 +1624,7 @@ def log_sync_event(
     status: str,
     games_synced: int = 0,
     message: str = "",
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with get_connection(db_path) as conn:
@@ -1626,7 +1637,7 @@ def log_sync_event(
         )
 
 
-def get_library_stats(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
+def get_library_stats(db_path: Optional[str] = None) -> Dict[str, Any]:
     games = query_games(limit=10000, db_path=db_path)
     total_games = len(games)
     total_hours = round(sum(g["playtime_hours"] for g in games), 1)
@@ -1775,7 +1786,7 @@ def get_habits_analytics(
     ownership: Optional[str] = None,
     is_game_pass: Optional[bool] = None,
     favorite_only: bool = False,
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Compute comprehensive gaming habits analytics, system distributions, genre breakdowns,
@@ -2047,7 +2058,7 @@ def upsert_game_achievements(
     source: str,
     platform: str,
     achievements: List[Dict[str, Any]],
-    db_path: str = DEFAULT_DB_PATH,
+    db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Insert or update individual achievements for a game and update the summary counts on games.
@@ -2135,7 +2146,7 @@ def upsert_game_achievements(
     return {"unlocked": unlocked_count, "total": total_count}
 
 
-def get_game_achievements(game_id: int, db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
+def get_game_achievements(game_id: int, db_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Retrieve achievements for a game, merging across cross-platform linked copies if reconciled.
     Returns:
