@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import mcp_server
-from context import get_current_user_id
+from context import get_current_user_id, reset_current_user_id, set_current_user_id
 from web_auth import (
     handle_login_get,
     handle_login_post,
@@ -112,19 +112,23 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
 
     # Disable local DNS rebinding protection since Cloudflare Tunnel terminates domain traffic
     sec = TransportSecuritySettings(enable_dns_rebinding_protection=False)
-    mcp_app = mcp_server.mcp.streamable_http_app(host=host, streamable_http_path="/mcp", transport_security=sec)
+    # Stateless: each request runs in its own context so current_user_id (set per bearer token)
+    # can never leak across tenants through a long-lived shared MCP session.
+    mcp_app = mcp_server.mcp.streamable_http_app(
+        host=host, streamable_http_path="/mcp", transport_security=sec, stateless_http=True
+    )
     sse_app = mcp_server.mcp.sse_app(transport_security=sec)
     for route in sse_app.routes:
         mcp_app.routes.append(route)
 
     from oauth_provider import (
         _get_base_domain,
-        _get_client_secret,
         extract_bearer_token,
         get_oauth_routes,
         verify_bearer_token,
     )
 
+    _initialized_mcp_users: set = set()
     _REDACTED_HEADERS = {"authorization", "cookie", "set-cookie", "x-api-key", "proxy-authorization"}
 
     class RequestLoggerAndAuthMiddleware(BaseHTTPMiddleware):
@@ -146,14 +150,16 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
                     body.decode("utf-8", errors="ignore")[:300],
                 )
 
-            # Enforce Bearer token authentication on MCP transport endpoints when MCP_CLIENT_SECRET is set
+            # Enforce per-user Bearer token authentication on MCP transport endpoints
             require_auth = os.environ.get("MCP_REQUIRE_AUTH", "true").lower() not in ("0", "false", "no")
             is_sse_root = path == "/" and "text/event-stream" in request.headers.get("accept", "")
             is_protected_mcp_path = path.startswith("/mcp") or path.startswith("/sse") or path.startswith("/messages") or is_sse_root
 
-            if request.method != "OPTIONS" and require_auth and _get_client_secret() and is_protected_mcp_path:
+            user_ctx_token = None
+            if request.method != "OPTIONS" and require_auth and is_protected_mcp_path:
                 token = extract_bearer_token(request)
-                if not verify_bearer_token(token):
+                user_id = verify_bearer_token(token)
+                if not user_id:
                     base_domain = _get_base_domain()
                     logger.warning("<-- MCP AUTH REJECTED (401): %s %s", request.method, path)
                     return JSONResponse(
@@ -164,8 +170,17 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
                             "Access-Control-Allow-Origin": "*",
                         },
                     )
+                # Scope every DB query made by MCP tools to this user's games.db
+                user_ctx_token = set_current_user_id(user_id)
+                if user_id not in _initialized_mcp_users:
+                    init_db()  # create/migrate this user's games.db on first use
+                    _initialized_mcp_users.add(user_id)
 
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            finally:
+                if user_ctx_token is not None:
+                    reset_current_user_id(user_ctx_token)
             logger.info("<-- MCP RESP: %s %s -> %s", request.method, path, response.status_code)
             return response
 
@@ -195,6 +210,9 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
 
     for oauth_route in get_oauth_routes():
         mcp_app.routes.insert(0, oauth_route)
+
+    # Sign-in form posted by /oauth/authorize when the user has no Vertex web session yet
+    mcp_app.routes.insert(0, Route("/login", handle_login_post, methods=["POST"]))
 
     mcp_app.routes.insert(0, Route("/", root_handler, methods=["GET", "HEAD", "OPTIONS"]))
 

@@ -17,7 +17,8 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 from starlette.routing import Route
 
-from db import get_connection
+import system_db
+from web_auth import SESSION_COOKIE_NAME, render_login_page, verify_web_session
 
 logger = logging.getLogger("gamehub.oauth")
 
@@ -38,58 +39,74 @@ def _get_client_secret() -> str:
 _auth_codes: Dict[str, dict] = {}
 
 
-def _init_oauth_table() -> None:
-    with get_connection() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS oauth_tokens (
-                access_token TEXT PRIMARY KEY,
-                refresh_token TEXT UNIQUE,
-                client_id TEXT NOT NULL,
-                created_at REAL NOT NULL
-            );
-            """
-        )
+def _init_oauth_table(db_path: Optional[str] = None) -> None:
+    """Ensure system.db (including oauth_tokens.user_id) exists and is migrated."""
+    system_db.init_system_db(db_path or system_db.DEFAULT_SYSTEM_DB_PATH)
 
 
-def _store_token_pair(access_token: str, refresh_token: str, client_id: str) -> None:
-    _init_oauth_table()
-    with get_connection() as conn:
+def _store_token_pair(
+    access_token: str,
+    refresh_token: str,
+    client_id: str,
+    user_id: str,
+    db_path: Optional[str] = None,
+) -> None:
+    if not user_id:
+        raise ValueError("user_id is required to issue an OAuth token")
+    path = db_path or system_db.DEFAULT_SYSTEM_DB_PATH
+    _init_oauth_table(path)
+    with system_db.get_system_connection(path) as conn:
         conn.execute(
             """
-            INSERT OR REPLACE INTO oauth_tokens (access_token, refresh_token, client_id, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT OR REPLACE INTO oauth_tokens (access_token, refresh_token, client_id, user_id, created_at)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (access_token, refresh_token, client_id, time.time()),
+            (access_token, refresh_token, client_id, user_id, time.time()),
         )
 
 
-def _verify_refresh_token(refresh_token: str) -> Optional[str]:
+def _verify_refresh_token(refresh_token: str, db_path: Optional[str] = None) -> Optional[dict]:
+    """Return {"client_id", "user_id"} for a valid, user-bound refresh token, else None."""
     if not refresh_token:
         return None
-    _init_oauth_table()
-    with get_connection() as conn:
+    path = db_path or system_db.DEFAULT_SYSTEM_DB_PATH
+    _init_oauth_table(path)
+    with system_db.get_system_connection(path) as conn:
         row = conn.execute(
-            "SELECT client_id FROM oauth_tokens WHERE refresh_token = ?",
+            "SELECT client_id, user_id FROM oauth_tokens WHERE refresh_token = ?",
             (refresh_token,),
         ).fetchone()
-        return row["client_id"] if row else None
+        if not row or not row["user_id"]:
+            return None
+        return {"client_id": row["client_id"], "user_id": str(row["user_id"])}
 
 
-def verify_bearer_token(token: str) -> bool:
-    """Verify an incoming Bearer token against SQLite oauth_tokens or MCP_CLIENT_SECRET."""
+def verify_bearer_token(token: str, db_path: Optional[str] = None) -> Optional[str]:
+    """Return the user_id bound to an access token, or None if invalid.
+
+    Tokens without a user binding (legacy rows, the shared MCP_CLIENT_SECRET) are rejected
+    so every MCP request is scoped to exactly one tenant.
+    """
     if not token:
-        return False
-    secret = _get_client_secret()
-    if secret and secrets.compare_digest(token, secret):
-        return True
-    _init_oauth_table()
-    with get_connection() as conn:
+        return None
+    path = db_path or system_db.DEFAULT_SYSTEM_DB_PATH
+    _init_oauth_table(path)
+    with system_db.get_system_connection(path) as conn:
         row = conn.execute(
-            "SELECT 1 FROM oauth_tokens WHERE access_token = ?",
+            "SELECT user_id FROM oauth_tokens WHERE access_token = ?",
             (token,),
         ).fetchone()
-        return row is not None
+        if not row or not row["user_id"]:
+            return None
+        return str(row["user_id"])
+
+
+def _resolve_session_user_id(request: Request, db_path: Optional[str] = None) -> Optional[str]:
+    """Map the Vertex web session cookie to a system.db user id (None if not signed in)."""
+    username = verify_web_session(request.cookies.get(SESSION_COOKIE_NAME))
+    if not username:
+        return None
+    return system_db.get_user_id_by_username(username, db_path=db_path)
 
 
 def extract_bearer_token(request: Request) -> str:
@@ -162,7 +179,6 @@ async def authorization_server_metadata(request: Request) -> JSONResponse:
             "grant_types_supported": [
                 "authorization_code",
                 "refresh_token",
-                "client_credentials",
             ],
             "token_endpoint_auth_methods_supported": [
                 "client_secret_post",
@@ -201,18 +217,20 @@ async def dynamic_client_registration(request: Request) -> JSONResponse:
 async def userinfo_endpoint(request: Request) -> JSONResponse:
     """OpenID Connect UserInfo endpoint for Google Account Linking"""
     token = extract_bearer_token(request)
-    if _get_client_secret() and not verify_bearer_token(token):
+    user_id = verify_bearer_token(token)
+    if not user_id:
         return JSONResponse(
             {"error": "invalid_token", "error_description": "Missing or invalid Bearer token"},
             status_code=401,
             headers={"Access-Control-Allow-Origin": "*"},
         )
     hostname = urlparse(_get_base_domain()).hostname or "localhost"
+    username = system_db.get_username_by_user_id(user_id) or user_id
     return JSONResponse(
         {
-            "sub": "game_hub_owner",
-            "name": "Game Hub Owner",
-            "email": f"owner@{hostname}",
+            "sub": user_id,
+            "name": username,
+            "email": f"{username}@{hostname}",
             "email_verified": True,
         },
         headers={
@@ -228,6 +246,7 @@ def _render_consent_page(
     state: str,
     code_challenge: str,
     code_challenge_method: str,
+    username: str = "",
     error_msg: str = "",
 ) -> HTMLResponse:
     error_html = (
@@ -248,7 +267,7 @@ def _render_consent_page(
     <div style="font-size:2.2rem;margin-bottom:8px;text-align:center;">🎮</div>
     <h3 style="margin:0 0 8px 0;text-align:center;">Authorize Game Hub MCP</h3>
     <p style="color:#94a3b8;font-size:0.88rem;line-height:1.45;text-align:center;margin-bottom:20px;">
-      Client <strong>{html.escape(client_id)}</strong> is requesting access to your Game Hub library.
+      Client <strong>{html.escape(client_id)}</strong> is requesting access to the Game Hub library of <strong>{html.escape(username)}</strong>.
     </p>
     {error_html}
     <input type="hidden" name="client_id" value="{html.escape(client_id)}">
@@ -256,9 +275,6 @@ def _render_consent_page(
     <input type="hidden" name="state" value="{html.escape(state)}">
     <input type="hidden" name="code_challenge" value="{html.escape(code_challenge)}">
     <input type="hidden" name="code_challenge_method" value="{html.escape(code_challenge_method)}">
-    <label style="display:block;font-size:0.82rem;color:#cbd5e1;margin-bottom:6px;">MCP Client Secret (from <code>.env</code>)</label>
-    <input type="password" name="access_key" required autofocus placeholder="Enter MCP_CLIENT_SECRET"
-      style="width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#f8fafc;font-size:0.95rem;box-sizing:border-box;margin-bottom:16px;">
     <button type="submit" style="width:100%;padding:11px;border-radius:8px;border:none;background:#38bdf8;color:#0f172a;font-weight:600;font-size:0.95rem;cursor:pointer;">
       Approve &amp; Connect
     </button>
@@ -271,22 +287,14 @@ def _render_consent_page(
 async def authorize_endpoint(request: Request):
     """
     Handles GET/POST /oauth/authorize.
-    Requires the owner to authenticate with MCP_CLIENT_SECRET before issuing an authorization code.
+    Requires the user to be signed in to their Vertex web session (they are prompted to sign in
+    otherwise); the issued authorization code is bound to that user's id.
     """
-    secret = _get_client_secret()
-    if not secret:
-        return HTMLResponse(
-            "<p style='font-family:sans-serif;color:#ef4444;padding:24px;'>"
-            "OAuth is disabled because <code>MCP_CLIENT_SECRET</code> is not set in <code>.env</code>.</p>",
-            status_code=403,
-        )
-
     client_id = request.query_params.get("client_id") or _get_client_id()
     redirect_uri = request.query_params.get("redirect_uri") or ""
     state = request.query_params.get("state") or ""
     code_challenge = request.query_params.get("code_challenge") or ""
     code_challenge_method = request.query_params.get("code_challenge_method") or "S256"
-    submitted_key = ""
 
     if request.method == "POST":
         try:
@@ -297,7 +305,6 @@ async def authorize_endpoint(request: Request):
             state = str(form_dict.get("state") or state)
             code_challenge = str(form_dict.get("code_challenge") or code_challenge)
             code_challenge_method = str(form_dict.get("code_challenge_method") or code_challenge_method)
-            submitted_key = str(form_dict.get("access_key") or "").strip()
         except Exception:
             pass
 
@@ -307,23 +314,35 @@ async def authorize_endpoint(request: Request):
             status_code=400,
         )
 
-    if request.method != "POST":
-        return _render_consent_page(client_id, redirect_uri, state, code_challenge, code_challenge_method)
+    user_id = _resolve_session_user_id(request)
+    if not user_id:
+        if verify_web_session(request.cookies.get(SESSION_COOKIE_NAME)):
+            logger.warning("Rejected OAuth authorization: web session has no matching Vertex account")
+            return HTMLResponse(
+                "<p style='font-family:sans-serif;color:#ef4444;padding:24px;'>"
+                "Your signed-in account has no Vertex user record, so it cannot authorize MCP access.</p>",
+                status_code=403,
+            )
+        # Not signed in: prompt for a Vertex login, then return to this authorization request.
+        resume = "/oauth/authorize"
+        if request.url.query:
+            resume += "?" + request.url.query
+        return render_login_page(next_url=resume)
 
-    if not submitted_key or not secrets.compare_digest(submitted_key, secret):
-        logger.warning("Rejected OAuth authorization attempt with invalid secret for client '%s'", client_id)
+    if request.method != "POST":
         return _render_consent_page(
             client_id,
             redirect_uri,
             state,
             code_challenge,
             code_challenge_method,
-            error_msg="Invalid MCP_CLIENT_SECRET. Please check your .env file.",
+            username=system_db.get_username_by_user_id(user_id) or "",
         )
 
     code = "gh_code_" + secrets.token_urlsafe(32)
     _auth_codes[code] = {
         "client_id": client_id,
+        "user_id": user_id,
         "redirect_uri": redirect_uri,
         "code_challenge": code_challenge,
         "code_challenge_method": code_challenge_method,
@@ -335,7 +354,7 @@ async def authorize_endpoint(request: Request):
         params["state"] = state
     sep = "&" if "?" in redirect_uri else "?"
     target_url = redirect_uri + sep + urlencode(params)
-    logger.info("Authorized OAuth for client '%s'", client_id)
+    logger.info("Authorized OAuth for client '%s' (user %s)", client_id, user_id)
 
     escaped_target = html.escape(target_url)
     html_content = f"""<!DOCTYPE html>
@@ -365,14 +384,6 @@ async def token_endpoint(request: Request) -> JSONResponse:
     """
     Handles POST /oauth/token to exchange authorization code or credentials for an access token.
     """
-    secret = _get_client_secret()
-    if not secret:
-        return JSONResponse(
-            {"error": "access_denied", "error_description": "MCP_CLIENT_SECRET is not configured on this server"},
-            status_code=403,
-            headers={"Access-Control-Allow-Origin": "*"},
-        )
-
     content_type = request.headers.get("content-type", "")
     data = {}
     if "application/json" in content_type:
@@ -447,7 +458,7 @@ async def token_endpoint(request: Request) -> JSONResponse:
         access_token = "gh_mcp_" + secrets.token_urlsafe(32)
         refresh_token = "gh_ref_" + secrets.token_urlsafe(32)
         resolved_client = client_id or record.get("client_id") or _get_client_id()
-        _store_token_pair(access_token, refresh_token, resolved_client)
+        _store_token_pair(access_token, refresh_token, resolved_client, record["user_id"])
 
         return JSONResponse(
             {
@@ -467,8 +478,8 @@ async def token_endpoint(request: Request) -> JSONResponse:
 
     elif grant_type == "refresh_token":
         incoming_refresh = str(data.get("refresh_token") or "")
-        resolved_client = _verify_refresh_token(incoming_refresh)
-        if not resolved_client:
+        refresh_record = _verify_refresh_token(incoming_refresh)
+        if not refresh_record:
             return JSONResponse(
                 {"error": "invalid_grant", "error_description": "Invalid refresh token"},
                 status_code=400,
@@ -479,37 +490,9 @@ async def token_endpoint(request: Request) -> JSONResponse:
             )
         access_token = "gh_mcp_" + secrets.token_urlsafe(32)
         refresh_token = "gh_ref_" + secrets.token_urlsafe(32)
-        _store_token_pair(access_token, refresh_token, resolved_client)
-        return JSONResponse(
-            {
-                "token_type": "Bearer",
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "expires_in": 3600,
-                "scope": "gamehub:read gamehub:write",
-            },
-            headers={
-                "Cache-Control": "no-store",
-                "Pragma": "no-cache",
-                "Access-Control-Allow-Origin": "*",
-                "Content-Type": "application/json;charset=UTF-8",
-            },
+        _store_token_pair(
+            access_token, refresh_token, refresh_record["client_id"], refresh_record["user_id"]
         )
-
-    elif grant_type == "client_credentials":
-        if not client_secret or not secrets.compare_digest(client_secret, secret):
-            logger.warning("Rejected client_credentials token request with invalid client_secret")
-            return JSONResponse(
-                {"error": "invalid_client", "error_description": "Invalid client_secret"},
-                status_code=401,
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Content-Type": "application/json;charset=UTF-8",
-                },
-            )
-        access_token = "gh_mcp_" + secrets.token_urlsafe(32)
-        refresh_token = "gh_ref_" + secrets.token_urlsafe(32)
-        _store_token_pair(access_token, refresh_token, client_id or _get_client_id())
         return JSONResponse(
             {
                 "token_type": "Bearer",

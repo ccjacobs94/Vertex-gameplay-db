@@ -69,8 +69,6 @@ def init_system_db(db_path: str = DEFAULT_SYSTEM_DB_PATH) -> None:
                 FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
             );
 
-            CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_id ON oauth_tokens(user_id);
-
             CREATE TABLE IF NOT EXISTS catalog_cache (
                 normalized_title TEXT PRIMARY KEY,
                 steam_appid TEXT,
@@ -82,6 +80,36 @@ def init_system_db(db_path: str = DEFAULT_SYSTEM_DB_PATH) -> None:
             );
             """
         )
+        # Additive, idempotent migration for system.db files created before oauth_tokens
+        # carried a user_id. Legacy rows keep NULL and are never accepted as valid tokens.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(oauth_tokens)")}
+        if "user_id" not in cols:
+            conn.execute("ALTER TABLE oauth_tokens ADD COLUMN user_id TEXT")
+        if "scope" not in cols:
+            conn.execute("ALTER TABLE oauth_tokens ADD COLUMN scope TEXT DEFAULT ''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_id ON oauth_tokens(user_id)")
+
+
+def get_user_id_by_username(username: str, db_path: Optional[str] = None) -> Optional[str]:
+    if not username:
+        return None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            "SELECT id FROM users WHERE LOWER(username) = LOWER(?)", (username,)
+        ).fetchone()
+        return str(row["id"]) if row else None
+
+
+def get_username_by_user_id(user_id: str, db_path: Optional[str] = None) -> Optional[str]:
+    if not user_id:
+        return None
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute("SELECT username FROM users WHERE id = ?", (user_id,)).fetchone()
+        return str(row["username"]) if row else None
 
 
 def get_catalog_cache_entry(

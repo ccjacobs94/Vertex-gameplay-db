@@ -84,7 +84,7 @@ If you want cloud AI clients (such as Google Gemini Web or Claude Web) to connec
 ## 🔒 Security Notes
 
 - **Web Dashboard (`8095`)**: Designed for trusted local network (LAN) or VPN/Tailscale access. Do **not** expose port `8095` directly to the public internet without an authenticating reverse proxy (such as Cloudflare Access, Authelia, or Authentik).
-- **MCP Server (`8096` / `8097`)**: When `MCP_CLIENT_SECRET` is set in `.env`, all `/mcp` and `/sse` requests require a valid `Authorization: Bearer <token>` issued via the `/oauth/authorize` consent screen (which prompts for `MCP_CLIENT_SECRET`) or direct Bearer authentication with `MCP_CLIENT_SECRET`.
+- **MCP Server (`8096` / `8097`)**: All `/mcp` and `/sse` requests require a per-user `Authorization: Bearer <token>` issued via `/oauth/authorize`, which requires you to be signed in to your Vertex web session (you are prompted to sign in otherwise). Each token is bound to that user's `user_id` in `system.db`, and every MCP tool query runs against that user's own `games.db`. `MCP_CLIENT_SECRET` is no longer accepted as a bearer token, and the `client_credentials` grant is disabled. Your Vertex login must have a matching row in `system.db`'s `users` table.
 
 ---
 
