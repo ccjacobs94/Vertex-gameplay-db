@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import httpx
 
 import system_db
+from context import current_user_id
 from db import (
     DEFAULT_DB_PATH,
     get_connection,
@@ -50,19 +51,36 @@ def _resolve_credentials(
 ) -> UserCredentials:
     """
     Resolve user-specific credentials from a UserCredentials instance or dict,
-    falling back to server-wide environment defaults where appropriate.
+    falling back to user-configured connections in system.db, then server-wide
+    environment defaults where appropriate.
     """
     env_steam_key = os.environ.get("STEAM_API_KEY", "").strip()
     env_steam_id = os.environ.get("STEAM_ID", "").strip()
     env_xbl_key = os.environ.get("XBL_API_KEY", "").strip()
     env_psn_npsso = os.environ.get("PSN_NPSSO", "").strip()
 
+    user_conn = {}
+    try:
+        uid = current_user_id.get()
+        if uid:
+            user_conn = system_db.get_user_connections(uid) or {}
+    except Exception:
+        user_conn = {}
+
+    db_steam_id = (user_conn.get("steam_id") or "").strip()
+    db_xbl_key = (user_conn.get("xbl_api_key") or "").strip()
+    db_psn_npsso = (user_conn.get("psn_npsso") or "").strip()
+
+    def_steam_id = db_steam_id or env_steam_id
+    def_xbl_key = db_xbl_key or env_xbl_key
+    def_psn_npsso = db_psn_npsso or env_psn_npsso
+
     if credentials is None:
         return UserCredentials(
-            steam_id=env_steam_id,
+            steam_id=def_steam_id,
             steam_api_key=env_steam_key,
-            xbl_api_key=env_xbl_key,
-            psn_npsso=env_psn_npsso,
+            xbl_api_key=def_xbl_key,
+            psn_npsso=def_psn_npsso,
         )
 
     if isinstance(credentials, dict):
@@ -77,10 +95,10 @@ def _resolve_credentials(
         raw_psn_npsso = getattr(credentials, "psn_npsso", None)
 
     return UserCredentials(
-        steam_id=raw_steam_id.strip() if raw_steam_id is not None else env_steam_id,
+        steam_id=raw_steam_id.strip() if raw_steam_id is not None else def_steam_id,
         steam_api_key=(raw_steam_key.strip() if raw_steam_key and raw_steam_key.strip() else env_steam_key),
-        xbl_api_key=raw_xbl_key.strip() if raw_xbl_key is not None else env_xbl_key,
-        psn_npsso=raw_psn_npsso.strip() if raw_psn_npsso is not None else env_psn_npsso,
+        xbl_api_key=raw_xbl_key.strip() if raw_xbl_key is not None else def_xbl_key,
+        psn_npsso=raw_psn_npsso.strip() if raw_psn_npsso is not None else def_psn_npsso,
     )
 
 
