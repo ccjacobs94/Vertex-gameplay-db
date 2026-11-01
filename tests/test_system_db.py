@@ -4,8 +4,10 @@ import asyncio
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import context
+import db
 import system_db
 
 
@@ -164,6 +166,95 @@ class TestSystemDatabase(unittest.TestCase):
             self.assertIsNone(
                 conn.execute("SELECT 1 FROM oauth_tokens WHERE user_id = 'u2'").fetchone()
             )
+
+
+class TestAccountDatabaseRouting(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        context.current_user_id.set(None)
+
+    def tearDown(self):
+        context.current_user_id.set(None)
+        self.temp_dir.cleanup()
+
+    def test_explicit_db_path_takes_precedence_over_user_context(self):
+        context.set_current_user_id("user-explicit-test")
+        explicit_path = str(Path(self.temp_dir.name) / "custom" / "explicit.db")
+        db.init_db(db_path=explicit_path)
+        db.add_manual_game(title="Celeste", platform="PC", db_path=explicit_path)
+
+        self.assertTrue(Path(explicit_path).exists())
+        games = db.query_games(db_path=explicit_path)
+        self.assertEqual(len(games), 1)
+        self.assertEqual(games[0]["title"], "Celeste")
+
+    def test_user_context_resolves_to_app_data_users_path(self):
+        context.set_current_user_id("acct-42")
+        mock_conn = MagicMock()
+        with patch.object(Path, "mkdir") as mock_mkdir, patch(
+            "db.sqlite3.connect", return_value=mock_conn
+        ) as mock_connect:
+            conn = db.get_connection()
+            self.assertIs(conn, mock_conn)
+            mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
+            mock_connect.assert_called_once_with(
+                "/app/data/users/acct-42/games.db", timeout=15.0
+            )
+            executed_sql = [call.args[0] for call in mock_conn.execute.call_args_list]
+            self.assertIn("PRAGMA journal_mode=WAL;", executed_sql)
+            self.assertIn("PRAGMA foreign_keys=ON;", executed_sql)
+
+    def test_fallback_to_default_db_path_when_no_user_active(self):
+        fallback_path = str(Path(self.temp_dir.name) / "legacy" / "games.db")
+        with patch.object(db, "DEFAULT_DB_PATH", fallback_path):
+            # Both None and empty string should fall back to DEFAULT_DB_PATH
+            for empty_val in (None, ""):
+                context.set_current_user_id(empty_val)
+                with db.get_connection() as conn:
+                    journal_mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
+                    fk_enabled = conn.execute("PRAGMA foreign_keys;").fetchone()[0]
+                    self.assertEqual(journal_mode.lower(), "wal")
+                    self.assertEqual(fk_enabled, 1)
+                self.assertTrue(Path(fallback_path).exists())
+
+    def test_multi_account_isolation_via_context(self):
+        users_dir = str(Path(self.temp_dir.name) / "users")
+        default_db = str(Path(self.temp_dir.name) / "default" / "games.db")
+
+        with patch.object(db, "USERS_DB_DIR", users_dir), patch.object(
+            db, "DEFAULT_DB_PATH", default_db
+        ):
+            # Default (no user active)
+            db.init_db()
+            db.add_manual_game(title="Legacy Game", platform="Switch")
+
+            # User Alice
+            context.set_current_user_id("alice")
+            db.init_db()
+            db.add_manual_game(title="Portal 2", platform="PC")
+
+            # User Bob
+            context.set_current_user_id("bob")
+            db.init_db()
+            db.add_manual_game(title="Halo Infinite", platform="Xbox")
+
+            # Verify parent directories and DB files were created per account
+            self.assertTrue((Path(users_dir) / "alice" / "games.db").exists())
+            self.assertTrue((Path(users_dir) / "bob" / "games.db").exists())
+            self.assertTrue(Path(default_db).exists())
+
+            # Verify isolation
+            context.set_current_user_id("alice")
+            alice_games = db.query_games()
+            self.assertEqual([g["title"] for g in alice_games], ["Portal 2"])
+
+            context.set_current_user_id("bob")
+            bob_games = db.query_games()
+            self.assertEqual([g["title"] for g in bob_games], ["Halo Infinite"])
+
+            context.set_current_user_id(None)
+            legacy_games = db.query_games()
+            self.assertEqual([g["title"] for g in legacy_games], ["Legacy Game"])
 
 
 if __name__ == "__main__":
