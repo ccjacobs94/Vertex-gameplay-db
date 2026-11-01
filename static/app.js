@@ -3386,12 +3386,24 @@ function closeOnboardingWizard() {
   sessionStorage.setItem("vertex_onboarding_dismissed", "true");
 }
 
+async function dismissWizardForever() {
+  localStorage.setItem("vertex_onboarding_dismissed", "true");
+  sessionStorage.setItem("vertex_onboarding_dismissed", "true");
+  try {
+    await fetch("/api/user/onboarding/complete", { method: "POST" });
+  } catch (e) {
+    console.error("Error dismissing onboarding:", e);
+  }
+  closeOnboardingWizard();
+}
+
 function openConnectionsModal() {
   openOnboardingWizard();
 }
 
 window.openOnboardingWizard = openOnboardingWizard;
 window.closeOnboardingWizard = closeOnboardingWizard;
+window.dismissWizardForever = dismissWizardForever;
 window.openConnectionsModal = openConnectionsModal;
 
 async function loadWizardExistingData() {
@@ -3495,6 +3507,7 @@ async function finishWizardAndSync() {
     console.error("Error completing onboarding:", e);
   }
 
+  localStorage.setItem("vertex_onboarding_dismissed", "true");
   closeOnboardingWizard();
   const syncBtn = document.getElementById("btn-sync");
   if (syncBtn) {
@@ -3503,6 +3516,7 @@ async function finishWizardAndSync() {
 }
 
 async function skipWizard() {
+  localStorage.setItem("vertex_onboarding_dismissed", "true");
   try {
     await fetch("/api/user/onboarding/complete", { method: "POST" });
   } catch (e) {}
@@ -4867,6 +4881,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnWizNext = document.getElementById("btn-wizard-next");
   if (btnWizNext) btnWizNext.addEventListener("click", () => switchWizardStep(currentWizardStep + 1));
 
+  const btnWizDismiss = document.getElementById("btn-wizard-dismiss-forever");
+  if (btnWizDismiss) btnWizDismiss.addEventListener("click", dismissWizardForever);
+
   const btnWizSkip = document.getElementById("btn-wizard-skip");
   if (btnWizSkip) btnWizSkip.addEventListener("click", skipWizard);
 
@@ -4962,7 +4979,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (res.ok) {
       const conns = await res.json();
       if (conns && conns.onboarding_completed === false) {
-        if (!sessionStorage.getItem("vertex_onboarding_dismissed")) {
+        if (!localStorage.getItem("vertex_onboarding_dismissed") && !sessionStorage.getItem("vertex_onboarding_dismissed")) {
           setTimeout(() => openOnboardingWizard(), 400);
         }
       }

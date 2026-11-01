@@ -6,6 +6,7 @@ and onboarding completion tracking.
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -172,3 +173,63 @@ class TestConnectionVerification(unittest.TestCase):
             json={"platform": "steam", "credential": "test"},
         )
         self.assertEqual(res.status_code, 401)
+
+    def test_established_account_with_games_auto_completes_onboarding(self):
+        # Create an established user with games in their user db
+        established_uid = system_db.create_user(
+            username="gamer_pro",
+            password="Password123!",
+            status="active",
+            db_path=self.system_db_path,
+        )
+        login_res = self.client.post(
+            "/login",
+            data={"username": "gamer_pro", "password": "Password123!"},
+            follow_redirects=False,
+        )
+        cookie = login_res.cookies.get(web_auth.SESSION_COOKIE_NAME)
+        headers = {"Cookie": f"{web_auth.SESSION_COOKIE_NAME}={cookie}"}
+
+        # Seed 1 game in their personal database
+        user_db_dir = Path(self.users_dir) / established_uid
+        user_db_dir.mkdir(parents=True, exist_ok=True)
+        user_db_path = user_db_dir / "games.db"
+        with sqlite3.connect(user_db_path) as conn:
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS games (
+                    id INTEGER PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    platform TEXT NOT NULL,
+                    completion_status TEXT DEFAULT 'Not Played',
+                    ownership_status TEXT DEFAULT 'Owned',
+                    is_game_pass INTEGER DEFAULT 0,
+                    playtime_hours REAL DEFAULT 0.0,
+                    user_rating INTEGER,
+                    critic_score INTEGER,
+                    release_year INTEGER,
+                    genres TEXT DEFAULT '[]',
+                    tags TEXT DEFAULT '[]',
+                    cover_url TEXT,
+                    notes TEXT DEFAULT '',
+                    favorite INTEGER DEFAULT 0,
+                    status_locked INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )"""
+            )
+            now = "2026-11-01T00:00:00+00:00"
+            conn.execute(
+                "INSERT INTO games (source, external_id, title, platform, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+                ("manual", "ext_123", "Halo Infinite", "Xbox", now, now),
+            )
+
+        # Before calling /api/user/connections, onboarding_completed is False
+        self.assertFalse(system_db.is_user_onboarding_completed(established_uid, self.system_db_path))
+
+        # When /api/user/connections is requested, it detects existing games and auto-completes onboarding
+        res = self.client.get("/api/user/connections", headers=headers)
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json().get("onboarding_completed"))
+
+        # DB now permanently records onboarding completed
+        self.assertTrue(system_db.is_user_onboarding_completed(established_uid, self.system_db_path))

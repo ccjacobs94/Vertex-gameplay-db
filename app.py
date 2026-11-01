@@ -1394,6 +1394,20 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
     psn_token = conns.get("psn_npsso", "")
 
     is_primary = (user_id == get_auth_username())
+    onboarding_completed = bool(conns.get("onboarding_completed", False))
+
+    if not onboarding_completed:
+        # Check if the user already has games in their personal database (established account)
+        try:
+            user_db_path = _get_active_user_db_path(user_id)
+            if user_db_path.exists():
+                with sqlite3.connect(user_db_path) as uconn:
+                    row = uconn.execute("SELECT count(*) FROM games").fetchone()
+                    if row and row[0] > 0:
+                        system_db.set_user_onboarding_completed(user_id, True)
+                        onboarding_completed = True
+        except Exception:
+            pass
 
     return {
         "user_id": user_id,
@@ -1401,7 +1415,7 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
         "steam_id": conns.get("steam_id", ""),
         "has_xbl_api_key": bool(xbl_key),
         "has_psn_npsso": bool(psn_token),
-        "onboarding_completed": bool(conns.get("onboarding_completed", False)),
+        "onboarding_completed": onboarding_completed,
         "xbl_api_key_masked": (f"••••••••{xbl_key[-4:]}" if len(xbl_key) >= 4 else ("••••" if xbl_key else "")),
         "psn_npsso_masked": (f"••••••••{psn_token[-4:]}" if len(psn_token) >= 4 else ("••••" if psn_token else "")),
         "server_defaults": {
