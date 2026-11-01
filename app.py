@@ -17,7 +17,7 @@ import shutil
 import sqlite3
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
@@ -1433,6 +1433,73 @@ async def api_complete_user_onboarding(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail="Authentication required")
     system_db.set_user_onboarding_completed(user_id, True)
     return {"status": "ok", "onboarding_completed": True, "message": "Onboarding marked as completed"}
+
+
+def validate_steam_openid_response(query_params: Dict[str, str]) -> Optional[str]:
+    mode = query_params.get("openid.mode", "")
+    if mode in ("cancel", "error"):
+        return None
+
+    # Re-validate with Steam using check_authentication
+    validation_payload = {k: v for k, v in query_params.items() if k.startswith("openid.")}
+    validation_payload["openid.mode"] = "check_authentication"
+
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            resp = client.post("https://steamcommunity.com/openid/login", data=validation_payload)
+            if resp.status_code == 200 and "is_valid:true" in resp.text:
+                claimed_id = query_params.get("openid.claimed_id", "")
+                m = re.search(r"https?://steamcommunity\.com/openid/id/(\d+)", claimed_id)
+                if m:
+                    return m.group(1)
+    except Exception as exc:
+        logger.warning("Steam OpenID signature validation error: %s", exc)
+    return None
+
+
+@app.get("/api/auth/steam/login")
+async def api_auth_steam_login(request: Request, return_to: str = "/") -> Response:
+    base_url = str(request.base_url).rstrip("/")
+    if request.headers.get("x-forwarded-proto") and request.headers.get("x-forwarded-host"):
+        base_url = f"{request.headers['x-forwarded-proto']}://{request.headers['x-forwarded-host']}".rstrip("/")
+
+    return_url = f"{base_url}/api/auth/steam/callback?return_to={quote(return_to)}"
+    realm_url = f"{base_url}/"
+
+    params = {
+        "openid.ns": "http://specs.openid.net/auth/2.0",
+        "openid.mode": "checkid_setup",
+        "openid.return_to": return_url,
+        "openid.realm": realm_url,
+        "openid.identity": "http://specs.openid.net/auth/2.0/identifier_select",
+        "openid.claimed_id": "http://specs.openid.net/auth/2.0/identifier_select",
+    }
+    steam_login_url = f"https://steamcommunity.com/openid/login?{urlencode(params)}"
+    return RedirectResponse(url=steam_login_url, status_code=303)
+
+
+@app.get("/api/auth/steam/callback")
+async def api_auth_steam_callback(request: Request, return_to: str = "/") -> Response:
+    target_return = return_to if return_to.startswith("/") else "/"
+    sep = "&" if "?" in target_return else "?"
+
+    if request.query_params.get("openid.mode") in ("cancel", "error"):
+        return RedirectResponse(f"{target_return}{sep}cancelled=1", status_code=303)
+
+    raw_params = dict(request.query_params)
+    steam_id = validate_steam_openid_response(raw_params)
+    if inspect.isawaitable(steam_id):
+        steam_id = await steam_id
+
+    if not steam_id:
+        return RedirectResponse(f"{target_return}{sep}error=steam_verification_failed", status_code=303)
+
+    user_id, _ = _get_active_user(request)
+    if user_id:
+        system_db.set_user_connections(user_id=user_id, steam_id=steam_id)
+        return RedirectResponse(f"{target_return}{sep}steam_connected=1&steam_id={steam_id}", status_code=303)
+
+    return RedirectResponse(f"/login?steam_id={steam_id}&steam_unlinked=1", status_code=303)
 
 
 @app.get("/api/user/mcp")
