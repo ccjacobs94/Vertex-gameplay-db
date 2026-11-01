@@ -90,13 +90,26 @@ class OAuthUserScopeTests(unittest.TestCase):
         self.assertEqual(oauth_provider._auth_codes, {})
         self.assertIn('action="/login"', r.text)
 
-    def test_session_without_system_user_is_forbidden(self):
+    def test_session_without_system_user_auto_provisions(self):
         with mock.patch.object(oauth_provider, "verify_web_session", return_value="ghost"):
             r = self.client.get(
                 "/oauth/authorize", params=self._authorize_params(), cookies={"vertex_session": "x"}
             )
-        self.assertEqual(r.status_code, 403)
-        self.assertEqual(oauth_provider._auth_codes, {})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("ghost", r.text)
+        self.assertEqual(system_db.get_user_id_by_username("ghost"), "ghost")
+
+    def test_default_username_is_chameleon94(self):
+        import web_auth
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(web_auth.get_auth_username(), "chameleon94")
+
+    def test_ensure_user_creates_and_returns_id(self):
+        uid1 = system_db.ensure_user("NewUser")
+        self.assertEqual(uid1, "newuser")
+        # Idempotent call returns same ID
+        uid2 = system_db.ensure_user("newuser")
+        self.assertEqual(uid1, uid2)
 
     def test_full_flow_binds_token_to_signed_in_user(self):
         with mock.patch.object(oauth_provider, "verify_web_session", return_value="Bob"):

@@ -112,6 +112,42 @@ def get_username_by_user_id(user_id: str, db_path: Optional[str] = None) -> Opti
         return str(row["username"]) if row else None
 
 
+def ensure_user(
+    username: str,
+    user_id: Optional[str] = None,
+    password_hash: str = "managed_by_web_auth",
+    email: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> str:
+    """Ensure a user exists in system.db, returning their user_id.
+
+    If a user with this username (case-insensitive) already exists, returns their id.
+    Otherwise inserts a new user record.
+    """
+    if not username:
+        raise ValueError("username cannot be empty")
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            "SELECT id FROM users WHERE LOWER(username) = LOWER(?)", (username,)
+        ).fetchone()
+        if row:
+            return str(row["id"])
+        assigned_id = str(user_id or username.lower().strip())
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO users (id, username, email, password_hash, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (assigned_id, username.strip(), email, password_hash, now),
+        )
+        return assigned_id
+
+
 def get_catalog_cache_entry(
     normalized_title: str, db_path: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:

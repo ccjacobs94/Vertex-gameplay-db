@@ -106,7 +106,10 @@ def _resolve_session_user_id(request: Request, db_path: Optional[str] = None) ->
     username = verify_web_session(request.cookies.get(SESSION_COOKIE_NAME))
     if not username:
         return None
-    return system_db.get_user_id_by_username(username, db_path=db_path)
+    user_id = system_db.get_user_id_by_username(username, db_path=db_path)
+    if not user_id:
+        user_id = system_db.ensure_user(username, db_path=db_path)
+    return user_id
 
 
 def extract_bearer_token(request: Request) -> str:
@@ -316,13 +319,6 @@ async def authorize_endpoint(request: Request):
 
     user_id = _resolve_session_user_id(request)
     if not user_id:
-        if verify_web_session(request.cookies.get(SESSION_COOKIE_NAME)):
-            logger.warning("Rejected OAuth authorization: web session has no matching Vertex account")
-            return HTMLResponse(
-                "<p style='font-family:sans-serif;color:#ef4444;padding:24px;'>"
-                "Your signed-in account has no Vertex user record, so it cannot authorize MCP access.</p>",
-                status_code=403,
-            )
         # Not signed in: prompt for a Vertex login, then return to this authorization request.
         resume = "/oauth/authorize"
         if request.url.query:

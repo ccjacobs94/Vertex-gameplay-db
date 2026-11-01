@@ -19,16 +19,24 @@ from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import mcp_server
+import system_db
 from context import get_current_user_id, reset_current_user_id, set_current_user_id
 from web_auth import (
+    SESSION_COOKIE_NAME,
+    _is_direct_local_or_tailscale_request,
+    get_auth_username,
     handle_login_get,
     handle_login_post,
     handle_logout,
+    is_local_bypass_enabled,
     is_public_path,
     is_request_authenticated,
     is_web_auth_enabled,
+    verify_web_session,
 )
 from db import (
+    DEFAULT_DB_PATH,
+    USERS_DB_DIR,
     add_manual_game,
     delete_game,
     dismiss_reconcile_group,
@@ -211,7 +219,8 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
     for oauth_route in get_oauth_routes():
         mcp_app.routes.insert(0, oauth_route)
 
-    # Sign-in form posted by /oauth/authorize when the user has no Vertex web session yet
+    # Sign-in form and submission for /oauth/authorize when the user has no Vertex web session yet
+    mcp_app.routes.insert(0, Route("/login", handle_login_get, methods=["GET"]))
     mcp_app.routes.insert(0, Route("/login", handle_login_post, methods=["POST"]))
 
     mcp_app.routes.insert(0, Route("/", root_handler, methods=["GET", "HEAD", "OPTIONS"]))
@@ -229,6 +238,19 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    system_db.init_system_db()
+    default_user = get_auth_username()
+    system_db.ensure_user(default_user)
+    # If the default user's library doesn't exist yet, seed it from DEFAULT_DB_PATH
+    default_user_db = Path(USERS_DB_DIR) / default_user / "games.db"
+    if not default_user_db.exists() and Path(DEFAULT_DB_PATH).exists():
+        default_user_db.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        try:
+            shutil.copy2(DEFAULT_DB_PATH, default_user_db)
+            logger.info("Migrated legacy database from %s to %s", DEFAULT_DB_PATH, default_user_db)
+        except Exception as e:
+            logger.warning("Could not seed default user database: %s", e)
     sync_task = asyncio.create_task(_periodic_sync_loop())
     mcp_task = asyncio.create_task(_run_mcp_http_server("0.0.0.0", MCP_PORT))
     logger.info("Started MCP Streamable HTTP server on port %s with CORS & OAuth discovery", MCP_PORT)
@@ -259,7 +281,20 @@ class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
                     next_target = f"{path}?{request.url.query}"
                 return RedirectResponse(url=f"/login?next={quote(next_target)}", status_code=303)
 
-        response = await call_next(request)
+        # Scope authenticated requests to the user's games.db
+        session_id = request.cookies.get(SESSION_COOKIE_NAME)
+        username = verify_web_session(session_id)
+        if not username and is_local_bypass_enabled() and _is_direct_local_or_tailscale_request(request):
+            username = get_auth_username()
+        user_id = system_db.get_user_id_by_username(username) if username else None
+        user_ctx_token = set_current_user_id(user_id) if user_id else None
+
+        try:
+            response = await call_next(request)
+        finally:
+            if user_ctx_token is not None:
+                reset_current_user_id(user_ctx_token)
+
         if path.startswith("/static/"):
             response.headers["Cache-Control"] = "no-cache"
         return response
