@@ -2990,8 +2990,139 @@ async function saveAccountPassword() {
   }
 }
 
+async function loadAdminSettings() {
+  try {
+    const res = await fetch("/api/admin/settings");
+    if (!res.ok) return;
+    const data = await res.json();
+    const sel = document.getElementById("select-reg-policy");
+    if (sel && data.registration_policy) {
+      sel.value = data.registration_policy;
+    }
+  } catch (err) {
+    console.error("Failed to load admin settings:", err);
+  }
+}
+
+async function saveAdminRegPolicy() {
+  const sel = document.getElementById("select-reg-policy");
+  const msgEl = document.getElementById("reg-policy-status-msg");
+  if (!sel || !msgEl) return;
+  msgEl.className = "connections-status-msg";
+  msgEl.textContent = "Saving...";
+
+  try {
+    const res = await fetch("/api/admin/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ registration_policy: sel.value }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      msgEl.className = "connections-status-msg success";
+      msgEl.textContent = `Policy updated to "${data.registration_policy}".`;
+      setTimeout(() => { msgEl.textContent = ""; }, 3000);
+    } else {
+      msgEl.className = "connections-status-msg error";
+      msgEl.textContent = data.detail || "Failed to update policy.";
+    }
+  } catch (err) {
+    msgEl.className = "connections-status-msg error";
+    msgEl.textContent = `Error: ${err.message}`;
+  }
+}
+
+async function loadAdminInvites() {
+  const tbody = document.getElementById("admin-invites-tbody");
+  if (!tbody) return;
+  try {
+    const res = await fetch("/api/admin/invites");
+    if (!res.ok) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:1rem; color:#ef4444;">Failed to load invites (${res.status})</td></tr>`;
+      return;
+    }
+    const data = await res.json();
+    const invites = data.invites || [];
+    if (!invites.length) {
+      tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:1rem; color:#64748b;">No active or past invites.</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = invites.map((inv) => {
+      const isUsed = inv.status === "used";
+      const isExpired = inv.status === "expired";
+      const statusClass = isUsed ? "badge-status-pending" : (isExpired ? "badge-status-inactive" : "badge-status-active");
+
+      return `<tr>
+        <td><code>${escapeHtml(inv.code_preview)}</code></td>
+        <td style="font-size:0.8rem; color:#94a3b8;">${inv.created_at ? inv.created_at.split('T')[0] : '—'}</td>
+        <td style="font-size:0.8rem; color:#94a3b8;">${inv.expires_at ? inv.expires_at.split('T')[0] : 'Never'}</td>
+        <td><span class="badge-status ${statusClass}">${escapeHtml(inv.status)}</span></td>
+        <td>
+          ${!isUsed ? `
+            <button type="button" class="btn btn-sm btn-danger-outline"
+              onclick="revokeAdminInvite('${escapeHtml(inv.code_hash)}')">Revoke</button>
+          ` : `<span style="font-size:0.8rem; color:#64748b;">by ${escapeHtml(inv.used_by || 'user')}</span>`}
+        </td>
+      </tr>`;
+    }).join("");
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; padding:1rem; color:#ef4444;">Error: ${escapeHtml(err.message)}</td></tr>`;
+  }
+}
+
+async function createAdminInvite() {
+  try {
+    const res = await fetch("/api/admin/invites", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ttl_days: 7 }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      alert(`Failed to create invite: ${data.detail || "Error"}`);
+      return;
+    }
+    const alertBox = document.getElementById("admin-new-invite-alert");
+    const linkInput = document.getElementById("admin-invite-link-input");
+    if (alertBox && linkInput) {
+      const fullUrl = `${window.location.origin}${data.invite_url}`;
+      linkInput.value = fullUrl;
+      alertBox.hidden = false;
+      try {
+        await navigator.clipboard.writeText(fullUrl);
+      } catch (e) {}
+    } else {
+      prompt("Copy your invite link:", `${window.location.origin}${data.invite_url}`);
+    }
+    loadAdminInvites();
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  }
+}
+
+async function revokeAdminInvite(codeHash) {
+  if (!confirm("Revoke this invite code?")) return;
+  try {
+    const res = await fetch(`/api/admin/invites/${encodeURIComponent(codeHash)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const data = await res.json();
+      alert(`Revoke failed: ${data.detail || "Error"}`);
+      return;
+    }
+    loadAdminInvites();
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  }
+}
+window.revokeAdminInvite = revokeAdminInvite;
+
 async function loadAdminUsers() {
+  loadAdminSettings();
+  loadAdminInvites();
   const tbody = document.getElementById("admin-users-tbody");
+
   if (!tbody) return;
   try {
     const res = await fetch("/api/admin/users");
@@ -4403,6 +4534,26 @@ document.addEventListener("DOMContentLoaded", () => {
   }
   const btnSubmitCreateUser = document.getElementById("btn-submit-create-user");
   if (btnSubmitCreateUser) btnSubmitCreateUser.addEventListener("click", createAdminUser);
+
+  const btnSavePolicy = document.getElementById("btn-save-reg-policy");
+  if (btnSavePolicy) btnSavePolicy.addEventListener("click", saveAdminRegPolicy);
+
+  const btnCreateInvite = document.getElementById("btn-create-invite");
+  if (btnCreateInvite) btnCreateInvite.addEventListener("click", createAdminInvite);
+
+  const btnCopyInviteLink = document.getElementById("btn-copy-invite-link");
+  if (btnCopyInviteLink) {
+    btnCopyInviteLink.addEventListener("click", async () => {
+      const inp = document.getElementById("admin-invite-link-input");
+      if (!inp || !inp.value) return;
+      try {
+        await navigator.clipboard.writeText(inp.value);
+        btnCopyInviteLink.textContent = "Copied!";
+        setTimeout(() => { btnCopyInviteLink.textContent = "Copy Link"; }, 2000);
+      } catch (e) {}
+    });
+  }
+
 
 
   const btnToggleXbl = document.getElementById("btn-toggle-xbl");

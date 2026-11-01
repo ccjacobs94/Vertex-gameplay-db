@@ -1053,6 +1053,28 @@
           <button type="button" id="btn-toggle-create-user" class="btn btn-primary btn-sm">+ Create User</button>
         </div>
 
+        <!-- Registration Policy Control -->
+        <div class="admin-policy-card" style="background: var(--bg-card-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 0.85rem 1rem; margin-bottom: 1rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+            <div>
+              <strong>Self-Registration Policy:</strong>
+              <p class="settings-panel-desc" style="margin: 0.2rem 0 0 0; font-size: 0.8rem;">
+                Control how new users can join this self-hosted instance.
+              </p>
+            </div>
+            <div style="display: flex; gap: 0.5rem; align-items: center;">
+              <select id="select-reg-policy" style="background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-primary); border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem;">
+                <option value="disabled">Disabled (Admin only)</option>
+                <option value="invite">Invite Only (Code required)</option>
+                <option value="approval">Admin Approval (Pending queue)</option>
+                <option value="open">Open Registration</option>
+              </select>
+              <button type="button" id="btn-save-reg-policy" class="btn btn-sm btn-secondary">Save Policy</button>
+            </div>
+          </div>
+          <div id="reg-policy-status-msg" class="connections-status-msg" style="margin-top: 0.35rem;" aria-live="polite"></div>
+        </div>
+
         <!-- Inline Create User Form -->
         <div id="admin-create-user-card" class="admin-create-user-card" hidden>
           <h4 style="margin: 0 0 0.75rem 0; font-size: 0.95rem;">Add New User</h4>
@@ -1108,6 +1130,49 @@
               <tr><td colspan="5" style="text-align:center; padding:1.5rem; color:#64748b;">Loading users...</td></tr>
             </tbody>
           </table>
+        </div>
+
+        <!-- Invites Management Section -->
+        <div class="admin-invites-section" style="margin-top: 1.5rem; border-top: 1px solid var(--border-subtle); padding-top: 1.25rem;">
+          <div class="admin-users-header">
+            <div>
+              <h4 style="margin: 0; font-size: 0.98rem;">🎟️ Registration Invites</h4>
+              <p class="settings-panel-desc" style="margin: 0.2rem 0 0.5rem 0; font-size: 0.8rem;">
+                Single-use invitation links for onboarding new users.
+              </p>
+            </div>
+            <button type="button" id="btn-create-invite" class="btn btn-secondary btn-sm">+ Generate Invite</button>
+          </div>
+
+          <!-- New Invite Created Alert -->
+          <div id="admin-new-invite-alert" class="admin-temp-pw-alert" hidden>
+            <span class="alert-icon">🔗</span>
+            <div class="alert-body" style="flex: 1;">
+              <strong>Invitation Link Created:</strong>
+              <div style="display: flex; gap: 0.5rem; margin-top: 0.35rem; align-items: center;">
+                <input type="text" id="admin-invite-link-input" readonly style="font-size: 0.85rem; padding: 0.4rem 0.6rem; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 6px; width: 100%; color: #38bdf8;" />
+                <button type="button" id="btn-copy-invite-link" class="btn btn-sm btn-primary" style="white-space: nowrap;">Copy Link</button>
+              </div>
+            </div>
+            <button type="button" class="btn-icon btn-sm" onclick="document.getElementById('admin-new-invite-alert').hidden = true;">✕</button>
+          </div>
+
+          <div class="table-responsive">
+            <table class="admin-users-table">
+              <thead>
+                <tr>
+                  <th>Code</th>
+                  <th>Created</th>
+                  <th>Expires</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="admin-invites-tbody">
+                <tr><td colspan="5" style="text-align:center; padding:1rem; color:#64748b;">Loading invites...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
 

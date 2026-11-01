@@ -28,6 +28,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import mcp_server
 import passwords
+import signup
 import system_db
 import db
 from context import get_current_user_id, reset_current_user_id, set_current_user_id
@@ -428,6 +429,16 @@ class AdminResetPasswordRequest(BaseModel):
     new_password: Optional[str] = None
 
 
+class AdminSettingsUpdateRequest(BaseModel):
+    registration_policy: str = Field(..., pattern="^(disabled|invite|approval|open)$")
+
+
+class AdminInviteCreateRequest(BaseModel):
+    note: Optional[str] = ""
+    ttl_days: int = Field(default=7, ge=1, le=365)
+
+
+
 def _get_active_user(request: Request) -> Tuple[Optional[str], Optional[str]]:
     """Return (user_id, username) for the active request."""
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
@@ -478,6 +489,17 @@ async def login_submit(request: Request) -> Response:
 @app.post("/logout")
 async def logout_action(request: Request) -> Response:
     return await handle_logout(request)
+
+
+@app.get("/signup")
+async def signup_page(request: Request) -> Response:
+    return await signup.handle_signup_get(request)
+
+
+@app.post("/signup")
+async def signup_submit(request: Request) -> Response:
+    return await signup.handle_signup_post(request)
+
 
 
 @app.get("/")
@@ -914,6 +936,66 @@ async def api_admin_reset_password(
         "message": f"Password reset for {target['username']}",
         "temporary_password": pw,
     }
+
+
+@app.get("/api/admin/settings")
+async def api_admin_get_settings(request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    return {
+        "edition": system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted")),
+        "registration_policy": system_db.get_registration_policy(),
+    }
+
+
+@app.put("/api/admin/settings")
+async def api_admin_update_settings(
+    payload: AdminSettingsUpdateRequest, request: Request
+) -> Dict[str, Any]:
+    _require_admin(request)
+    try:
+        system_db.set_registration_policy(payload.registration_policy)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    return {
+        "status": "success",
+        "registration_policy": system_db.get_registration_policy(),
+    }
+
+
+@app.get("/api/admin/invites")
+async def api_admin_list_invites(request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    return {"invites": system_db.list_invites()}
+
+
+@app.post("/api/admin/invites")
+async def api_admin_create_invite(
+    payload: AdminInviteCreateRequest, request: Request
+) -> Dict[str, Any]:
+    actor_id, _ = _require_admin(request)
+    try:
+        code = system_db.create_invite(
+            created_by=actor_id,
+            note=payload.note or "",
+            ttl_days=payload.ttl_days,
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    return {
+        "status": "success",
+        "code": code,
+        "invite_url": f"/signup?invite={quote(code)}",
+    }
+
+
+@app.delete("/api/admin/invites/{code_hash}")
+async def api_admin_revoke_invite(code_hash: str, request: Request) -> Dict[str, Any]:
+    _require_admin(request)
+    revoked = system_db.revoke_invite(code_hash)
+    if not revoked:
+        raise HTTPException(status_code=404, detail="Invite not found or already consumed")
+    return {"status": "success", "message": "Invite revoked"}
+
 
 
 @app.get("/api/user/connections")

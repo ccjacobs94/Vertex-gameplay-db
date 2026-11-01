@@ -30,6 +30,7 @@ SESSION_MAX_AGE_SECONDS = 90 * 24 * 3600  # 90 days for installed mobile PWA per
 PUBLIC_PATH_PREFIXES = (
     "/login",
     "/logout",
+    "/signup",
     "/manifest.webmanifest",
     "/sw.js",
     "/static/icons/",
@@ -317,6 +318,16 @@ def render_login_page(next_url: str = "/", error_msg: str = "", default_username
         else ""
     )
 
+    policy = system_db.get_registration_policy()
+    signup_link_html = (
+        """<div style="margin-top:0.85rem; font-size:0.84rem; text-align:center;">
+             <span style="color:#94a3b8;">Don't have an account?</span>
+             <a href="/signup" style="color:#38bdf8; text-decoration:none; font-weight:600; margin-left:0.35rem;">Create an account</a>
+           </div>"""
+        if policy != "disabled"
+        else ""
+    )
+
     content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -499,6 +510,7 @@ def render_login_page(next_url: str = "/", error_msg: str = "", default_username
       </div>
       <button type="submit" class="btn-submit">Sign In</button>
     </form>
+    {signup_link_html}
     <div class="login-footer">
       Protected session &bull; Remains signed in for 90 days on this device
     </div>
@@ -510,6 +522,7 @@ def render_login_page(next_url: str = "/", error_msg: str = "", default_username
   </script>
 </body>
 </html>"""
+
     return HTMLResponse(
         content=content,
         status_code=200 if not error_msg else 401,
