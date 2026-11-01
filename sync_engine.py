@@ -480,7 +480,6 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
                     str(title_id),
                     bool(gp_obj.get("isGamePass")) if isinstance(gp_obj, dict) else False,
                 )
-                ownership_status = "Game Pass" if is_gp else None
 
                 saved_game = upsert_synced_game(
                     external_id=f"xbox:{title_id}",
@@ -492,7 +491,7 @@ async def sync_xbox(db_path: str = DEFAULT_DB_PATH) -> Dict[str, Any]:
                     achievements_unlocked=unlocked,
                     achievements_total=total_ach,
                     cover_url=cover_url,
-                    ownership_status=ownership_status,
+                    is_game_pass=is_gp,
                     db_path=db_path,
                 )
                 upserted_xbox_games.append((saved_game["id"], str(title_id), platform, playtime_hours, total_ach))

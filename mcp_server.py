@@ -55,6 +55,7 @@ def search_game_library(
     genre: Optional[str] = None,
     tag: Optional[str] = None,
     ownership_status: Optional[str] = None,
+    is_game_pass: Optional[bool] = None,
     favorite_only: bool = False,
     sort_by: str = "playtime_desc",
     limit: int = 30,
@@ -63,7 +64,8 @@ def search_game_library(
     Search and filter the user's unified game library.
     - platform: e.g. 'Steam', 'Xbox', 'PlayStation', 'Switch'
     - status: 'Not Played', 'Plan to Play', 'Playing', 'Beaten', 'Completed', 'Dropped'
-    - ownership_status: 'Owned', 'Game Pass', 'PS Plus', 'Subscription'
+    - ownership_status: 'Owned', 'Subscription', 'Borrowed', 'None' (self-reported)
+    - is_game_pass: true to filter for titles currently available on Xbox Game Pass
     - sort_by: 'playtime_desc', 'last_played_desc', 'rating_desc', 'title_asc'
     - tag: e.g. 'Stealth', 'Open World', 'Co-op'. Matches tags and genres.
     """
@@ -74,6 +76,7 @@ def search_game_library(
         genre=genre,
         tag=tag,
         ownership=ownership_status,
+        is_game_pass=is_game_pass,
         favorite_only=favorite_only,
         sort_by=sort_by,
         limit=limit,
@@ -86,6 +89,7 @@ def get_what_to_play_recommendations(
     genre: Optional[str] = None,
     tag: Optional[str] = None,
     ownership_status: Optional[str] = None,
+    is_game_pass: Optional[bool] = None,
     max_candidates: int = 20,
 ) -> Dict[str, Any]:
     """
@@ -95,7 +99,8 @@ def get_what_to_play_recommendations(
     - platform: e.g. 'Steam', 'Xbox', 'PlayStation', 'Switch'
     - genre: filter backlog by broad category (e.g. 'RPG', 'Shooter')
     - tag: filter backlog by mechanic/mode/theme (e.g. 'Stealth', 'Co-op', 'Open World')
-    - ownership_status: optional filter ('Owned', 'Game Pass', 'PS Plus', 'Subscription')
+    - ownership_status: optional filter ('Owned', 'Subscription', 'Borrowed', 'None')
+    - is_game_pass: optional filter for titles currently on Xbox Game Pass
     """
     all_games = query_games(limit=2000)
 
@@ -111,6 +116,7 @@ def get_what_to_play_recommendations(
         g for g in all_games
         if g.get("completion_status") == "Playing"
         and (not platform or platform.lower() in g.get("platform", "").lower())
+        and (is_game_pass is None or bool(g.get("is_game_pass")) == bool(is_game_pass))
         and (
             not o_q
             or (g.get("ownership_status") or "Owned").lower() == o_q
@@ -126,6 +132,7 @@ def get_what_to_play_recommendations(
         if g.get("completion_status") in ("Plan to Play", "Not Played")
         and (g.get("playtime_hours") or 0) < 2.0
         and (not platform or platform.lower() in g.get("platform", "").lower())
+        and (is_game_pass is None or bool(g.get("is_game_pass")) == bool(is_game_pass))
         and (
             not o_q
             or (g.get("ownership_status") or "Owned").lower() == o_q
@@ -154,6 +161,7 @@ def get_what_to_play_recommendations(
                 "title": g["title"],
                 "platform": g["platform"],
                 "ownership_status": g.get("ownership_status", "Owned"),
+                "is_game_pass": bool(g.get("is_game_pass")),
                 "playtime_hours": g["playtime_hours"],
                 "user_rating": g["user_rating"],
                 "genres": g["genres"],
@@ -167,6 +175,7 @@ def get_what_to_play_recommendations(
                 "title": g["title"],
                 "platform": g["platform"],
                 "ownership_status": g.get("ownership_status", "Owned"),
+                "is_game_pass": bool(g.get("is_game_pass")),
                 "playtime_hours": g["playtime_hours"],
                 "last_played": g["last_played"],
                 "notes": g["notes"],
@@ -178,6 +187,7 @@ def get_what_to_play_recommendations(
                 "title": g["title"],
                 "platform": g["platform"],
                 "ownership_status": g.get("ownership_status", "Owned"),
+                "is_game_pass": bool(g.get("is_game_pass")),
                 "status": g["completion_status"],
                 "critic_score": g["critic_score"],
                 "genres": g["genres"],
@@ -276,14 +286,15 @@ def update_game_progress(
     title: str,
     completion_status: Optional[str] = None,
     ownership_status: Optional[str] = None,
+    is_game_pass: Optional[bool] = None,
     user_rating: Optional[int] = None,
     notes: Optional[str] = None,
     favorite: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Update a game's completion status ('Not Played', 'Plan to Play', 'Playing', 'Beaten', 'Completed', 'Dropped'),
-    ownership_status ('Owned', 'Game Pass', 'PS Plus', 'Subscription'),
-    user rating (1-10), personal notes, or favorite flag by matching its title.
+    ownership_status ('Owned', 'Subscription', 'Borrowed', 'None'),
+    is_game_pass (true/false), user rating (1-10), personal notes, or favorite flag by matching its title.
     """
     matches = query_games(search=title, limit=5)
     if not matches:
@@ -296,6 +307,8 @@ def update_game_progress(
         updates["completion_status"] = completion_status
     if ownership_status is not None:
         updates["ownership_status"] = normalize_ownership_status(ownership_status)
+    if is_game_pass is not None:
+        updates["is_game_pass"] = bool(is_game_pass)
     if user_rating is not None:
         updates["user_rating"] = user_rating
     if notes is not None:
@@ -311,15 +324,17 @@ def update_game_progress(
 def update_game_ownership(
     title: Optional[str] = None,
     ownership_status: str = "Owned",
+    is_game_pass: Optional[bool] = None,
     platform: Optional[str] = None,
     titles: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Update and lock the ownership/access status ('Owned', 'Game Pass', 'PS Plus', 'Subscription')
-    for a single game title or a batch list of titles. Ideal when monitoring purchases or subscriptions.
+    Update and lock the ownership/access status ('Owned', 'Subscription', 'Borrowed', 'None')
+    and/or toggle the Game Pass catalog flag for a single game title or a batch list of titles.
     - title: Single game title to update
     - titles: Optional batch list of game titles to update with the same ownership_status & platform
-    - ownership_status: 'Owned', 'Game Pass', 'PS Plus', or 'Subscription'
+    - ownership_status: 'Owned', 'Subscription', 'Borrowed', or 'None'
+    - is_game_pass: Optional boolean flag indicating whether the title is available on Xbox Game Pass
     - platform: Optional platform filter (e.g. 'Xbox', 'Steam', 'PlayStation') to target a specific
       platform copy when a game is reconciled across multiple platforms.
     """
@@ -361,7 +376,7 @@ def update_game_ownership(
             if plat_copy:
                 target_id = plat_copy["id"]
         elif not platform and target.get("linked_games") and len(target["linked_games"]) > 1:
-            if norm_own == "Game Pass":
+            if is_game_pass or norm_own == "Subscription":
                 xbox_copy = next(
                     (
                         lg
@@ -373,20 +388,12 @@ def update_game_ownership(
                 )
                 if xbox_copy:
                     target_id = xbox_copy["id"]
-            elif norm_own == "PS Plus":
-                ps_copy = next(
-                    (
-                        lg
-                        for lg in target["linked_games"]
-                        if any(x in (lg.get("platform") or "").lower() for x in ("playstation", "ps4", "ps5"))
-                        or lg.get("source") == "PlayStation"
-                    ),
-                    None,
-                )
-                if ps_copy:
-                    target_id = ps_copy["id"]
 
-        res = update_game(target_id, {"ownership_status": norm_own})
+        patch_dict: Dict[str, Any] = {"ownership_status": norm_own}
+        if is_game_pass is not None:
+            patch_dict["is_game_pass"] = bool(is_game_pass)
+
+        res = update_game(target_id, patch_dict)
         if res:
             updated_games.append(
                 {
@@ -394,6 +401,7 @@ def update_game_ownership(
                     "title": res["title"],
                     "platform": res["platform"],
                     "ownership_status": res.get("ownership_status"),
+                    "is_game_pass": res.get("is_game_pass"),
                     "linked_games": res.get("linked_games"),
                 }
             )
@@ -401,6 +409,7 @@ def update_game_ownership(
     return {
         "status": "updated",
         "ownership_status": norm_own,
+        "is_game_pass": is_game_pass,
         "updated_count": len(updated_games),
         "updated_games": updated_games,
         "not_found": not_found,
@@ -413,6 +422,7 @@ def add_game_to_library(
     platform: str = "Nintendo Switch",
     completion_status: str = "Plan to Play",
     ownership_status: str = "Owned",
+    is_game_pass: bool = False,
     playtime_hours: float = 0.0,
     user_rating: Optional[int] = None,
     genres: Optional[List[str]] = None,
@@ -421,7 +431,8 @@ def add_game_to_library(
 ) -> Dict[str, Any]:
     """
     Add a new game (such as a Nintendo Switch, PS4, Xbox, or PC title) to the library.
-    - ownership_status: 'Owned', 'Game Pass', 'PS Plus', or 'Subscription'
+    - ownership_status: 'Owned', 'Subscription', 'Borrowed', or 'None'
+    - is_game_pass: boolean flag for Xbox Game Pass availability
     """
     ignored: List[str] = []
     for label in genres or []:
@@ -436,6 +447,7 @@ def add_game_to_library(
         platform=platform,
         completion_status=completion_status,
         ownership_status=normalize_ownership_status(ownership_status),
+        is_game_pass=is_game_pass,
         playtime_hours=playtime_hours,
         user_rating=user_rating,
         genres=validate_genres(genres),
