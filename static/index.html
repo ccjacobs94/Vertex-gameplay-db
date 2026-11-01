@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=19">
+  <link rel="stylesheet" href="/static/styles.css?v=20">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -194,13 +194,13 @@
             <option value="Dropped">Dropped</option>
           </select>
 
-          <label for="ownership-filter" class="sr-only">Ownership or subscription access</label>
+          <label for="ownership-filter" class="sr-only">Ownership (self-reported)</label>
           <select id="ownership-filter" name="ownership">
             <option value="">All Ownership</option>
             <option value="Owned">Owned Outright</option>
-            <option value="Game Pass">Xbox Game Pass</option>
-            <option value="PS Plus">PS Plus</option>
-            <option value="Subscription">Other Subscription</option>
+            <option value="Subscription">Subscription</option>
+            <option value="Borrowed">Borrowed</option>
+            <option value="None">None / Other</option>
           </select>
 
           <label for="sort-select" class="sr-only">Sort order</label>
@@ -215,6 +215,10 @@
 
           <button type="button" id="btn-fav-toggle" class="btn btn-chip" aria-pressed="false">
             ★ Favorites
+          </button>
+
+          <button type="button" id="btn-gamepass-toggle" class="btn btn-chip btn-chip-gp" aria-pressed="false" title="Filter for games currently available on Xbox Game Pass">
+            🟢 Game Pass
           </button>
 
           <button type="button" id="btn-reset-filters" class="btn-link-subtle" hidden>
@@ -454,13 +458,19 @@
             </select>
           </div>
           <div class="form-group">
-            <label for="add-ownership">Ownership / Access</label>
+            <label for="add-ownership">Ownership (Self-Reported)</label>
             <select id="add-ownership" name="ownership_status">
               <option value="Owned">Owned Outright</option>
-              <option value="Game Pass">Xbox Game Pass</option>
-              <option value="PS Plus">PS Plus</option>
-              <option value="Subscription">Other Subscription</option>
+              <option value="Subscription">Subscription</option>
+              <option value="Borrowed">Borrowed</option>
+              <option value="None">None / Other</option>
             </select>
+          </div>
+          <div class="form-group form-checkbox-group" style="align-self: flex-end;">
+            <label class="checkbox-label" for="add-gamepass">
+              <input type="checkbox" id="add-gamepass" name="is_game_pass" />
+              <span>Available on Game Pass</span>
+            </label>
           </div>
           <div class="form-group">
             <label for="add-hours">Playtime (Hours)</label>
@@ -583,13 +593,20 @@
               </div>
 
               <div class="form-group edit-ownership-group">
-                <label for="edit-ownership">Ownership / Access</label>
+                <label for="edit-ownership">Ownership (Self-Reported)</label>
                 <select id="edit-ownership" name="ownership_status">
                   <option value="Owned">Owned Outright</option>
-                  <option value="Game Pass">Xbox Game Pass</option>
-                  <option value="PS Plus">PS Plus</option>
-                  <option value="Subscription">Other Subscription</option>
+                  <option value="Subscription">Subscription</option>
+                  <option value="Borrowed">Borrowed</option>
+                  <option value="None">None / Other</option>
                 </select>
+              </div>
+
+              <div class="form-group edit-gamepass-group" style="align-self: flex-end;">
+                <label class="checkbox-label" for="edit-gamepass">
+                  <input type="checkbox" id="edit-gamepass" name="is_game_pass" />
+                  <span>Available on Game Pass</span>
+                </label>
               </div>
 
               <div class="form-group edit-rating-group">
@@ -847,7 +864,7 @@
           <label for="triage-scope" class="sr-only">Triage queue filter</label>
           <select id="triage-scope" class="triage-scope-select">
             <option value="unlocked">Untriaged (Auto-Synced Only)</option>
-            <option value="xbox_ownership">Xbox Ownership Review</option>
+            <option value="xbox_ownership">Xbox &amp; Game Pass Review</option>
             <option value="not_played">Not Played Only</option>
             <option value="current_filter">Current Library View</option>
             <option value="all">All Games</option>
@@ -901,12 +918,21 @@
                 <span id="triage-current-status" class="status-pill">Not Played</span>
               </div>
               <div class="triage-stat-box">
-                <span class="triage-stat-label">Ownership (<kbd>G</kbd>)</span>
+                <span class="triage-stat-label">Game Pass (<kbd>G</kbd>)</span>
+                <button
+                  type="button"
+                  id="btn-triage-gamepass"
+                  class="triage-gp-pill"
+                  title="Click or press G to toggle Game Pass status"
+                >Off</button>
+              </div>
+              <div class="triage-stat-box">
+                <span class="triage-stat-label">Ownership (<kbd>O</kbd>)</span>
                 <button
                   type="button"
                   id="btn-triage-ownership"
                   class="ownership-toggle-pill"
-                  title="Click or press G to toggle Owned vs Game Pass"
+                  title="Click or press O to toggle Owned vs Subscription"
                 >Owned</button>
               </div>
             </div>
@@ -1008,6 +1034,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=19"></script>
+  <script src="/static/app.js?v=20"></script>
 </body>
 </html>

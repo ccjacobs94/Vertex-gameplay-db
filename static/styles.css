@@ -436,6 +436,7 @@ textarea:focus {
 }
 
 .cover-wrapper .platform-badge,
+.cover-wrapper .gamepass-badge,
 .cover-wrapper .ownership-badge,
 .cover-wrapper .fav-star,
 .cover-wrapper .rating-badge,
@@ -457,7 +458,7 @@ textarea:focus {
   border: 1px solid rgba(255, 255, 255, 0.15);
 }
 
-.ownership-badge {
+.gamepass-badge {
   position: absolute;
   inset-block-start: 2.15rem;
   inset-inline-start: 0.5rem;
@@ -470,11 +471,34 @@ textarea:focus {
   text-transform: uppercase;
   backdrop-filter: blur(4px);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  background-color: rgba(16, 124, 16, 0.92);
+  color: #ecfdf5;
+  border: 1px solid rgba(74, 222, 128, 0.55);
+}
+
+.ownership-badge {
+  position: absolute;
+  inset-block-start: 3.75rem;
+  inset-inline-start: 0.5rem;
+  padding-block: 0.16rem;
+  padding-inline: 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+}
+
+.cover-wrapper:not(:has(.gamepass-badge)) .ownership-badge {
+  inset-block-start: 2.15rem;
 }
 
 .ownership-badge.game-pass,
 .card-list-ownership.game-pass,
-.edit-header-badge.game-pass {
+.edit-header-badge.game-pass,
+.edit-header-badge.gp {
   background-color: rgba(16, 124, 16, 0.92);
   color: #ecfdf5;
   border: 1px solid rgba(74, 222, 128, 0.55);
@@ -496,13 +520,30 @@ textarea:focus {
   border: 1px solid rgba(167, 139, 250, 0.55);
 }
 
+.ownership-badge.borrowed,
+.card-list-ownership.borrowed,
+.edit-header-badge.borrowed {
+  background-color: rgba(217, 119, 6, 0.9);
+  color: #fef3c7;
+  border: 1px solid rgba(251, 191, 36, 0.55);
+}
+
+.ownership-badge.none,
+.card-list-ownership.none,
+.edit-header-badge.none {
+  background-color: rgba(100, 116, 139, 0.8);
+  color: #f1f5f9;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+}
+
 .ownership-badge.has-gp-sub {
   background-color: rgba(15, 23, 42, 0.88);
   color: #86efac;
   border: 1px solid rgba(74, 222, 128, 0.4);
 }
 
-.card-list-ownership {
+.card-list-ownership,
+.card-list-gp {
   display: none;
   font-size: 0.68rem;
   font-weight: 800;
@@ -513,8 +554,53 @@ textarea:focus {
   padding-inline: 0.4rem;
 }
 
-.games-grid.list-view .card-list-ownership {
+.card-list-gp {
+  background-color: rgba(16, 124, 16, 0.25);
+  color: #86efac;
+  border: 1px solid rgba(74, 222, 128, 0.35);
+}
+
+.games-grid.list-view .card-list-ownership,
+.games-grid.list-view .card-list-gp {
   display: inline-block;
+}
+
+.btn-chip-gp[aria-pressed="true"] {
+  background-color: rgba(16, 124, 16, 0.3);
+  color: #86efac;
+  border-color: rgba(74, 222, 128, 0.6);
+}
+
+.triage-gp-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-block: 0.25rem;
+  padding-inline: 0.65rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background-color: rgba(15, 23, 42, 0.8);
+  color: #94a3b8;
+  transition: all 0.15s ease;
+}
+
+.triage-gp-pill.active {
+  background-color: rgba(16, 124, 16, 0.9);
+  color: #ecfdf5;
+  border-color: rgba(74, 222, 128, 0.6);
+}
+
+.badge-gp-mini {
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background-color: rgba(16, 124, 16, 0.85);
+  color: #ecfdf5;
+  border: 1px solid rgba(74, 222, 128, 0.5);
 }
 
 .linked-copy-ownership-select {
