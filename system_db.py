@@ -4,11 +4,13 @@ Stores accounts, encrypted platform credentials, web sessions, OAuth tokens,
 and the shared cross-user game catalog metadata cache.
 """
 
+import hashlib
 import os
 import re
+import secrets
 import sqlite3
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -132,8 +134,20 @@ def init_system_db(db_path: Optional[str] = None) -> None:
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS invites (
+                code_hash TEXT PRIMARY KEY,
+                created_by TEXT NOT NULL,
+                note TEXT DEFAULT '',
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                used_by TEXT,
+                used_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_invites_used ON invites(used_by);
             """
         )
+
 
 
 
@@ -697,5 +711,115 @@ def revoke_oauth_token(user_id: str, token: str, db_path: Optional[str] = None) 
             (user_id, token),
         )
         return cur.rowcount > 0
+
+
+def get_registration_policy(db_path: Optional[str] = None) -> str:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    val = get_setting(
+        "registration_policy", os.environ.get("VERTEX_REGISTRATION", "disabled"), db_path=target_path
+    )
+    val = (val or "disabled").strip().lower()
+    return val if val in ("disabled", "invite", "approval", "open") else "disabled"
+
+
+def set_registration_policy(policy: str, db_path: Optional[str] = None) -> None:
+    pol = (policy or "").strip().lower()
+    if pol not in ("disabled", "invite", "approval", "open"):
+        raise ValueError(f"Invalid registration policy: {policy}")
+    set_setting("registration_policy", pol, db_path=db_path)
+
+
+def create_invite(
+    created_by: str,
+    note: str = "",
+    ttl_days: int = 7,
+    db_path: Optional[str] = None,
+) -> str:
+    if not created_by:
+        raise ValueError("created_by is required")
+    code = secrets.token_urlsafe(16)
+    code_hash = hashlib.sha256(code.encode("ascii")).hexdigest()
+    now_dt = datetime.now(timezone.utc)
+    now_str = now_dt.isoformat()
+    expires_dt = now_dt + timedelta(days=ttl_days) if ttl_days > 0 else None
+    expires_str = expires_dt.isoformat() if expires_dt else None
+
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO invites (code_hash, created_by, note, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (code_hash, created_by, (note or "").strip(), now_str, expires_str),
+        )
+    return code
+
+
+def list_invites(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    now_str = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT code_hash, created_by, note, created_at, expires_at, used_by, used_at
+            FROM invites ORDER BY created_at DESC
+            """
+        ).fetchall()
+        result = []
+        for r in rows:
+            is_used = bool(r["used_by"])
+            is_expired = bool(r["expires_at"] and r["expires_at"] < now_str)
+            status = "used" if is_used else ("expired" if is_expired else "active")
+            result.append(
+                {
+                    "code_hash": r["code_hash"],
+                    "code_preview": f"{r['code_hash'][:8]}...",
+                    "created_by": r["created_by"],
+                    "note": r["note"] or "",
+                    "created_at": r["created_at"],
+                    "expires_at": r["expires_at"],
+                    "used_by": r["used_by"],
+                    "used_at": r["used_at"],
+                    "status": status,
+                }
+            )
+        return result
+
+
+def revoke_invite(code_hash: str, db_path: Optional[str] = None) -> bool:
+    if not code_hash:
+        return False
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        cur = conn.execute(
+            "DELETE FROM invites WHERE code_hash = ? AND used_by IS NULL", (code_hash,)
+        )
+        return cur.rowcount > 0
+
+
+def consume_invite(code: str, user_id: str, db_path: Optional[str] = None) -> bool:
+    if not code or not user_id:
+        return False
+    code_hash = hashlib.sha256(code.strip().encode("ascii")).hexdigest()
+    now_str = datetime.now(timezone.utc).isoformat()
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    with get_system_connection(target_path) as conn:
+        cur = conn.execute(
+            """
+            UPDATE invites
+            SET used_by = ?, used_at = ?
+            WHERE code_hash = ?
+              AND used_by IS NULL
+              AND (expires_at IS NULL OR expires_at > ?)
+            """,
+            (user_id, now_str, code_hash, now_str),
+        )
+        return cur.rowcount > 0
+
 
 
