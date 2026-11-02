@@ -40,6 +40,43 @@ fi
 LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || echo "localhost")"
 TAILSCALE_IP="$(ip -4 addr show tailscale0 2>/dev/null | awk '/inet / {print $2}' | cut -d/ -f1 || echo "")"
 
+# Read storage configurations from .env if present
+if [[ -f "$REPO_ROOT/.env" ]]; then
+  while IFS='=' read -r key value || [[ -n "$key" ]]; do
+    key="$(echo "$key" | xargs 2>/dev/null || true)"
+    value="$(echo "$value" | xargs 2>/dev/null || true)"
+    if [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && [[ ! "$key" =~ ^# ]]; then
+      if [[ -z "${!key:-}" ]]; then
+        export "$key=$value"
+      fi
+    fi
+  done < "$REPO_ROOT/.env"
+fi
+
+DATA_DIR="${GAMEHUB_DATA_PATH:-$REPO_ROOT/data}"
+QA_DATA_DIR="${GAMEHUB_QA_DATA_PATH:-$REPO_ROOT/data-qa}"
+BACKUP_DIR="${GAMEHUB_BACKUP_PATH:-/mnt/storage-pool/game-hub/backups}"
+BACKUP_KEEP="${GAMEHUB_BACKUP_KEEP:-15}"
+
+prune_backups() {
+  local dir="$1"
+  local keep="${2:-15}"
+  if [[ -d "$dir" ]]; then
+    local count
+    count=$(find "$dir" -maxdepth 1 -type f \( -name "*.bak-*" -o -name "*.bak" \) 2>/dev/null | wc -l)
+    if (( count > keep )); then
+      echo "🧹 Pruning older backups in $dir (keeping newest $keep of $count)..."
+      find "$dir" -maxdepth 1 -type f \( -name "*.bak-*" -o -name "*.bak" \) -printf '%T@ %p\n' 2>/dev/null | \
+        sort -nr | tail -n +$((keep + 1)) | cut -d' ' -f2- | while IFS= read -r old_file; do
+          if [[ -f "$old_file" ]]; then
+            rm -f "$old_file"
+            echo "   Deleted old backup: $(basename "$old_file")"
+          fi
+        done
+    fi
+  fi
+}
+
 wait_for_health() {
   local url="$1"
   local name="$2"
@@ -62,12 +99,19 @@ wait_for_health() {
 if [[ "$TARGET" == "main" ]]; then
   echo "🚀 Deploying PRIMARY PRODUCTION container ('game-hub') from 'main'..."
 
-  # 1. Back up production database if present
-  if [[ -f "data/games.db" ]]; then
-    BACKUP_FILE="data/games.db.bak-$(date +%Y%m%d-%H%M%S)"
+  # 1. Back up production database and system database if present
+  mkdir -p "$BACKUP_DIR" 2>/dev/null || BACKUP_DIR="$DATA_DIR"
+  if [[ -f "$DATA_DIR/games.db" ]]; then
+    BACKUP_FILE="$BACKUP_DIR/games.db.bak-$(date +%Y%m%d-%H%M%S)"
     echo "📦 Backing up production database to $BACKUP_FILE"
-    cp "data/games.db" "$BACKUP_FILE"
+    cp "$DATA_DIR/games.db" "$BACKUP_FILE"
   fi
+  if [[ -f "$DATA_DIR/system.db" ]]; then
+    SYS_BACKUP_FILE="$BACKUP_DIR/system.db.bak-$(date +%Y%m%d-%H%M%S)"
+    echo "📦 Backing up system database to $SYS_BACKUP_FILE"
+    cp "$DATA_DIR/system.db" "$SYS_BACKUP_FILE"
+  fi
+  prune_backups "$BACKUP_DIR" "$BACKUP_KEEP"
 
   # 2. Build and restart primary production container
   echo "🔨 Building and launching 'game-hub'..."
@@ -91,15 +135,18 @@ elif [[ "$TARGET" == "develop" ]]; then
   echo "🧪 Deploying QA VALIDATION container ('game-hub-qa') from 'develop'..."
 
   # 1. Ensure isolated data-qa directory exists
-  mkdir -p data-qa
+  mkdir -p "$QA_DATA_DIR"
 
   # 2. Seed data-qa from data if empty, ensuring QA has realistic state without touching production
-  if [[ ! -f "data-qa/games.db" ]] && [[ -f "data/games.db" ]]; then
-    echo "📋 Seeding isolated data-qa/games.db from current database snapshot..."
-    cp "data/games.db" "data-qa/games.db"
-    # Copy auth db if present
-    if [[ -f "data/auth.db" ]]; then
-      cp "data/auth.db" "data-qa/auth.db"
+  if [[ ! -f "$QA_DATA_DIR/games.db" ]] && [[ -f "$DATA_DIR/games.db" ]]; then
+    echo "📋 Seeding isolated $QA_DATA_DIR/games.db from current database snapshot..."
+    cp "$DATA_DIR/games.db" "$QA_DATA_DIR/games.db"
+    if [[ -f "$DATA_DIR/system.db" ]]; then
+      cp "$DATA_DIR/system.db" "$QA_DATA_DIR/system.db"
+    fi
+    if [[ -d "$DATA_DIR/users" ]] && [[ ! -d "$QA_DATA_DIR/users" ]]; then
+      echo "📋 Seeding isolated user databases into $QA_DATA_DIR/users..."
+      cp -r "$DATA_DIR/users" "$QA_DATA_DIR/users"
     fi
   fi
 

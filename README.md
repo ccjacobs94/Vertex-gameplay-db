@@ -110,16 +110,18 @@ Game Hub includes automated CI/CD deployment pipelines for production and QA:
 
 - **Production Container (`main` branch)**:
   - Deploys container `game-hub` on ports `8095` (Web UI) and `8097` (MCP).
-  - Uses production data stored in `./data`.
-  - Automatically creates a timestamped database backup (`data/games.db.bak-YYYYMMDD-HHMMSS`) before redeploying.
+  - Storage offloaded to HDD (`GAMEHUB_DATA_PATH=/mnt/storage-pool/game-hub/data`, defaults to `./data`).
+  - Automatically creates timestamped backups to `$GAMEHUB_BACKUP_PATH` and prunes to retain the 15 newest backups.
 - **QA Validation Container (`develop` branch)**:
   - Spins up container `game-hub-qa` on ports `8098` (Web UI) and `8099` (MCP).
-  - Uses an isolated data volume in `./data-qa` to guarantee production data is never touched or mutated during QA.
-  - Initial deployment seeds a snapshot from `./data` if empty, allowing realistic staging without risk.
+  - Uses an isolated data volume (`GAMEHUB_QA_DATA_PATH=/mnt/storage-pool/game-hub/data-qa`, defaults to `./data-qa`) to guarantee production data is never touched or mutated during QA.
+  - Initial deployment seeds a snapshot from production data if empty, allowing realistic staging without risk.
   - Accessible directly over your home LAN (`http://<LAN-IP>:8098`) or via Tailscale (`http://<Tailscale-IP>:8098`).
+- **Storage Architecture (HDD Off-loading)**:
+  - User-maintained libraries, catalog cache, backups, and QA volumes can be pointed to the large-capacity HDD storage pool via `.env` variables (`GAMEHUB_DATA_PATH`, `GAMEHUB_QA_DATA_PATH`, `GAMEHUB_BACKUP_PATH`, `GAMEHUB_CACHE_PATH`), conserving NVMe SSD space.
 - **Automation Mechanisms**:
   - **Git post-merge Hook**: `.githooks/post-merge` automatically triggers `scripts/deploy.sh` whenever code is merged into `main` or `develop`.
-  - **Deploy Script**: `scripts/deploy.sh [main|develop|auto]` handles automated builds, volume isolation, database backups, and healthcheck verification.
+  - **Deploy Script**: `scripts/deploy.sh [main|develop|auto]` handles automated builds, volume isolation, database backups, backup pruning, and healthcheck verification.
   - **GitHub Actions**: `.github/workflows/cicd.yml` verifies secrets isolation, runs Python/JS syntax checks, and executes container quality tests before triggering self-hosted deployments.
 
 ---

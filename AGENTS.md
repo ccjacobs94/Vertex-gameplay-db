@@ -5,7 +5,7 @@ Game Hub is a self-hosted, multi-platform game library tracker and MCP server ru
 ## Architecture & Key Files
 
 - `app.py`: FastAPI web server (port `8090` inside container, mapped to `8095` on the host) and background auto-sync scheduler.
-- `db.py`: SQLite database layer (`data/games.db` on the host, `/app/data/games.db` inside the container).
+- `db.py`: SQLite database layer (`data/games.db` or `${GAMEHUB_DATA_PATH}/games.db` on the host, `/app/data/games.db` inside the container).
 - `sync_engine.py`: Automated sync connectors for Steam Web API, Xbox (`xbl.io`), PSN (`psnawp`), plus keyless game catalog & cover art lookup (Steam Store Search + Wikipedia API).
 - `mcp_server.py`: Model Context Protocol (MCP) server exposing library metrics, backlog search, recommendations, and status updates to AI agents.
 - `static/`: Responsive web frontend (`index.html`, `styles.css`, `app.js`).
@@ -13,19 +13,23 @@ Game Hub is a self-hosted, multi-platform game library tracker and MCP server ru
 - `scripts/check.sh`: Quality gate (branch policy, secrets, syntax, PWA cache bump, container test run). Must pass before every commit and merge.
 - `.githooks/`: Versioned git hooks that enforce GitFlow and the gate locally.
 
-## Endpoints & Operations
+## Endpoints, Operations & Storage Architecture
 
+- **Storage Off-loading (HDD Storage Pool)**:
+  - User-maintained databases (`users/<username>/games.db`), catalog metadata cache (`system.db`), backups, and caches are offloaded from SSD to the 14 TB HDD storage pool (`/mnt/storage-pool/game-hub/`).
+  - Configured via `.env`: `GAMEHUB_DATA_PATH`, `GAMEHUB_QA_DATA_PATH`, `GAMEHUB_BACKUP_PATH`, `GAMEHUB_CACHE_PATH`, and `GAMEHUB_BACKUP_KEEP=15`.
+  - Fallbacks default to `./data` and `./data-qa` if unconfigured.
 - **Local Web UI URL**: `http://localhost:8095` (or `http://<your-lan-or-tailscale-ip>:8095`)
 - **Streamable HTTP MCP URL**: `http://localhost:8097/mcp`
 - **QA Container (develop branch)**:
   - Local Web UI: `http://localhost:8098`
   - Local MCP URL: `http://localhost:8099/mcp`
   - Tailscale / LAN QA: `http://<your-lan-or-tailscale-ip>:8098`
-  - Storage: Isolated volume `./data-qa:/app/data` (never touches production `./data/games.db`).
+  - Storage: Isolated volume `${GAMEHUB_QA_DATA_PATH:-./data-qa}:/app/data` (never touches production data).
 - **CI/CD Deployment Automation**:
   - `scripts/deploy.sh [main|develop|auto]`:
-    - `main`: backs up `data/games.db` to timestamped `.bak`, builds, and deploys production `game-hub` on ports `8095/8097`.
-    - `develop`: seeds isolated `./data-qa/games.db` snapshot if empty, builds, and deploys QA container `game-hub-qa` on ports `8098/8099`.
+    - `main`: backs up production `games.db` and `system.db` to `$GAMEHUB_BACKUP_PATH` (pruning backups older than 15 newest), builds, and deploys production `game-hub` on ports `8095/8097`.
+    - `develop`: seeds isolated QA databases snapshot if empty, builds, and deploys QA container `game-hub-qa` on ports `8098/8099`.
 - **Rebuild & Restart Container**:
   ```bash
   docker compose up -d --build
