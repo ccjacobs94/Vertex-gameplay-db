@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=27 and sw to v23
-        self.assertIn('href="/static/styles.css?v=27"', index_html)
-        self.assertIn('src="/static/app.js?v=27"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v23";', sw_js)
+        # Cache buster must be bumped to v=28 and sw to v24
+        self.assertIn('href="/static/styles.css?v=28"', index_html)
+        self.assertIn('src="/static/app.js?v=28"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v24";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -173,6 +173,43 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.confirmAdminDeleteUser = confirmAdminDeleteUser;", app_js)
         self.assertIn("openAdminDeleteUserDialog", app_js)
         self.assertIn("confirmAdminDeleteUser", app_js)
+
+    def test_scroll_rendering_performance_optimizations(self):
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        styles_path = os.path.join(self.static_dir, "styles.css")
+
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+
+        # 1. Async image decoding on game cards to prevent main-thread scroll jank
+        self.assertIn('img.decoding = "async";', app_js)
+
+        # 2. DocumentFragment batching for game card rendering (prevents repeated live DOM layout thrashing)
+        self.assertIn("createDocumentFragment()", app_js)
+
+        # 3. RequestAnimationFrame throttling for scroll event listener
+        self.assertIn("requestAnimationFrame", app_js)
+
+        # 4. Self-contained flex column cards instead of multi-pass subgrid tracks
+        self.assertNotIn("grid-template-rows: subgrid", styles_css)
+        self.assertNotIn("grid-row: span 3", styles_css)
+        self.assertIn("display: flex;\n  flex-direction: column;", styles_css)
+
+        # 5. Calibrated contain-intrinsic-size for desktop and mobile
+        self.assertIn("contain-intrinsic-size: auto none auto 440px", styles_css)
+        self.assertIn("contain-intrinsic-size: auto none auto 340px", styles_css)
+
+        # 6. Badges avoid expensive backdrop-filter blur passes during scrolling
+        self.assertNotIn(".gamepass-badge {\n  position: absolute;\n  inset-block-start: 2.15rem;\n  inset-inline-start: 0.5rem;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 0.25rem;\n  padding-block: 0.18rem;\n  padding-inline: 0.45rem;\n  border-radius: var(--radius-sm);\n  font-size: 0.66rem;\n  font-weight: 800;\n  letter-spacing: 0.04em;\n  text-transform: uppercase;\n  backdrop-filter: blur(4px);", styles_css)
+        self.assertNotIn(".rating-badge {\n  position: absolute;\n  inset-block-end: 0.5rem;\n  inset-inline-end: 0.5rem;\n  background-color: rgba(15, 23, 42, 0.88);\n  backdrop-filter: blur(4px);", styles_css)
+
+        # 7. Hover transitions scoped to fine pointer devices with hover capability
+        self.assertIn("@media (hover: hover) and (pointer: fine)", styles_css)
+
+        # 8. Compositor layer promotion for sticky/fixed elements
+        self.assertIn("transform: translateZ(0);", styles_css)
 
 
 if __name__ == "__main__":

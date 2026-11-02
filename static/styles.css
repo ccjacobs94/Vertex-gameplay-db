@@ -65,6 +65,7 @@ body {
   position: sticky;
   inset-block-start: 0;
   z-index: 20;
+  transform: translateZ(0);
 }
 
 .header-inner {
@@ -408,17 +409,26 @@ textarea:focus {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   overflow: clip;
-  display: grid;
-  grid-row: span 3;
-  grid-template-rows: auto 1fr auto;
-  grid-template-rows: subgrid;
+  display: flex;
+  flex-direction: column;
   cursor: pointer;
   transition: transform 0.15s ease, border-color 0.15s ease;
+  contain: layout paint;
 }
 
-.game-card:hover {
-  transform: translateY(-2px);
-  border-color: var(--accent-primary);
+@media (hover: hover) and (pointer: fine) {
+  .game-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--accent-primary);
+  }
+
+  .game-card:hover .cover-wrapper:not(.cover-ambient) img {
+    transform: scale(1.03);
+  }
+
+  .game-card:hover .cover-wrapper.cover-ambient img {
+    transform: scale(1.02);
+  }
 }
 
 .cover-wrapper {
@@ -427,6 +437,7 @@ textarea:focus {
   aspect-ratio: 2 / 3;
   background-color: #0d1322;
   overflow: clip;
+  flex-shrink: 0;
 }
 
 .cover-wrapper img {
@@ -434,11 +445,7 @@ textarea:focus {
   inline-size: 100%;
   block-size: 100%;
   object-fit: cover;
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), filter 0.25s ease;
-}
-
-.game-card:hover .cover-wrapper:not(.cover-ambient) img {
-  transform: scale(1.03);
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* Ambient backdrop mode for square (1:1) or landscape artwork so logos and titles are never clipped */
@@ -454,9 +461,10 @@ textarea:focus {
   background-size: cover;
   background-position: center;
   filter: blur(18px) brightness(0.38) saturate(1.35);
-  transform: scale(1.18);
+  transform: scale(1.18) translateZ(0);
   pointer-events: none;
   z-index: 0;
+  will-change: transform;
 }
 
 .cover-wrapper.cover-ambient img {
@@ -466,10 +474,6 @@ textarea:focus {
   padding-block: 0.35rem;
   padding-inline: 0.15rem;
   filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.55));
-}
-
-.game-card:hover .cover-wrapper.cover-ambient img {
-  transform: scale(1.02);
 }
 
 .cover-wrapper .platform-badge,
@@ -513,9 +517,8 @@ textarea:focus {
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  backdrop-filter: blur(4px);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
-  background-color: rgba(16, 124, 16, 0.92);
+  background-color: rgba(16, 124, 16, 0.95);
   color: #ecfdf5;
   border: 1px solid rgba(74, 222, 128, 0.55);
 }
@@ -531,7 +534,6 @@ textarea:focus {
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  backdrop-filter: blur(4px);
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
 }
 
@@ -830,8 +832,7 @@ textarea:focus {
   position: absolute;
   inset-block-end: 0.5rem;
   inset-inline-end: 0.5rem;
-  background-color: rgba(15, 23, 42, 0.88);
-  backdrop-filter: blur(4px);
+  background-color: rgba(15, 23, 42, 0.94);
   color: #fde047;
   border: 1px solid rgba(250, 204, 21, 0.35);
   padding-block: 0.15rem;
@@ -849,6 +850,7 @@ textarea:focus {
   flex-direction: column;
   gap: 0.35rem;
   min-inline-size: 0;
+  flex: 1 1 auto;
 }
 
 .card-title {
@@ -879,6 +881,8 @@ textarea:focus {
   gap: 0.5rem;
   font-size: 0.82rem;
   color: var(--text-secondary);
+  margin-block-start: auto;
+  flex-shrink: 0;
 }
 
 .status-pill {
@@ -2339,7 +2343,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 /* Off-screen rendering performance for large libraries (below initial fold) */
 .game-card.deferred-card {
   content-visibility: auto;
-  contain-intrinsic-size: auto none auto 380px;
+  contain-intrinsic-size: auto none auto 440px;
 }
 
 .games-grid.list-view .game-card.deferred-card {
@@ -2448,6 +2452,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   z-index: 25;
   background-color: rgba(19, 27, 46, 0.92);
   backdrop-filter: blur(10px);
+  transform: translateZ(0);
   color: var(--text-primary);
   border: 1px solid var(--accent-primary);
   border-radius: 999px;
@@ -2738,6 +2743,10 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
     gap: 0.75rem;
   }
 
+  .game-card.deferred-card {
+    contain-intrinsic-size: auto none auto 340px;
+  }
+
   .games-grid:not(.list-view) .platform-badge {
     font-size: 0.66rem;
     padding-block: 0.14rem;
@@ -2955,6 +2964,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
     inset-block-end: 0;
     inset-inline: 0;
     z-index: 30;
+    transform: translateZ(0);
     display: grid;
     grid-template-columns: repeat(6, 1fr);
     align-items: center;
@@ -3766,8 +3776,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   font-size: 0.74rem;
   font-weight: 700;
   color: #fbbf24;
-  background-color: rgba(15, 23, 42, 0.88);
-  backdrop-filter: blur(4px);
+  background-color: rgba(15, 23, 42, 0.94);
   border: 1px solid rgba(245, 158, 11, 0.35);
   border-radius: var(--radius-sm);
   padding-block: 0.15rem;
