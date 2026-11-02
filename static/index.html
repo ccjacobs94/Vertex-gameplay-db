@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=26">
+  <link rel="stylesheet" href="/static/styles.css?v=27">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -1402,6 +1402,48 @@
     </div>
   </dialog>
 
+  <!-- Admin Delete User Confirmation Dialog (Irreversible Task) -->
+  <dialog id="admin-delete-user-dialog" class="modal-dialog" closedby="any" aria-labelledby="delete-user-modal-title">
+    <div class="modal-content" style="max-width: 520px;">
+      <header class="modal-header">
+        <div style="display: flex; align-items: center; gap: 0.5rem;">
+          <span style="font-size: 1.3rem;" aria-hidden="true">⚠️</span>
+          <h3 id="delete-user-modal-title" style="margin: 0; color: #ef4444; font-size: 1.15rem;">Delete User Account</h3>
+        </div>
+        <button type="button" class="btn-icon btn-sm" onclick="closeAdminDeleteUserDialog()" aria-label="Close dialog">✕</button>
+      </header>
+
+      <div class="modal-body" style="display: flex; flex-direction: column; gap: 1rem; padding: 0.5rem 0;">
+        <div style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: var(--radius-md, 8px); padding: 0.85rem 1rem;">
+          <strong style="color: #f87171; display: block; margin-bottom: 0.25rem;">Warning: Irreversible Task</strong>
+          <p style="margin: 0; font-size: 0.85rem; color: #cbd5e1; line-height: 1.45;">
+            This action is <strong>permanent and irreversible</strong>. Deleting this account will permanently erase the user <strong id="delete-user-target-display" style="color: #f87171;"></strong>, along with their entire game library, platform connections, credentials, sync history, and active sessions. There is no way to undo this action.
+          </p>
+        </div>
+
+        <div>
+          <label for="delete-user-confirm-input" style="display: block; font-size: 0.82rem; color: var(--text-secondary); margin-bottom: 0.4rem;">
+            To confirm deletion, type <strong id="delete-user-confirm-target" style="color: var(--text-primary); user-select: all;"></strong> below:
+          </label>
+          <input
+            type="text"
+            id="delete-user-confirm-input"
+            class="form-input"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="Type username to confirm"
+            style="width: 100%; box-sizing: border-box;"
+          />
+        </div>
+      </div>
+
+      <footer class="modal-footer" style="display: flex; justify-content: flex-end; gap: 0.75rem; border-top: 1px solid var(--border-subtle); padding-top: 0.85rem;">
+        <button type="button" id="btn-cancel-delete-user" class="btn btn-secondary" onclick="closeAdminDeleteUserDialog()" autofocus>Cancel</button>
+        <button type="button" id="btn-confirm-delete-user" class="btn btn-danger" disabled onclick="confirmAdminDeleteUser()">Permanently Delete Account</button>
+      </footer>
+    </div>
+  </dialog>
+
   <!-- Quick Triage Modal Dialog (< 5s per game workflow) -->
   <dialog id="triage-dialog" class="modal-dialog triage-modal" closedby="any" aria-labelledby="triage-modal-title">
     <div class="modal-content triage-content">
@@ -1589,6 +1631,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=26"></script>
+  <script src="/static/app.js?v=27"></script>
 </body>
 </html>

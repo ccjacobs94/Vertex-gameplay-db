@@ -97,6 +97,7 @@ Administrators can configure self-registration via the web UI Settings modal (`/
 - **Pending (`awaiting_approval`)**: Awaiting administrator activation; sign-in is blocked.
 - **Pending (`awaiting_payment`) / Inactive (`subscription_lapsed`)**: In hosted edition, users are granted restricted billing-only sessions allowing access to `/billing` to start or manage their subscription.
 - **Inactive (`admin_suspended`)**: Fully suspended by an administrator; all sessions and OAuth tokens are revoked immediately. Automated billing events or payment webhooks **never** override an admin suspension.
+- **Account Deletion & Irreversible Removal**: Administrators can disable/re-enable accounts or permanently delete an account alongside all associated library data, platform credentials, active sessions, and history (`DELETE /api/admin/users/{user_id}`). In the web UI, deletion is guarded by a confirmation dialog with an explicit irreversible task warning that requires typing the username before deletion is executed. Self-deletion and deleting the last active admin are strictly prohibited.
 
 ### Hosted Edition (SaaS Subscription Mode)
 When running with `VERTEX_EDITION=hosted`, new users register, start a monthly subscription via Stripe Checkout, and manage their invoices in the Stripe Customer Portal. Webhook verification uses SHA-256 HMAC signatures with idempotency checks.
