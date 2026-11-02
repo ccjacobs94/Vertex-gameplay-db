@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Git post-merge hook: automated CI/CD container deployment.
+# Triggers primary container deploy when merged into main,
+# or QA validation container deploy when merged into develop.
+
+set -euo pipefail
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+repo_root="$(git rev-parse --show-toplevel)"
+
+if [[ "$branch" == "main" ]]; then
+  echo "post-merge: Detected merge into 'main'. Triggering primary production container deployment..."
+  exec "$repo_root/scripts/deploy.sh" main
+elif [[ "$branch" == "develop" ]]; then
+  echo "post-merge: Detected merge into 'develop'. Triggering QA container deployment for LAN/Tailscale..."
+  exec "$repo_root/scripts/deploy.sh" develop
+fi

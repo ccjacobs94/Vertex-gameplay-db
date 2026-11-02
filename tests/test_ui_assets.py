@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=24 and sw to v20
-        self.assertIn('href="/static/styles.css?v=24"', index_html)
-        self.assertIn('src="/static/app.js?v=24"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v20";', sw_js)
+        # Cache buster must be bumped to v=28 and sw to v24
+        self.assertIn('href="/static/styles.css?v=28"', index_html)
+        self.assertIn('src="/static/app.js?v=28"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v24";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -102,6 +102,7 @@ class TestUIBrandAssets(unittest.TestCase):
         # Onboarding wizard & connected accounts integration
         self.assertIn('id="onboarding-dialog"', index_html)
         self.assertIn('id="btn-open-connections"', index_html)
+        self.assertIn('id="btn-wizard-dismiss-forever"', index_html)
         self.assertIn('id="empty-library-welcome"', index_html)
         self.assertIn('onclick="window.openConnectionsModal && window.openConnectionsModal()"', index_html)
         self.assertIn('onclick="window.openOnboardingWizard && window.openOnboardingWizard()"', index_html)
@@ -111,8 +112,104 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.switchSettingsTab = switchSettingsTab;", app_js)
         self.assertIn("window.loadAccountInfo = loadAccountInfo;", app_js)
         self.assertIn("window.openOnboardingWizard = openOnboardingWizard;", app_js)
+        self.assertIn("window.closeOnboardingWizard = closeOnboardingWizard;", app_js)
+        self.assertIn("window.dismissWizardForever = dismissWizardForever;", app_js)
         self.assertIn("window.openConnectionsModal = openConnectionsModal;", app_js)
         self.assertIn("if (!dialog.open)", app_js)
+
+    def test_mobile_settings_and_logout_elements(self):
+        index_path = os.path.join(self.static_dir, "index.html")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        styles_path = os.path.join(self.static_dir, "styles.css")
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+
+        # Mobile bottom navigation bar includes Settings
+        self.assertIn('id="mnav-settings"', index_html)
+
+        # Mobile header includes Settings button and mobile Sign Out link
+        self.assertIn('id="btn-mobile-settings"', index_html)
+        self.assertIn('id="btn-mobile-logout"', index_html)
+
+        # Settings dialog Account section has a direct Sign Out action
+        self.assertIn('id="btn-settings-logout"', index_html)
+
+        # JavaScript wires mnav-settings and toggles mobile/settings logout buttons
+        self.assertIn('document.getElementById("mnav-settings")', app_js)
+        self.assertIn('document.getElementById("btn-mobile-settings")', app_js)
+        self.assertIn('document.getElementById("btn-mobile-logout")', app_js)
+        self.assertIn('document.getElementById("btn-settings-logout")', app_js)
+
+        # CSS styles mobile header actions and 6-column bottom navigation
+        self.assertIn(".mobile-header-actions", styles_css)
+        self.assertIn("grid-template-columns: repeat(6, 1fr)", styles_css)
+
+    def test_admin_delete_user_modal_integration(self):
+        index_path = os.path.join(self.static_dir, "index.html")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+
+        # HTML dialog markup and elements
+        self.assertIn('id="admin-delete-user-dialog"', index_html)
+        self.assertIn('id="delete-user-modal-title"', index_html)
+        self.assertIn('id="delete-user-confirm-input"', index_html)
+        self.assertIn('id="btn-confirm-delete-user"', index_html)
+        self.assertIn('onclick="closeAdminDeleteUserDialog()"', index_html)
+        self.assertIn('onclick="confirmAdminDeleteUser()"', index_html)
+        self.assertIn("Warning: Irreversible Task", index_html)
+
+        # JavaScript exports and handler bindings
+        self.assertIn("window.openAdminDeleteUserDialog = openAdminDeleteUserDialog;", app_js)
+        self.assertIn("window.closeAdminDeleteUserDialog = closeAdminDeleteUserDialog;", app_js)
+        self.assertIn("window.confirmAdminDeleteUser = confirmAdminDeleteUser;", app_js)
+        self.assertIn("openAdminDeleteUserDialog", app_js)
+        self.assertIn("confirmAdminDeleteUser", app_js)
+
+    def test_scroll_rendering_performance_optimizations(self):
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        styles_path = os.path.join(self.static_dir, "styles.css")
+
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+
+        # 1. Async image decoding on game cards to prevent main-thread scroll jank
+        self.assertIn('img.decoding = "async";', app_js)
+
+        # 2. DocumentFragment batching for game card rendering (prevents repeated live DOM layout thrashing)
+        self.assertIn("createDocumentFragment()", app_js)
+
+        # 3. RequestAnimationFrame throttling for scroll event listener
+        self.assertIn("requestAnimationFrame", app_js)
+
+        # 4. Self-contained flex column cards instead of multi-pass subgrid tracks
+        self.assertNotIn("grid-template-rows: subgrid", styles_css)
+        self.assertNotIn("grid-row: span 3", styles_css)
+        self.assertIn("display: flex;\n  flex-direction: column;", styles_css)
+
+        # 5. Calibrated contain-intrinsic-size for desktop and mobile
+        self.assertIn("contain-intrinsic-size: auto none auto 440px", styles_css)
+        self.assertIn("contain-intrinsic-size: auto none auto 340px", styles_css)
+
+        # 6. Badges avoid expensive backdrop-filter blur passes during scrolling
+        self.assertNotIn(".gamepass-badge {\n  position: absolute;\n  inset-block-start: 2.15rem;\n  inset-inline-start: 0.5rem;\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  gap: 0.25rem;\n  padding-block: 0.18rem;\n  padding-inline: 0.45rem;\n  border-radius: var(--radius-sm);\n  font-size: 0.66rem;\n  font-weight: 800;\n  letter-spacing: 0.04em;\n  text-transform: uppercase;\n  backdrop-filter: blur(4px);", styles_css)
+        self.assertNotIn(".rating-badge {\n  position: absolute;\n  inset-block-end: 0.5rem;\n  inset-inline-end: 0.5rem;\n  background-color: rgba(15, 23, 42, 0.88);\n  backdrop-filter: blur(4px);", styles_css)
+
+        # 7. Hover transitions scoped to fine pointer devices with hover capability
+        self.assertIn("@media (hover: hover) and (pointer: fine)", styles_css)
+
+        # 8. Compositor layer promotion for sticky/fixed elements
+        self.assertIn("transform: translateZ(0);", styles_css)
 
 
 if __name__ == "__main__":

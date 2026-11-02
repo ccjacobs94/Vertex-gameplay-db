@@ -1,0 +1,90 @@
+name: Game Hub CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  quality-gate:
+    name: Quality Gate & Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies for syntax checking
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+
+      - name: Check for committed secrets or live database files
+        run: |
+          leaked=$(git ls-files --cached -- '.env' '.env.*' 'data/*' 'data-qa/*' '*.db' '*.db-wal' '*.db-shm' \
+            '.agents/plugins/*/mcp_config.json' | grep -v '^\.env\.example$' || true)
+          if [ -n "$leaked" ]; then
+            echo "Secrets or database files tracked in git:"
+            echo "$leaked"
+            exit 1
+          fi
+
+      - name: Python and JavaScript syntax check
+        run: |
+          python -c "
+          import ast, pathlib, sys
+          bad = 0
+          for p in sorted(pathlib.Path('.').rglob('*.py')):
+              if any(part in {'.venv', 'venv', '__pycache__', '.git'} for part in p.parts):
+                  continue
+              try:
+                  ast.parse(p.read_text(encoding='utf-8'), filename=str(p))
+              except SyntaxError as e:
+                  print(f'SyntaxError in {p}:{e.lineno}: {e.msg}')
+                  bad = 1
+          sys.exit(bad)
+          "
+          node --check static/*.js
+
+      - name: Build Docker test image and run container quality gate
+        run: |
+          docker build -t game-hub-test:latest .
+          docker run --rm --network none \
+            -v "$(pwd)/tests:/app/tests:ro" \
+            game-hub-test:latest \
+            python -m unittest discover -s tests -v
+
+  deploy-qa:
+    name: Deploy QA Container (develop)
+    needs: quality-gate
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy QA validation container
+        run: |
+          ./scripts/deploy.sh develop
+
+  deploy-prod:
+    name: Deploy Primary Production Container (main)
+    needs: quality-gate
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: [self-hosted, linux]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy production container
+        run: |
+          ./scripts/deploy.sh main

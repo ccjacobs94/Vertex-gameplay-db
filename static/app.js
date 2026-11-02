@@ -970,6 +970,14 @@ async function fetchStats() {
     if (logoutBtn) {
       logoutBtn.hidden = !stats.auth_enabled;
     }
+    const mobileLogoutBtn = document.getElementById("btn-mobile-logout");
+    if (mobileLogoutBtn) {
+      mobileLogoutBtn.hidden = !stats.auth_enabled;
+    }
+    const settingsLogoutBtn = document.getElementById("btn-settings-logout");
+    if (settingsLogoutBtn) {
+      settingsLogoutBtn.hidden = !stats.auth_enabled;
+    }
 
     const adminTab = document.getElementById("stab-admin-users");
     if (adminTab && typeof stats.is_admin === "boolean") {
@@ -1123,6 +1131,7 @@ function renderGames() {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   for (let i = 0; i < state.games.length; i++) {
     const game = state.games[i];
     const card = document.createElement("article");
@@ -1140,6 +1149,7 @@ function renderGames() {
     img.width = 300;
     img.height = 450;
     img.loading = i < 6 ? "eager" : "lazy";
+    img.decoding = "async";
     attachCoverAspectObserver(wrapper, img, fallbackSrc, imgSrc);
     wrapper.appendChild(img);
 
@@ -1327,8 +1337,9 @@ function renderGames() {
       }
     });
 
-    grid.appendChild(card);
+    fragment.appendChild(card);
   }
+  grid.appendChild(fragment);
 }
 
 function renderEditGenreChips() {
@@ -3162,8 +3173,8 @@ async function loadAdminUsers() {
         <td class="admin-actions-cell">
           ${!isSelf ? `
             <button type="button" class="btn btn-sm ${isActive ? 'btn-danger-outline' : 'btn-success-outline'}"
-              onclick="updateAdminUserStatus('${escapeHtml(u.id)}', '${isActive ? 'inactive' : 'active'}')">
-              ${isActive ? 'Suspend' : 'Activate'}
+              onclick="updateAdminUserStatus('${escapeHtml(u.id)}', '${isActive ? 'inactive' : 'active'}', '${escapeHtml(u.username)}')">
+              ${isActive ? 'Disable' : 'Enable'}
             </button>
             <button type="button" class="btn btn-sm btn-secondary"
               onclick="updateAdminUserRole('${escapeHtml(u.id)}', '${isAdmin ? 'user' : 'admin'}')">
@@ -3174,6 +3185,12 @@ async function loadAdminUsers() {
             onclick="resetAdminUserPassword('${escapeHtml(u.id)}', '${escapeHtml(u.username)}')">
             Reset PW
           </button>
+          ${!isSelf ? `
+            <button type="button" class="btn btn-sm btn-danger-outline"
+              onclick="openAdminDeleteUserDialog('${escapeHtml(u.id)}', '${escapeHtml(u.username)}')">
+              Delete
+            </button>
+          ` : ''}
         </td>
       </tr>`;
     }).join("");
@@ -3183,7 +3200,13 @@ async function loadAdminUsers() {
   }
 }
 
-async function updateAdminUserStatus(userId, newStatus) {
+async function updateAdminUserStatus(userId, newStatus, username) {
+  if (newStatus === "inactive") {
+    const userDisplay = username || userId;
+    if (!confirm(`Are you sure you want to disable the account for "${userDisplay}"? The user will be signed out immediately and blocked from logging in until re-enabled.`)) {
+      return;
+    }
+  }
   try {
     const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
       method: "PATCH",
@@ -3204,6 +3227,86 @@ async function updateAdminUserStatus(userId, newStatus) {
   }
 }
 window.updateAdminUserStatus = updateAdminUserStatus;
+
+let adminUserToDelete = null;
+
+function openAdminDeleteUserDialog(userId, username) {
+  adminUserToDelete = { id: userId, username: username };
+  const dialog = document.getElementById("admin-delete-user-dialog");
+  const targetDisplay = document.getElementById("delete-user-target-display");
+  const confirmTarget = document.getElementById("delete-user-confirm-target");
+  const confirmInput = document.getElementById("delete-user-confirm-input");
+  const confirmBtn = document.getElementById("btn-confirm-delete-user");
+
+  if (targetDisplay) targetDisplay.textContent = username;
+  if (confirmTarget) confirmTarget.textContent = username;
+  if (confirmInput) {
+    confirmInput.value = "";
+    confirmInput.oninput = () => {
+      if (confirmBtn) {
+        confirmBtn.disabled = confirmInput.value.trim() !== username;
+      }
+    };
+    confirmInput.onkeydown = (e) => {
+      if (e.key === "Enter" && confirmInput.value.trim() === username && !confirmBtn.disabled) {
+        e.preventDefault();
+        confirmAdminDeleteUser();
+      }
+    };
+  }
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Permanently Delete Account";
+  }
+
+  if (dialog && typeof dialog.showModal === "function") {
+    dialog.showModal();
+  }
+}
+window.openAdminDeleteUserDialog = openAdminDeleteUserDialog;
+
+function closeAdminDeleteUserDialog() {
+  const dialog = document.getElementById("admin-delete-user-dialog");
+  if (dialog && dialog.open) {
+    dialog.close();
+  }
+  adminUserToDelete = null;
+}
+window.closeAdminDeleteUserDialog = closeAdminDeleteUserDialog;
+
+async function confirmAdminDeleteUser() {
+  if (!adminUserToDelete || !adminUserToDelete.id) return;
+  const userId = adminUserToDelete.id;
+  const confirmBtn = document.getElementById("btn-confirm-delete-user");
+
+  try {
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = "Deleting...";
+    }
+    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(`Deletion failed: ${err.detail || "Could not delete user"}`);
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Permanently Delete Account";
+      }
+      return;
+    }
+    closeAdminDeleteUserDialog();
+    loadAdminUsers();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Permanently Delete Account";
+    }
+  }
+}
+window.confirmAdminDeleteUser = confirmAdminDeleteUser;
 
 async function updateAdminUserRole(userId, newRole) {
   try {
@@ -3386,12 +3489,24 @@ function closeOnboardingWizard() {
   sessionStorage.setItem("vertex_onboarding_dismissed", "true");
 }
 
+async function dismissWizardForever() {
+  localStorage.setItem("vertex_onboarding_dismissed", "true");
+  sessionStorage.setItem("vertex_onboarding_dismissed", "true");
+  try {
+    await fetch("/api/user/onboarding/complete", { method: "POST" });
+  } catch (e) {
+    console.error("Error dismissing onboarding:", e);
+  }
+  closeOnboardingWizard();
+}
+
 function openConnectionsModal() {
   openOnboardingWizard();
 }
 
 window.openOnboardingWizard = openOnboardingWizard;
 window.closeOnboardingWizard = closeOnboardingWizard;
+window.dismissWizardForever = dismissWizardForever;
 window.openConnectionsModal = openConnectionsModal;
 
 async function loadWizardExistingData() {
@@ -3495,6 +3610,7 @@ async function finishWizardAndSync() {
     console.error("Error completing onboarding:", e);
   }
 
+  localStorage.setItem("vertex_onboarding_dismissed", "true");
   closeOnboardingWizard();
   const syncBtn = document.getElementById("btn-sync");
   if (syncBtn) {
@@ -3503,6 +3619,7 @@ async function finishWizardAndSync() {
 }
 
 async function skipWizard() {
+  localStorage.setItem("vertex_onboarding_dismissed", "true");
   try {
     await fetch("/api/user/onboarding/complete", { method: "POST" });
   } catch (e) {}
@@ -4646,6 +4763,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const mnavTriage = document.getElementById("mnav-triage");
   const mnavAdd = document.getElementById("mnav-add");
   const mnavReconcile = document.getElementById("mnav-reconcile");
+  const mnavSettings = document.getElementById("mnav-settings");
 
   function setMobileNavActive(activeId) {
     for (const item of document.querySelectorAll(".mobile-bottom-nav .mnav-item")) {
@@ -4679,6 +4797,12 @@ document.addEventListener("DOMContentLoaded", () => {
       openReconcileModal();
     });
   }
+  if (mnavSettings) {
+    mnavSettings.addEventListener("click", () => {
+      setMobileNavActive("mnav-settings");
+      openSettingsModal();
+    });
+  }
 
   triageDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
   reconcileDialog.addEventListener("close", () => setMobileNavActive("mnav-library"));
@@ -4689,6 +4813,17 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnOpenSettings = document.getElementById("btn-open-settings");
   if (btnOpenSettings) {
     btnOpenSettings.addEventListener("click", openSettingsModal);
+  }
+  const btnMobileSettings = document.getElementById("btn-mobile-settings");
+  if (btnMobileSettings) {
+    btnMobileSettings.addEventListener("click", openSettingsModal);
+  }
+  const btnMobileSync = document.getElementById("btn-mobile-sync");
+  if (btnMobileSync) {
+    btnMobileSync.addEventListener("click", () => {
+      const syncBtn = document.getElementById("btn-sync");
+      if (syncBtn) syncBtn.click();
+    });
   }
   const btnCloseSettings = document.getElementById("btn-close-settings");
   if (btnCloseSettings && settingsDialog) {
@@ -4836,10 +4971,22 @@ document.addEventListener("DOMContentLoaded", () => {
   // Floating Scroll-to-Top Button
   const scrollTopBtn = document.getElementById("btn-scroll-top");
   if (scrollTopBtn) {
+    let isHidden = true;
+    let ticking = false;
     window.addEventListener(
       "scroll",
       () => {
-        scrollTopBtn.hidden = window.scrollY < 520;
+        if (!ticking) {
+          window.requestAnimationFrame(() => {
+            const shouldHide = window.scrollY < 520;
+            if (isHidden !== shouldHide) {
+              isHidden = shouldHide;
+              scrollTopBtn.hidden = shouldHide;
+            }
+            ticking = false;
+          });
+          ticking = true;
+        }
       },
       { passive: true }
     );
@@ -4866,6 +5013,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const btnWizNext = document.getElementById("btn-wizard-next");
   if (btnWizNext) btnWizNext.addEventListener("click", () => switchWizardStep(currentWizardStep + 1));
+
+  const btnWizDismiss = document.getElementById("btn-wizard-dismiss-forever");
+  if (btnWizDismiss) btnWizDismiss.addEventListener("click", dismissWizardForever);
 
   const btnWizSkip = document.getElementById("btn-wizard-skip");
   if (btnWizSkip) btnWizSkip.addEventListener("click", skipWizard);
@@ -4962,7 +5112,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (res.ok) {
       const conns = await res.json();
       if (conns && conns.onboarding_completed === false) {
-        if (!sessionStorage.getItem("vertex_onboarding_dismissed")) {
+        if (!localStorage.getItem("vertex_onboarding_dismissed") && !sessionStorage.getItem("vertex_onboarding_dismissed")) {
           setTimeout(() => openOnboardingWizard(), 400);
         }
       }

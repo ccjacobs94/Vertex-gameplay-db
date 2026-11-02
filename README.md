@@ -97,9 +97,30 @@ Administrators can configure self-registration via the web UI Settings modal (`/
 - **Pending (`awaiting_approval`)**: Awaiting administrator activation; sign-in is blocked.
 - **Pending (`awaiting_payment`) / Inactive (`subscription_lapsed`)**: In hosted edition, users are granted restricted billing-only sessions allowing access to `/billing` to start or manage their subscription.
 - **Inactive (`admin_suspended`)**: Fully suspended by an administrator; all sessions and OAuth tokens are revoked immediately. Automated billing events or payment webhooks **never** override an admin suspension.
+- **Account Deletion & Irreversible Removal**: Administrators can disable/re-enable accounts or permanently delete an account alongside all associated library data, platform credentials, active sessions, and history (`DELETE /api/admin/users/{user_id}`). In the web UI, deletion is guarded by a confirmation dialog with an explicit irreversible task warning that requires typing the username before deletion is executed. Self-deletion and deleting the last active admin are strictly prohibited.
 
 ### Hosted Edition (SaaS Subscription Mode)
 When running with `VERTEX_EDITION=hosted`, new users register, start a monthly subscription via Stripe Checkout, and manage their invoices in the Stripe Customer Portal. Webhook verification uses SHA-256 HMAC signatures with idempotency checks.
+
+---
+
+## 🔄 CI/CD & Multi-Stage Deployment
+
+Game Hub includes automated CI/CD deployment pipelines for production and QA:
+
+- **Production Container (`main` branch)**:
+  - Deploys container `game-hub` on ports `8095` (Web UI) and `8097` (MCP).
+  - Uses production data stored in `./data`.
+  - Automatically creates a timestamped database backup (`data/games.db.bak-YYYYMMDD-HHMMSS`) before redeploying.
+- **QA Validation Container (`develop` branch)**:
+  - Spins up container `game-hub-qa` on ports `8098` (Web UI) and `8099` (MCP).
+  - Uses an isolated data volume in `./data-qa` to guarantee production data is never touched or mutated during QA.
+  - Initial deployment seeds a snapshot from `./data` if empty, allowing realistic staging without risk.
+  - Accessible directly over your home LAN (`http://<LAN-IP>:8098`) or via Tailscale (`http://<Tailscale-IP>:8098`).
+- **Automation Mechanisms**:
+  - **Git post-merge Hook**: `.githooks/post-merge` automatically triggers `scripts/deploy.sh` whenever code is merged into `main` or `develop`.
+  - **Deploy Script**: `scripts/deploy.sh [main|develop|auto]` handles automated builds, volume isolation, database backups, and healthcheck verification.
+  - **GitHub Actions**: `.github/workflows/cicd.yml` verifies secrets isolation, runs Python/JS syntax checks, and executes container quality tests before triggering self-hosted deployments.
 
 ---
 

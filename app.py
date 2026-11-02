@@ -274,6 +274,43 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
     await server.serve()
 
 
+def clean_unconfigured_subaccount_libraries(default_user: str, db_path: Optional[str] = None) -> List[str]:
+    """
+    Ensure subaccounts without personal credentials do not retain games accidentally
+    leaked from server-owner environment defaults. Returns list of cleaned user_ids.
+    """
+    cleaned = []
+    try:
+        active_uids = system_db.list_active_user_ids(db_path=db_path)
+    except Exception:
+        return cleaned
+
+    for uid in active_uids:
+        if uid == default_user:
+            continue
+        try:
+            uconns = system_db.get_user_connections(uid, db_path=db_path)
+            has_own_creds = bool(uconns.get("steam_id") or uconns.get("xbl_api_key") or uconns.get("psn_npsso"))
+            if not has_own_creds:
+                user_db_file = Path(db.USERS_DB_DIR) / uid / "games.db"
+                if user_db_file.exists():
+                    with db.get_connection(str(user_db_file)) as uconn:
+                        synced_count = uconn.execute("SELECT count(*) FROM games WHERE source != 'Manual'").fetchone()[0]
+                        manual_count = uconn.execute("SELECT count(*) FROM games WHERE source = 'Manual'").fetchone()[0]
+                        if synced_count > 0 and manual_count == 0:
+                            logger.info("Purging leaked server-owner games from unconfigured subaccount %s", uid)
+                            uconn.execute("DELETE FROM games")
+                            uconn.execute("DELETE FROM sync_logs")
+                            uconn.execute("DELETE FROM game_achievements")
+                            uconn.execute("DELETE FROM playtime_prompts")
+                            uconn.execute("DELETE FROM reconcile_dismissals")
+                            uconn.commit()
+                            cleaned.append(uid)
+        except Exception as exc:
+            logger.warning("Could not check/clean subaccount database for %s: %s", uid, exc)
+    return cleaned
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -290,6 +327,7 @@ async def lifespan(app: FastAPI):
             logger.info("Migrated legacy database from %s to %s", DEFAULT_DB_PATH, default_user_db)
         except Exception as e:
             logger.warning("Could not seed default user database: %s", e)
+    clean_unconfigured_subaccount_libraries(default_user)
     sync_task = asyncio.create_task(_periodic_sync_loop())
     mcp_task = asyncio.create_task(_run_mcp_http_server("0.0.0.0", MCP_PORT))
     logger.info("Started MCP Streamable HTTP server on port %s with CORS & OAuth discovery", MCP_PORT)
@@ -453,7 +491,7 @@ class AdminUserCreateRequest(BaseModel):
 
 
 class AdminUserUpdateRequest(BaseModel):
-    status: Optional[str] = Field(default=None, pattern="^(active|pending|inactive)$")
+    status: Optional[str] = Field(default=None, pattern="^(active|pending|inactive|disabled)$")
     role: Optional[str] = Field(default=None, pattern="^(admin|user)$")
     status_reason: Optional[str] = None
 
@@ -1065,13 +1103,19 @@ async def api_admin_update_user(
 
     try:
         if payload.status is not None:
+            status_val = payload.status
+            reason = payload.status_reason
+            if status_val == "disabled":
+                status_val = "inactive"
+                if not reason:
+                    reason = "admin_suspended"
             system_db.set_user_status(
                 target_user_id,
-                payload.status,
-                reason=payload.status_reason,
+                status_val,
+                reason=reason,
                 actor_id=actor_id,
             )
-            if payload.status != "active":
+            if status_val != "active":
                 web_auth.revoke_sessions_for_username(target["username"])
         if payload.role is not None:
             system_db.set_user_role(target_user_id, payload.role, actor_id=actor_id)
@@ -1080,6 +1124,27 @@ async def api_admin_update_user(
 
     updated = system_db.get_user(target_user_id)
     return {"status": "success", "user": updated}
+
+
+@app.delete("/api/admin/users/{target_user_id}")
+async def api_admin_delete_user(
+    target_user_id: str, request: Request
+) -> Dict[str, Any]:
+    actor_id, _ = _require_admin(request)
+    target = system_db.get_user(target_user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        system_db.delete_user(target_user_id, actor_id=actor_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    return {
+        "status": "success",
+        "message": f"User '{target['username']}' and all associated data have been permanently deleted.",
+        "deleted_user_id": target_user_id,
+    }
 
 
 @app.post("/api/admin/users/{target_user_id}/reset-password")
@@ -1355,19 +1420,35 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
     xbl_key = conns.get("xbl_api_key", "")
     psn_token = conns.get("psn_npsso", "")
 
+    is_primary = (user_id == get_auth_username())
+    onboarding_completed = bool(conns.get("onboarding_completed", False))
+
+    if not onboarding_completed:
+        # Check if the user already has games in their personal database (established account)
+        try:
+            user_db_path = _get_active_user_db_path(user_id)
+            if user_db_path.exists():
+                with sqlite3.connect(user_db_path) as uconn:
+                    row = uconn.execute("SELECT count(*) FROM games").fetchone()
+                    if row and row[0] > 0:
+                        system_db.set_user_onboarding_completed(user_id, True)
+                        onboarding_completed = True
+        except Exception:
+            pass
+
     return {
         "user_id": user_id,
         "username": username,
         "steam_id": conns.get("steam_id", ""),
         "has_xbl_api_key": bool(xbl_key),
         "has_psn_npsso": bool(psn_token),
-        "onboarding_completed": bool(conns.get("onboarding_completed", False)),
+        "onboarding_completed": onboarding_completed,
         "xbl_api_key_masked": (f"••••••••{xbl_key[-4:]}" if len(xbl_key) >= 4 else ("••••" if xbl_key else "")),
         "psn_npsso_masked": (f"••••••••{psn_token[-4:]}" if len(psn_token) >= 4 else ("••••" if psn_token else "")),
         "server_defaults": {
-            "steam": bool(os.environ.get("STEAM_API_KEY") and os.environ.get("STEAM_ID")),
-            "xbox": bool(os.environ.get("XBL_API_KEY")),
-            "psn": bool(os.environ.get("PSN_NPSSO")),
+            "steam": bool(os.environ.get("STEAM_API_KEY") and (os.environ.get("STEAM_ID") if is_primary else False)),
+            "xbox": bool(os.environ.get("XBL_API_KEY") if is_primary else False),
+            "psn": bool(os.environ.get("PSN_NPSSO") if is_primary else False),
         },
     }
 

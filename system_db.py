@@ -8,6 +8,7 @@ import hashlib
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
@@ -323,6 +324,11 @@ def set_user_status(
     actor_id: Optional[str] = None,
     db_path: Optional[str] = None,
 ) -> None:
+    if status == "disabled":
+        status = "inactive"
+        if not reason:
+            reason = "admin_suspended"
+
     if status not in ("active", "pending", "inactive"):
         raise ValueError(f"Invalid status: {status}")
 
@@ -362,6 +368,78 @@ def set_user_status(
         if status != "active":
             conn.execute("DELETE FROM web_sessions WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM oauth_tokens WHERE user_id = ?", (user_id,))
+
+
+def delete_user(
+    user_id: str,
+    actor_id: Optional[str] = None,
+    db_path: Optional[str] = None,
+    users_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Permanently delete a user account and all associated data, including:
+    - User directory and library database on disk
+    - User connections and platform credentials
+    - Active sessions and OAuth/PAT tokens
+    - Subscriptions, invites, and audit logs
+    """
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+
+    with get_system_connection(target_path) as conn:
+        user = conn.execute("SELECT id, username, role, status FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not user:
+            raise ValueError(f"User '{user_id}' not found")
+
+        # Guardrails: cannot delete self or last active admin
+        if actor_id and actor_id == user_id:
+            raise ValueError("Cannot delete your own account")
+
+        if user["role"] == "admin" and user["status"] == "active":
+            admins_count = conn.execute(
+                "SELECT COUNT(*) as c FROM users WHERE role = 'admin' AND status = 'active'"
+            ).fetchone()["c"]
+            if admins_count <= 1:
+                raise ValueError("Cannot delete the last active admin")
+
+        username = user["username"]
+
+        # Revoke sessions for username in memory/auth cache if web_auth is present
+        try:
+            import web_auth
+            web_auth.revoke_sessions_for_username(username)
+        except Exception:
+            pass
+
+        # Purge all user records in system.db
+        conn.execute("DELETE FROM web_sessions WHERE user_id = ? OR LOWER(username) = LOWER(?)", (user_id, username))
+        conn.execute("DELETE FROM oauth_tokens WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM user_connections WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM subscriptions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM account_events WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM invites WHERE created_by = ? OR created_by = ?", (user_id, username))
+        conn.execute("UPDATE invites SET used_by = NULL, used_at = NULL WHERE used_by = ? OR used_by = ?", (user_id, username))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+    # Erase user's library and files on disk
+    try:
+        if users_dir:
+            base_dir = Path(users_dir)
+        else:
+            import db as gdb
+            base_dir = Path(gdb.USERS_DB_DIR)
+
+        for folder_name in {user_id, str(username).lower(), str(username)}:
+            u_path = base_dir / folder_name
+            if u_path.exists():
+                if u_path.is_dir():
+                    shutil.rmtree(str(u_path), ignore_errors=True)
+                else:
+                    u_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    return {"deleted_user_id": user_id, "username": username}
 
 
 def set_user_role(

@@ -175,6 +175,88 @@ class TestAccountLifecycle(unittest.TestCase):
             ).fetchall()
             self.assertEqual(len(sessions), 0)
 
+    def test_delete_user_and_all_associated_data(self):
+        users_dir = Path(self.test_dir) / "users"
+        users_dir.mkdir(parents=True, exist_ok=True)
+        with patch.object(db, "USERS_DB_DIR", str(users_dir)):
+            uid = system_db.create_user(
+                username="user_to_delete",
+                password="Password123!",
+                email="delete_me@example.com",
+                role="user",
+                db_path=self.system_db_path,
+            )
+            # Create associated data:
+            # 1. User DB and files on disk
+            user_folder = users_dir / uid
+            user_folder.mkdir(parents=True, exist_ok=True)
+            user_db_file = user_folder / "games.db"
+            db.init_db(str(user_db_file))
+            (user_folder / "backup.bak").write_text("backup-data")
+            self.assertTrue(user_folder.exists())
+            self.assertTrue(user_db_file.exists())
+
+            # 2. Connections, tokens, sessions, events, invites
+            system_db.set_user_connections(uid, steam_id="76561198000000001", db_path=self.system_db_path)
+            tok = system_db.create_personal_access_token(uid, label="del_pat", db_path=self.system_db_path)
+            with system_db.get_system_connection(self.system_db_path) as conn:
+                conn.execute(
+                    "INSERT INTO web_sessions (session_id, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                    ("sess_del_1", uid, 1000.0, 9999999999.0),
+                )
+                conn.execute(
+                    "INSERT INTO invites (code_hash, created_by, created_at) VALUES (?, ?, ?)",
+                    ("hash_del_invite", uid, "2026-11-01T00:00:00Z"),
+                )
+
+            # Perform deletion
+            result = system_db.delete_user(uid, db_path=self.system_db_path, users_dir=str(users_dir))
+            self.assertEqual(result["deleted_user_id"], uid)
+
+            # Assert user is deleted from users table
+            self.assertIsNone(system_db.get_user(uid, db_path=self.system_db_path))
+
+            # Assert all associated DB data is purged
+            with system_db.get_system_connection(self.system_db_path) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) as c FROM user_connections WHERE user_id = ?", (uid,)).fetchone()["c"], 0)
+                self.assertEqual(conn.execute("SELECT COUNT(*) as c FROM web_sessions WHERE user_id = ?", (uid,)).fetchone()["c"], 0)
+                self.assertEqual(conn.execute("SELECT COUNT(*) as c FROM oauth_tokens WHERE user_id = ?", (uid,)).fetchone()["c"], 0)
+                self.assertEqual(conn.execute("SELECT COUNT(*) as c FROM account_events WHERE user_id = ?", (uid,)).fetchone()["c"], 0)
+                self.assertEqual(conn.execute("SELECT COUNT(*) as c FROM invites WHERE created_by = ?", (uid,)).fetchone()["c"], 0)
+
+            # Assert user directory on disk is completely gone
+            self.assertFalse(user_folder.exists())
+
+    def test_delete_user_guardrails(self):
+        admin1 = system_db.create_user(
+            username="admin_one",
+            password="Password123!",
+            role="admin",
+            db_path=self.system_db_path,
+        )
+        # Cannot delete non-existent user
+        with self.assertRaises(ValueError):
+            system_db.delete_user("ghost_user", db_path=self.system_db_path)
+
+        # Self-deletion prevention
+        with self.assertRaises(ValueError):
+            system_db.delete_user(admin1, actor_id=admin1, db_path=self.system_db_path)
+
+        # Cannot delete last active admin
+        with self.assertRaises(ValueError):
+            system_db.delete_user(admin1, actor_id="another_actor", db_path=self.system_db_path)
+
+        # If second admin exists, deletion by other admin succeeds
+        admin2 = system_db.create_user(
+            username="admin_two",
+            password="Password123!",
+            role="admin",
+            db_path=self.system_db_path,
+        )
+        res = system_db.delete_user(admin1, actor_id=admin2, db_path=self.system_db_path)
+        self.assertEqual(res["deleted_user_id"], admin1)
+        self.assertEqual(system_db.count_active_admins(self.system_db_path), 1)
+
     def test_settings_storage(self):
         self.assertIsNone(system_db.get_setting("nonexistent", db_path=self.system_db_path))
         self.assertEqual(
@@ -306,6 +388,86 @@ class TestAccountApiEndpoints(unittest.TestCase):
             )
             self.assertEqual(reset_res.status_code, 200)
             self.assertIsNotNone(reset_res.json().get("temporary_password"))
+
+    def test_admin_delete_user_endpoint_and_guardrails(self):
+        system_db.create_user(
+            username="victim_user",
+            password="Password123!",
+            role="user",
+            db_path=self.system_db_path,
+        )
+        # Ensure user folder exists
+        victim_dir = Path(self.users_dir) / "victim_user"
+        victim_dir.mkdir(parents=True, exist_ok=True)
+        (victim_dir / "games.db").touch()
+        self.assertTrue(victim_dir.exists())
+
+        # Non-admin gets 403
+        with patch("web_auth.verify_web_session", return_value="gamer_dan"), \
+             patch("app.verify_web_session", return_value="gamer_dan"):
+            res = self.client.delete("/api/admin/users/victim_user")
+            self.assertEqual(res.status_code, 403)
+
+        # Admin session
+        system_db.create_user(
+            username="the_admin",
+            password="Password123!",
+            role="admin",
+            db_path=self.system_db_path,
+        )
+        with patch("web_auth.verify_web_session", return_value="the_admin"), \
+             patch("app.verify_web_session", return_value="the_admin"):
+            # Cannot delete non-existent user -> 404
+            res_404 = self.client.delete("/api/admin/users/nobody")
+            self.assertEqual(res_404.status_code, 404)
+
+            # Cannot delete self -> 400
+            res_self = self.client.delete("/api/admin/users/the_admin")
+            self.assertEqual(res_self.status_code, 400)
+            self.assertIn("own account", res_self.json().get("detail", ""))
+
+            # Successfully delete victim_user -> 200
+            del_res = self.client.delete("/api/admin/users/victim_user")
+            self.assertEqual(del_res.status_code, 200)
+            self.assertEqual(del_res.json()["status"], "success")
+
+            # Verify user and folder are gone
+            self.assertIsNone(system_db.get_user("victim_user", db_path=self.system_db_path))
+            self.assertFalse(victim_dir.exists())
+
+    def test_admin_disable_and_enable_user(self):
+        system_db.create_user(
+            username="target_user",
+            password="Password123!",
+            role="user",
+            db_path=self.system_db_path,
+        )
+        system_db.create_user(
+            username="boss_admin",
+            password="Password123!",
+            role="admin",
+            db_path=self.system_db_path,
+        )
+        with patch("web_auth.verify_web_session", return_value="boss_admin"), \
+             patch("app.verify_web_session", return_value="boss_admin"):
+            # Disable user via status="inactive" or status="disabled"
+            res = self.client.patch(
+                "/api/admin/users/target_user",
+                json={"status": "disabled"},
+            )
+            self.assertEqual(res.status_code, 200)
+            user = system_db.get_user("target_user", db_path=self.system_db_path)
+            self.assertEqual(user["status"], "inactive")
+            self.assertEqual(user["status_reason"], "admin_suspended")
+
+            # Re-enable user via status="active"
+            res_active = self.client.patch(
+                "/api/admin/users/target_user",
+                json={"status": "active"},
+            )
+            self.assertEqual(res_active.status_code, 200)
+            user_active = system_db.get_user("target_user", db_path=self.system_db_path)
+            self.assertEqual(user_active["status"], "active")
 
 
     def test_local_bypass_disables_with_multiple_active_users(self):
