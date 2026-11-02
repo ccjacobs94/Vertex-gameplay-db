@@ -29,7 +29,7 @@ else
 fi
 
 # 2. Secrets & live data must never be tracked ---------------------------------
-leaked="$(git ls-files --cached -- '.env' '.env.*' 'data/*' '*.db' '*.db-wal' '*.db-shm' \
+leaked="$(git ls-files --cached -- '.env' '.env.*' 'data/*' 'data-qa/*' '*.db' '*.db-wal' '*.db-shm' \
   '.agents/plugins/*/mcp_config.json' | grep -v '^\.env\.example$' || true)"
 if [[ -z "$leaked" ]]; then
   pass "no secrets or database files tracked/staged"
