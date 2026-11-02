@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=26 and sw to v22
-        self.assertIn('href="/static/styles.css?v=26"', index_html)
-        self.assertIn('src="/static/app.js?v=26"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v22";', sw_js)
+        # Cache buster must be bumped to v=27 and sw to v23
+        self.assertIn('href="/static/styles.css?v=27"', index_html)
+        self.assertIn('src="/static/app.js?v=27"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v23";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -148,6 +148,31 @@ class TestUIBrandAssets(unittest.TestCase):
         # CSS styles mobile header actions and 6-column bottom navigation
         self.assertIn(".mobile-header-actions", styles_css)
         self.assertIn("grid-template-columns: repeat(6, 1fr)", styles_css)
+
+    def test_admin_delete_user_modal_integration(self):
+        index_path = os.path.join(self.static_dir, "index.html")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+
+        # HTML dialog markup and elements
+        self.assertIn('id="admin-delete-user-dialog"', index_html)
+        self.assertIn('id="delete-user-modal-title"', index_html)
+        self.assertIn('id="delete-user-confirm-input"', index_html)
+        self.assertIn('id="btn-confirm-delete-user"', index_html)
+        self.assertIn('onclick="closeAdminDeleteUserDialog()"', index_html)
+        self.assertIn('onclick="confirmAdminDeleteUser()"', index_html)
+        self.assertIn("Warning: Irreversible Task", index_html)
+
+        # JavaScript exports and handler bindings
+        self.assertIn("window.openAdminDeleteUserDialog = openAdminDeleteUserDialog;", app_js)
+        self.assertIn("window.closeAdminDeleteUserDialog = closeAdminDeleteUserDialog;", app_js)
+        self.assertIn("window.confirmAdminDeleteUser = confirmAdminDeleteUser;", app_js)
+        self.assertIn("openAdminDeleteUserDialog", app_js)
+        self.assertIn("confirmAdminDeleteUser", app_js)
 
 
 if __name__ == "__main__":

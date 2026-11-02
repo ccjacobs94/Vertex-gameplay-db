@@ -491,7 +491,7 @@ class AdminUserCreateRequest(BaseModel):
 
 
 class AdminUserUpdateRequest(BaseModel):
-    status: Optional[str] = Field(default=None, pattern="^(active|pending|inactive)$")
+    status: Optional[str] = Field(default=None, pattern="^(active|pending|inactive|disabled)$")
     role: Optional[str] = Field(default=None, pattern="^(admin|user)$")
     status_reason: Optional[str] = None
 
@@ -1103,13 +1103,19 @@ async def api_admin_update_user(
 
     try:
         if payload.status is not None:
+            status_val = payload.status
+            reason = payload.status_reason
+            if status_val == "disabled":
+                status_val = "inactive"
+                if not reason:
+                    reason = "admin_suspended"
             system_db.set_user_status(
                 target_user_id,
-                payload.status,
-                reason=payload.status_reason,
+                status_val,
+                reason=reason,
                 actor_id=actor_id,
             )
-            if payload.status != "active":
+            if status_val != "active":
                 web_auth.revoke_sessions_for_username(target["username"])
         if payload.role is not None:
             system_db.set_user_role(target_user_id, payload.role, actor_id=actor_id)
@@ -1118,6 +1124,27 @@ async def api_admin_update_user(
 
     updated = system_db.get_user(target_user_id)
     return {"status": "success", "user": updated}
+
+
+@app.delete("/api/admin/users/{target_user_id}")
+async def api_admin_delete_user(
+    target_user_id: str, request: Request
+) -> Dict[str, Any]:
+    actor_id, _ = _require_admin(request)
+    target = system_db.get_user(target_user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    try:
+        system_db.delete_user(target_user_id, actor_id=actor_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    return {
+        "status": "success",
+        "message": f"User '{target['username']}' and all associated data have been permanently deleted.",
+        "deleted_user_id": target_user_id,
+    }
 
 
 @app.post("/api/admin/users/{target_user_id}/reset-password")

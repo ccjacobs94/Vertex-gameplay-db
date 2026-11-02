@@ -1131,6 +1131,7 @@ function renderGames() {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   for (let i = 0; i < state.games.length; i++) {
     const game = state.games[i];
     const card = document.createElement("article");
@@ -1148,6 +1149,7 @@ function renderGames() {
     img.width = 300;
     img.height = 450;
     img.loading = i < 6 ? "eager" : "lazy";
+    img.decoding = "async";
     attachCoverAspectObserver(wrapper, img, fallbackSrc, imgSrc);
     wrapper.appendChild(img);
 
@@ -1335,8 +1337,9 @@ function renderGames() {
       }
     });
 
-    grid.appendChild(card);
+    fragment.appendChild(card);
   }
+  grid.appendChild(fragment);
 }
 
 function renderEditGenreChips() {
@@ -3170,8 +3173,8 @@ async function loadAdminUsers() {
         <td class="admin-actions-cell">
           ${!isSelf ? `
             <button type="button" class="btn btn-sm ${isActive ? 'btn-danger-outline' : 'btn-success-outline'}"
-              onclick="updateAdminUserStatus('${escapeHtml(u.id)}', '${isActive ? 'inactive' : 'active'}')">
-              ${isActive ? 'Suspend' : 'Activate'}
+              onclick="updateAdminUserStatus('${escapeHtml(u.id)}', '${isActive ? 'inactive' : 'active'}', '${escapeHtml(u.username)}')">
+              ${isActive ? 'Disable' : 'Enable'}
             </button>
             <button type="button" class="btn btn-sm btn-secondary"
               onclick="updateAdminUserRole('${escapeHtml(u.id)}', '${isAdmin ? 'user' : 'admin'}')">
@@ -3182,6 +3185,12 @@ async function loadAdminUsers() {
             onclick="resetAdminUserPassword('${escapeHtml(u.id)}', '${escapeHtml(u.username)}')">
             Reset PW
           </button>
+          ${!isSelf ? `
+            <button type="button" class="btn btn-sm btn-danger-outline"
+              onclick="openAdminDeleteUserDialog('${escapeHtml(u.id)}', '${escapeHtml(u.username)}')">
+              Delete
+            </button>
+          ` : ''}
         </td>
       </tr>`;
     }).join("");
@@ -3191,7 +3200,13 @@ async function loadAdminUsers() {
   }
 }
 
-async function updateAdminUserStatus(userId, newStatus) {
+async function updateAdminUserStatus(userId, newStatus, username) {
+  if (newStatus === "inactive") {
+    const userDisplay = username || userId;
+    if (!confirm(`Are you sure you want to disable the account for "${userDisplay}"? The user will be signed out immediately and blocked from logging in until re-enabled.`)) {
+      return;
+    }
+  }
   try {
     const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
       method: "PATCH",
@@ -3212,6 +3227,86 @@ async function updateAdminUserStatus(userId, newStatus) {
   }
 }
 window.updateAdminUserStatus = updateAdminUserStatus;
+
+let adminUserToDelete = null;
+
+function openAdminDeleteUserDialog(userId, username) {
+  adminUserToDelete = { id: userId, username: username };
+  const dialog = document.getElementById("admin-delete-user-dialog");
+  const targetDisplay = document.getElementById("delete-user-target-display");
+  const confirmTarget = document.getElementById("delete-user-confirm-target");
+  const confirmInput = document.getElementById("delete-user-confirm-input");
+  const confirmBtn = document.getElementById("btn-confirm-delete-user");
+
+  if (targetDisplay) targetDisplay.textContent = username;
+  if (confirmTarget) confirmTarget.textContent = username;
+  if (confirmInput) {
+    confirmInput.value = "";
+    confirmInput.oninput = () => {
+      if (confirmBtn) {
+        confirmBtn.disabled = confirmInput.value.trim() !== username;
+      }
+    };
+    confirmInput.onkeydown = (e) => {
+      if (e.key === "Enter" && confirmInput.value.trim() === username && !confirmBtn.disabled) {
+        e.preventDefault();
+        confirmAdminDeleteUser();
+      }
+    };
+  }
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = "Permanently Delete Account";
+  }
+
+  if (dialog && typeof dialog.showModal === "function") {
+    dialog.showModal();
+  }
+}
+window.openAdminDeleteUserDialog = openAdminDeleteUserDialog;
+
+function closeAdminDeleteUserDialog() {
+  const dialog = document.getElementById("admin-delete-user-dialog");
+  if (dialog && dialog.open) {
+    dialog.close();
+  }
+  adminUserToDelete = null;
+}
+window.closeAdminDeleteUserDialog = closeAdminDeleteUserDialog;
+
+async function confirmAdminDeleteUser() {
+  if (!adminUserToDelete || !adminUserToDelete.id) return;
+  const userId = adminUserToDelete.id;
+  const confirmBtn = document.getElementById("btn-confirm-delete-user");
+
+  try {
+    if (confirmBtn) {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = "Deleting...";
+    }
+    const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      alert(`Deletion failed: ${err.detail || "Could not delete user"}`);
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = "Permanently Delete Account";
+      }
+      return;
+    }
+    closeAdminDeleteUserDialog();
+    loadAdminUsers();
+  } catch (e) {
+    alert(`Error: ${e.message}`);
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = "Permanently Delete Account";
+    }
+  }
+}
+window.confirmAdminDeleteUser = confirmAdminDeleteUser;
 
 async function updateAdminUserRole(userId, newRole) {
   try {
@@ -4876,10 +4971,22 @@ document.addEventListener("DOMContentLoaded", () => {
   // Floating Scroll-to-Top Button
   const scrollTopBtn = document.getElementById("btn-scroll-top");
   if (scrollTopBtn) {
+    let isHidden = true;
+    let ticking = false;
     window.addEventListener(
       "scroll",
       () => {
-        scrollTopBtn.hidden = window.scrollY < 520;
+        if (!ticking) {
+          window.requestAnimationFrame(() => {
+            const shouldHide = window.scrollY < 520;
+            if (isHidden !== shouldHide) {
+              isHidden = shouldHide;
+              scrollTopBtn.hidden = shouldHide;
+            }
+            ticking = false;
+          });
+          ticking = true;
+        }
       },
       { passive: true }
     );
