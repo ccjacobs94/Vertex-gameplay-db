@@ -20,6 +20,31 @@ services:
       retries: 3
       start_period: 15s
 
+  game-hub-qa:
+    build: .
+    container_name: game-hub-qa
+    profiles:
+      - qa
+    env_file:
+      - .env
+    environment:
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      - QA_PORT=${QA_PORT:-8098}
+      - QA_MCP_PORT=${QA_MCP_PORT:-8099}
+    ports:
+      - "${QA_PORT:-8098}:8090"
+      - "${QA_MCP_PORT:-8099}:8096"
+    volumes:
+      - ./data-qa:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8090/api/stats"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
   tunnel:
     image: cloudflare/cloudflared:latest
     container_name: game-hub-tunnel

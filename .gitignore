@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 data/
+data-qa/
 *.db
 *.db-shm
 *.db-wal

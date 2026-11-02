@@ -17,6 +17,15 @@ Game Hub is a self-hosted, multi-platform game library tracker and MCP server ru
 
 - **Local Web UI URL**: `http://localhost:8095` (or `http://<your-lan-or-tailscale-ip>:8095`)
 - **Streamable HTTP MCP URL**: `http://localhost:8097/mcp`
+- **QA Container (develop branch)**:
+  - Local Web UI: `http://localhost:8098`
+  - Local MCP URL: `http://localhost:8099/mcp`
+  - Tailscale / LAN QA: `http://<your-lan-or-tailscale-ip>:8098`
+  - Storage: Isolated volume `./data-qa:/app/data` (never touches production `./data/games.db`).
+- **CI/CD Deployment Automation**:
+  - `scripts/deploy.sh [main|develop|auto]`:
+    - `main`: backs up `data/games.db` to timestamped `.bak`, builds, and deploys production `game-hub` on ports `8095/8097`.
+    - `develop`: seeds isolated `./data-qa/games.db` snapshot if empty, builds, and deploys QA container `game-hub-qa` on ports `8098/8099`.
 - **Rebuild & Restart Container**:
   ```bash
   docker compose up -d --build
@@ -39,7 +48,7 @@ Every change, whether feature, fix, or refactor, follows this model. It's built 
 
 1. **Never break an invariant test.** `tests/test_invariants.py` encodes the "Preserve User Edits" and "Genres & Tags" rules above. Never delete, skip, weaken, or edit these tests to make a change pass. Changing one needs the user's explicit approval *and* a matching update to this file in the same PR.
 2. **Never touch live data from tests or experiments.** Tests must use `tempfile` databases via the `db_path=` argument. Never point code under test at `data/games.db`. Before running any migration or bulk script against the live DB, back it up: `cp data/games.db data/games.db.bak-$(date +%Y%m%d-%H%M%S)`.
-3. **Never commit secrets or data.** That means `.env`, `.agents/plugins/*/mcp_config.json`, `data/`, and `*.db*`. The gate checks this.
+3. **Never commit secrets or data.** That means `.env`, `.agents/plugins/*/mcp_config.json`, `data/`, `data-qa/`, and `*.db*`. The gate checks this.
 4. **Never commit directly to `main` or `develop`.** See GitFlow below.
 5. **Never push, merge to `main`, tag, or deploy without the user's explicit approval.**
 
@@ -192,4 +201,5 @@ Versioned hooks in `.githooks/` back up these rules. Enable once per clone with 
 - `pre-commit`: blocks direct commits on `main`/`develop` and runs `scripts/check.sh --quick`.
 - `commit-msg`: enforces the Conventional Commits format.
 - `pre-push`: runs the full `scripts/check.sh`, including container tests.
+- `post-merge`: automatically deploys `game-hub` (production on port 8095) after merges to `main`, or spins up `game-hub-qa` (validation on port 8098) after merges to `develop`.
 
