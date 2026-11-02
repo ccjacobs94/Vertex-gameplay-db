@@ -11,7 +11,9 @@ services:
       - "8095:8090"
       - "8097:8096"
     volumes:
-      - ./data:/app/data
+      - ${GAMEHUB_DATA_PATH:-./data}:/app/data
+      - ${GAMEHUB_BACKUP_PATH:-./data/backups}:/app/backups
+      - ${GAMEHUB_CACHE_PATH:-./data/cache}:/app/cache
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/api/stats"]
@@ -36,7 +38,9 @@ services:
       - "${QA_PORT:-8098}:8090"
       - "${QA_MCP_PORT:-8099}:8096"
     volumes:
-      - ./data-qa:/app/data
+      - ${GAMEHUB_QA_DATA_PATH:-./data-qa}:/app/data
+      - ${GAMEHUB_BACKUP_PATH:-./data-qa/backups}:/app/backups
+      - ${GAMEHUB_CACHE_PATH:-./data-qa/cache}:/app/cache
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8090/api/stats"]

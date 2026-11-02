@@ -54,9 +54,15 @@ class TestCicdConfiguration(unittest.TestCase):
         prod_vols = [str(v) for v in prod.get("volumes", [])]
         qa_vols = [str(v) for v in qa.get("volumes", [])]
 
-        self.assertTrue(any("./data:/app/data" in v for v in prod_vols), "Prod must mount ./data:/app/data")
-        self.assertTrue(any("./data-qa:/app/data" in v for v in qa_vols), "QA must mount ./data-qa:/app/data")
-        self.assertFalse(any("./data:/app/data" in v for v in qa_vols), "QA MUST NEVER mount production ./data")
+        self.assertTrue(
+            any(("./data:/app/data" in v) or ("./data}:/app/data" in v) for v in prod_vols),
+            "Prod must mount ./data:/app/data (or parameterized fallback ${GAMEHUB_DATA_PATH:-./data}:/app/data)",
+        )
+        self.assertTrue(
+            any(("./data-qa:/app/data" in v) or ("./data-qa}:/app/data" in v) for v in qa_vols),
+            "QA must mount ./data-qa:/app/data (or parameterized fallback ${GAMEHUB_QA_DATA_PATH:-./data-qa}:/app/data)",
+        )
+        self.assertFalse(any("./data:" in v or "GAMEHUB_DATA_PATH" in v for v in qa_vols), "QA MUST NEVER mount production ./data")
 
     def test_deploy_script_exists_and_is_executable(self):
         self.assertTrue(self.deploy_script.exists(), "scripts/deploy.sh must exist")
@@ -116,6 +122,57 @@ class TestCicdConfiguration(unittest.TestCase):
         with open(self.check_script, "r", encoding="utf-8") as f:
             check_content = f.read()
         self.assertIn("data-qa", check_content, "scripts/check.sh must guard against data-qa leaks")
+
+    def test_deploy_supports_configurable_hdd_storage_and_pruning(self):
+        with open(self.deploy_script, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        self.assertIn("GAMEHUB_DATA_PATH", content)
+        self.assertIn("GAMEHUB_QA_DATA_PATH", content)
+        self.assertIn("GAMEHUB_BACKUP_PATH", content)
+        self.assertIn("prune_backups", content)
+
+    def test_backup_pruning_retains_latest_n_files(self):
+        import tempfile
+        import time
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            # Create 20 mock backup files with spaced timestamps
+            for i in range(20):
+                f = tmppath / f"games.db.bak-20261101-{i:06d}"
+                f.write_text("backup")
+                # Set distinct modification times
+                mtime = time.time() - (20 - i) * 60
+                os.utime(f, (mtime, mtime))
+
+            # Run the pruning snippet
+            cmd = f"""
+            prune_backups() {{
+              local dir="$1"
+              local keep="${{2:-15}}"
+              if [[ -d "$dir" ]]; then
+                find "$dir" -maxdepth 1 -type f \\( -name "*.bak-*" -o -name "*.bak" \\) -printf '%T@ %p\\n' 2>/dev/null | \\
+                  sort -nr | tail -n +$((keep + 1)) | cut -d' ' -f2- | while IFS= read -r old_file; do
+                    if [[ -f "$old_file" ]]; then
+                      rm -f "$old_file"
+                    fi
+                  done
+              fi
+            }}
+            prune_backups "{tmppath}" 15
+            """
+            result = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0)
+
+            remaining = list(tmppath.glob("*.bak-*"))
+            self.assertEqual(len(remaining), 15, "Should prune older backups and keep exactly 15 newest")
+            # Ensure the oldest 5 were deleted
+            for i in range(5):
+                self.assertFalse((tmppath / f"games.db.bak-20261101-{i:06d}").exists())
+            # Ensure the newest 15 exist
+            for i in range(5, 20):
+                self.assertTrue((tmppath / f"games.db.bak-20261101-{i:06d}").exists())
 
 
 if __name__ == "__main__":

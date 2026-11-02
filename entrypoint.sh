@@ -15,9 +15,9 @@ if [ "$(id -u)" = "0" ]; then
         useradd -u "$PUID" -g "$PGID" -d /app -s /bin/sh -M appuser 2>/dev/null || true
     fi
 
-    # Ensure /app/data directory exists and has correct ownership
-    mkdir -p /app/data
-    chown -R "$PUID:$PGID" /app/data 2>/dev/null || true
+    # Ensure application storage, backup, and cache directories exist with correct ownership
+    mkdir -p /app/data /app/backups /app/cache
+    chown -R "$PUID:$PGID" /app/data /app/backups /app/cache 2>/dev/null || true
 
     if [ "$PUID" != "0" ]; then
         exec gosu "$PUID:$PGID" "$@"
