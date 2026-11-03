@@ -4,6 +4,7 @@ Allows AI agents to inspect your gaming history, playtime metrics, platform brea
 and backlog across PC (Steam), Xbox, PlayStation, and Nintendo Switch.
 """
 
+import json
 from typing import Any, Dict, List, Optional
 
 try:
@@ -13,15 +14,36 @@ except ImportError:
 
 from db import (
     add_manual_game,
+    add_wishlist_item,
+    check_library_ownership_conflicts,
+    delete_wishlist_item,
+    evaluate_wishlist_deals,
+    get_canonical_game_by_title,
+    get_connection,
     get_library_stats,
     get_pending_playtime_prompts,
     get_reconcile_candidates,
+    get_sku_price_history,
+    get_wishlist_item,
+    get_wishlist_item_by_title,
+    infer_edition_tier,
     init_db,
+    list_game_editions,
+    list_wishlist_items,
+    mark_wishlist_item_purchased,
+    normalize_game_title,
     normalize_ownership_status,
+    normalize_platform_family,
     query_games,
     reconcile_games,
+    record_sku_price,
     resolve_playtime_prompt,
     update_game,
+    update_wishlist_item,
+    update_wishlist_platforms,
+    upsert_canonical_game,
+    upsert_edition_sku,
+    upsert_game_edition,
 )
 from taxonomy import (
     merge_lists,
@@ -30,9 +52,18 @@ from taxonomy import (
     validate_tags,
 )
 
-from sync_engine import enrich_missing_metadata, sync_game_achievements_on_demand
+from sync_engine import (
+    enrich_missing_metadata,
+    search_external_metadata,
+    sync_game_achievements_on_demand,
+)
 
 init_db()
+
+
+def get_default_db_path() -> Optional[str]:
+    """Helper to retrieve current user database path (or None to use current_user_id context)."""
+    return None
 
 # Keys that may carry credentials or internal diagnostics; never exposed to AI clients.
 _SENSITIVE_KEY_PARTS = (
@@ -557,5 +588,375 @@ def respond_to_playtime_prompt(
     return {"status": "resolved", "result": res}
 
 
+# ==============================================================================
+# Multi-Platform Wishlist, Price Monitoring & Smart Upgrade Tools & Resources
+# ==============================================================================
+
+@mcp.tool()
+async def search_game_candidates(query: str, include_editions: bool = True) -> Dict[str, Any]:
+    """
+    Search across local database and external game catalogs for candidates to add to the wishlist.
+    Returns visual metadata (cover, release year, developer/publisher, genres), discovered editions,
+    available platforms, and library ownership conflict status (already owned/played).
+    """
+    db_path = get_default_db_path()
+    q = (query or "").strip()
+    if not q:
+        return {"query": query, "candidates": []}
+
+    seen_norm = set()
+    candidates: List[Dict[str, Any]] = []
+
+    # 1. Search local canonical games
+    with get_connection(db_path) as conn:
+        local_rows = conn.execute(
+            """
+            SELECT * FROM canonical_games
+            WHERE title LIKE ? OR normalized_title LIKE ?
+            LIMIT 5
+            """,
+            (f"%{q}%", f"%{q}%"),
+        ).fetchall()
+        for r in local_rows:
+            norm = r["normalized_title"]
+            if norm not in seen_norm:
+                seen_norm.add(norm)
+                c_dict = dict(r)
+                c_dict["genres"] = json.loads(c_dict.get("genres") or "[]")
+                editions = list_game_editions(c_dict["id"], db_path=db_path) if include_editions else []
+                conflict = check_library_ownership_conflicts(c_dict["title"], canonical_game_id=c_dict["id"], db_path=db_path)
+                candidates.append({
+                    "title": c_dict["title"],
+                    "normalized_title": norm,
+                    "release_year": c_dict.get("release_year"),
+                    "developer": c_dict.get("developer") or "",
+                    "publisher": c_dict.get("publisher") or "",
+                    "cover_url": c_dict.get("cover_url"),
+                    "genres": c_dict.get("genres", []),
+                    "critic_score": c_dict.get("critic_score"),
+                    "editions": editions,
+                    "available_platforms": ["PC", "Xbox", "PlayStation"],
+                    "ownership_conflict": conflict,
+                    "source": "local_catalog",
+                })
+
+    # 2. Search external metadata
+    try:
+        external_results = await search_external_metadata(q)
+        for ext in external_results:
+            title = ext.get("title") or ""
+            norm = normalize_game_title(title)
+            if norm and norm not in seen_norm:
+                seen_norm.add(norm)
+                conflict = check_library_ownership_conflicts(title, db_path=db_path)
+                std_tier, std_rank = infer_edition_tier("Standard Edition")
+                editions = [
+                    {
+                        "edition_name": "Standard Edition",
+                        "edition_tier": std_tier,
+                        "tier_rank": std_rank,
+                        "is_base_edition": True,
+                    }
+                ] if include_editions else []
+                candidates.append({
+                    "title": title,
+                    "normalized_title": norm,
+                    "release_year": ext.get("release_year"),
+                    "developer": ext.get("developer", ""),
+                    "publisher": ext.get("publisher", ""),
+                    "cover_url": ext.get("cover_url"),
+                    "genres": ext.get("genres", []),
+                    "critic_score": ext.get("critic_score"),
+                    "editions": editions,
+                    "available_platforms": ["PC", "Xbox", "PlayStation"],
+                    "ownership_conflict": conflict,
+                    "source": ext.get("provider", "external"),
+                })
+    except Exception as exc:
+        pass
+
+    return _sanitize_output({"query": q, "candidates": candidates[:10]})
+
+
+@mcp.tool()
+async def add_to_wishlist(
+    title: str,
+    platform_targets: List[Dict[str, Any]],
+    release_year: Optional[int] = None,
+    developer: str = "",
+    publisher: str = "",
+    cover_url: Optional[str] = None,
+    allow_smart_upgrade: bool = True,
+    editions: Optional[List[Dict[str, Any]]] = None,
+    notes: str = "",
+    force_track_owned: bool = False,
+) -> Dict[str, Any]:
+    """
+    Add a game title to the multi-platform wishlist with granular per-platform USD target thresholds.
+    Cross-checks the user's library and automatically mutes tracking on platforms already owned
+    or played unless force_track_owned=True.
+    """
+    db_path = get_default_db_path()
+    item = add_wishlist_item(
+        title=title,
+        platform_targets=platform_targets,
+        release_year=release_year,
+        developer=developer,
+        publisher=publisher,
+        cover_url=cover_url,
+        allow_smart_upgrade=allow_smart_upgrade,
+        notes=notes,
+        added_via="mcp",
+        force_track_owned=force_track_owned,
+        db_path=db_path,
+    )
+
+    if editions and item and item.get("canonical_game"):
+        c_id = item["canonical_game"]["id"]
+        for ed in editions:
+            ed_name = ed.get("edition_name") or "Standard Edition"
+            ed_obj = upsert_game_edition(
+                canonical_game_id=c_id,
+                edition_name=ed_name,
+                edition_tier=ed.get("edition_tier"),
+                tier_rank=ed.get("tier_rank"),
+                is_base_edition=ed.get("is_base_edition"),
+                cover_url=ed.get("cover_url"),
+                db_path=db_path,
+            )
+            for sku in ed.get("skus") or []:
+                upsert_edition_sku(
+                    edition_id=ed_obj["id"],
+                    platform_family=sku.get("platform_family") or "PC",
+                    platform_label=sku.get("platform_label") or "PC",
+                    storefront=sku.get("storefront") or "steam",
+                    store_sku_id=sku.get("store_sku_id") or "sku",
+                    store_url=sku.get("store_url") or "",
+                    current_price_usd=sku.get("current_price_usd"),
+                    regular_price_usd=sku.get("regular_price_usd"),
+                    db_path=db_path,
+                )
+        item = get_wishlist_item(item["id"], db_path=db_path)
+
+    deals = evaluate_wishlist_deals(wishlist_item_id=item["id"], db_path=db_path) if item else []
+    return _sanitize_output({
+        "status": "added",
+        "wishlist_item": item,
+        "deals": deals,
+    })
+
+
+@mcp.tool()
+def update_wishlist_platforms(
+    wishlist_item_id: Optional[int] = None,
+    title: Optional[str] = None,
+    platform_targets: Optional[List[Dict[str, Any]]] = None,
+    remove_platforms: Optional[List[str]] = None,
+    allow_smart_upgrade: Optional[bool] = None,
+    force_track_owned: bool = False,
+) -> Dict[str, Any]:
+    """
+    Update monitored platforms, target USD prices, or toggle Smart Upgrade detection
+    for a wishlist title.
+    """
+    db_path = get_default_db_path()
+    item_id = wishlist_item_id
+    if item_id is None and title:
+        existing = get_wishlist_item_by_title(title, db_path=db_path)
+        if existing:
+            item_id = existing["id"]
+
+    if item_id is None:
+        return {"error": "Must provide either wishlist_item_id or valid title"}
+
+    updated = update_wishlist_platforms(
+        wishlist_item_id=item_id,
+        platform_targets=platform_targets,
+        remove_platforms=remove_platforms,
+        allow_smart_upgrade=allow_smart_upgrade,
+        force_track_owned=force_track_owned,
+        db_path=db_path,
+    )
+    deals = evaluate_wishlist_deals(wishlist_item_id=item_id, db_path=db_path)
+    return _sanitize_output({"status": "updated", "wishlist_item": updated, "deals": deals})
+
+
+@mcp.tool()
+def update_item_price(
+    price_usd: float,
+    platform: str,
+    storefront: str = "manual",
+    wishlist_item_id: Optional[int] = None,
+    title: Optional[str] = None,
+    edition_name: str = "Standard Edition",
+    edition_tier: str = "base",
+    regular_price_usd: Optional[float] = None,
+    store_url: str = "",
+    store_sku_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Report or record a price for a wishlist item edition on a specific storefront/platform.
+    Updates the edition SKU, appends to price history, checks for All-Time Lows (ATL),
+    and evaluates Smart Upgrade deals.
+    """
+    db_path = get_default_db_path()
+    item_id = wishlist_item_id
+    if item_id is None and title:
+        existing = get_wishlist_item_by_title(title, db_path=db_path)
+        if existing:
+            item_id = existing["id"]
+
+    if item_id is None:
+        return {"error": "Must provide either wishlist_item_id or valid title"}
+
+    item = get_wishlist_item(item_id, db_path=db_path)
+    if not item or not item.get("canonical_game"):
+        return {"error": f"Wishlist item {item_id} not found"}
+
+    c_id = item["canonical_game"]["id"]
+    ed = upsert_game_edition(
+        canonical_game_id=c_id,
+        edition_name=edition_name,
+        edition_tier=edition_tier,
+        db_path=db_path,
+    )
+
+    fam = normalize_platform_family(platform)
+    sku_id_str = store_sku_id or f"{storefront}:{ed['id']}:{fam.lower()}"
+    sku = upsert_edition_sku(
+        edition_id=ed["id"],
+        platform_family=fam,
+        platform_label=platform,
+        storefront=storefront,
+        store_sku_id=sku_id_str,
+        store_url=store_url,
+        current_price_usd=price_usd,
+        regular_price_usd=regular_price_usd,
+        db_path=db_path,
+    )
+
+    price_rec = record_sku_price(
+        sku_id=sku["id"],
+        price_usd=price_usd,
+        regular_price_usd=regular_price_usd,
+        source="mcp_agent",
+        db_path=db_path,
+    )
+
+    deals = evaluate_wishlist_deals(wishlist_item_id=item_id, db_path=db_path)
+    return _sanitize_output({
+        "status": "price_recorded",
+        "sku": sku,
+        "is_all_time_low": price_rec["is_all_time_low"],
+        "historical_low_usd": price_rec["historical_low_usd"],
+        "deals": deals,
+    })
+
+
+@mcp.tool()
+def get_wishlist_deals(
+    platform: Optional[str] = None,
+    smart_upgrades_only: bool = False,
+    include_above_target: bool = False,
+) -> Dict[str, Any]:
+    """
+    Retrieve active wishlist deals meeting target USD thresholds.
+    Highlights Smart Upgrades where higher-tier editions (Deluxe, Ultimate, Complete)
+    drop to <= the user's base edition target price, and All-Time Lows (ATL).
+    """
+    db_path = get_default_db_path()
+    deals = evaluate_wishlist_deals(db_path=db_path)
+
+    if platform:
+        fam = normalize_platform_family(platform)
+        deals = [d for d in deals if d.get("platform_family") == fam or platform.lower() in (d.get("platform_label") or "").lower()]
+
+    if smart_upgrades_only:
+        deals = [d for d in deals if d.get("is_smart_upgrade")]
+
+    smart_upgrades_count = sum(1 for d in deals if d.get("is_smart_upgrade"))
+    atl_count = sum(1 for d in deals if d.get("is_all_time_low"))
+
+    return _sanitize_output({
+        "total_deals": len(deals),
+        "smart_upgrades_count": smart_upgrades_count,
+        "all_time_lows_count": atl_count,
+        "deals": deals,
+    })
+
+
+@mcp.tool()
+def mark_as_purchased(
+    platform: str,
+    wishlist_item_id: Optional[int] = None,
+    title: Optional[str] = None,
+    edition_name: Optional[str] = None,
+    price_paid_usd: Optional[float] = None,
+    completion_status: str = "Plan to Play",
+) -> Dict[str, Any]:
+    """
+    Mark a wishlist item as purchased and migrate it directly into the user's active library
+    with purchase metadata recorded in notes.
+    """
+    db_path = get_default_db_path()
+    item_id = wishlist_item_id
+    if item_id is None and title:
+        existing = get_wishlist_item_by_title(title, db_path=db_path)
+        if existing:
+            item_id = existing["id"]
+
+    if item_id is None:
+        return {"error": "Must provide either wishlist_item_id or valid title"}
+
+    res = mark_wishlist_item_purchased(
+        wishlist_item_id=item_id,
+        platform=platform,
+        edition_name=edition_name,
+        price_paid_usd=price_paid_usd,
+        completion_status=completion_status,
+        db_path=db_path,
+    )
+    return _sanitize_output({
+        "status": "purchased",
+        "wishlist_item_id": item_id,
+        "library_game_id": res.get("library_game_id"),
+        "platform": platform,
+        "details": res,
+    })
+
+
+@mcp.resource("vertex://wishlist/active")
+def resource_wishlist_active() -> str:
+    """Active wishlist items, watched platform targets, and latest prices."""
+    db_path = get_default_db_path()
+    items = list_wishlist_items(status="active", db_path=db_path)
+    return json.dumps(_sanitize_output(items), indent=2)
+
+
+@mcp.resource("vertex://wishlist/{wishlist_id}/history")
+def resource_wishlist_history(wishlist_id: str) -> str:
+    """Historical price log, All-Time Lows, and edition SKU breakdown for a wishlist item."""
+    db_path = get_default_db_path()
+    try:
+        w_id = int(wishlist_id)
+    except ValueError:
+        return json.dumps({"error": f"Invalid wishlist ID '{wishlist_id}'"})
+
+    item = get_wishlist_item(w_id, db_path=db_path)
+    if not item:
+        return json.dumps({"error": f"Wishlist item {wishlist_id} not found"})
+
+    history_by_sku: Dict[int, List[Dict[str, Any]]] = {}
+    for s in item.get("skus") or []:
+        history_by_sku[s["id"]] = get_sku_price_history(s["id"], limit=50, db_path=db_path)
+
+    res = {
+        **item,
+        "price_history_by_sku": history_by_sku,
+    }
+    return json.dumps(_sanitize_output(res), indent=2)
+
+
 if __name__ == "__main__":
     mcp.run()
+

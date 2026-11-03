@@ -34,6 +34,8 @@ import passwords
 import signup
 import system_db
 import db
+import web_push
+import wishlist_sync
 from context import get_current_user_id, reset_current_user_id, set_current_user_id
 import web_auth
 from web_auth import (
@@ -147,6 +149,30 @@ async def _periodic_sync_loop() -> None:
         except Exception as exc:
             logger.error("Error in scheduled sync loop: %s", exc)
         await asyncio.sleep(max(SYNC_INTERVAL_HOURS, 0.5) * 3600)
+
+
+WISHLIST_SYNC_INTERVAL_HOURS = float(os.environ.get("WISHLIST_SYNC_INTERVAL_HOURS", "24"))
+
+
+async def _periodic_wishlist_sync_loop() -> None:
+    """Background loop that updates wishlist prices and checks deals every 24 hours."""
+    await asyncio.sleep(15)
+    while True:
+        try:
+            active_users = system_db.list_active_user_ids()
+            if not active_users:
+                default_user = get_auth_username()
+                active_users = [default_user]
+            for uid in active_users:
+                user_db = Path(USERS_DB_DIR) / uid / "games.db"
+                db_path = str(user_db) if user_db.exists() else None
+                try:
+                    await wishlist_sync.sync_wishlist_prices_for_db(db_path=db_path)
+                except Exception as exc:
+                    logger.warning("Wishlist price sync failed for user %s: %s", uid, exc)
+        except Exception as exc:
+            logger.error("Error in scheduled wishlist sync loop: %s", exc)
+        await asyncio.sleep(max(WISHLIST_SYNC_INTERVAL_HOURS, 1.0) * 3600)
 
 
 async def _run_mcp_http_server(host: str, port: int) -> None:
@@ -329,10 +355,12 @@ async def lifespan(app: FastAPI):
             logger.warning("Could not seed default user database: %s", e)
     clean_unconfigured_subaccount_libraries(default_user)
     sync_task = asyncio.create_task(_periodic_sync_loop())
+    wishlist_task = asyncio.create_task(_periodic_wishlist_sync_loop())
     mcp_task = asyncio.create_task(_run_mcp_http_server("0.0.0.0", MCP_PORT))
     logger.info("Started MCP Streamable HTTP server on port %s with CORS & OAuth discovery", MCP_PORT)
     yield
     sync_task.cancel()
+    wishlist_task.cancel()
     mcp_task.cancel()
 
 
@@ -1960,7 +1988,327 @@ async def proxy_messages(request: Request, path: str = ""):
     return await _forward_to_mcp_service(request, f"/messages{path}")
 
 
+# ==============================================================================
+# Wishlist, Price Monitoring & Web Push REST APIs
+# ==============================================================================
+
+@app.get("/api/wishlist/candidates")
+async def api_get_wishlist_candidates(
+    q: str = Query(..., min_length=1),
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    res = await mcp_server.search_game_candidates(query=q)
+    return res
+
+
+@app.get("/api/wishlist")
+async def api_list_wishlist(
+    status: str = Query("active"),
+    request: Request = None,
+) -> List[Dict[str, Any]]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return db.list_wishlist_items(status=status)
+
+
+@app.post("/api/wishlist")
+async def api_add_wishlist(
+    payload: Dict[str, Any],
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    title = (payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+
+    item = db.add_wishlist_item(
+        title=title,
+        platform_targets=payload.get("platform_targets"),
+        release_year=payload.get("release_year"),
+        developer=payload.get("developer") or "",
+        publisher=payload.get("publisher") or "",
+        cover_url=payload.get("cover_url"),
+        genres=payload.get("genres"),
+        critic_score=payload.get("critic_score"),
+        allow_smart_upgrade=payload.get("allow_smart_upgrade", True),
+        notes=payload.get("notes") or "",
+        added_via="web",
+        force_track_owned=payload.get("force_track_owned", False),
+    )
+    return item
+
+
+@app.get("/api/wishlist/deals")
+async def api_get_wishlist_deals(
+    platform: Optional[str] = Query(None),
+    smart_upgrades_only: bool = Query(False),
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    deals = db.evaluate_wishlist_deals()
+    if platform:
+        fam = db.normalize_platform_family(platform)
+        deals = [d for d in deals if d.get("platform_family") == fam or platform.lower() in (d.get("platform_label") or "").lower()]
+    if smart_upgrades_only:
+        deals = [d for d in deals if d.get("is_smart_upgrade")]
+    return {
+        "total_deals": len(deals),
+        "smart_upgrades_count": sum(1 for d in deals if d.get("is_smart_upgrade")),
+        "all_time_lows_count": sum(1 for d in deals if d.get("is_all_time_low")),
+        "deals": deals,
+    }
+
+
+@app.get("/api/wishlist/{item_id}")
+async def api_get_wishlist_item(
+    item_id: int,
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    item = db.get_wishlist_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Wishlist item not found")
+    return item
+
+
+@app.patch("/api/wishlist/{item_id}")
+async def api_update_wishlist_item(
+    item_id: int,
+    payload: Dict[str, Any],
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    updated = db.update_wishlist_item(
+        item_id=item_id,
+        allow_smart_upgrade=payload.get("allow_smart_upgrade"),
+        preferred_edition_id=payload.get("preferred_edition_id"),
+        status=payload.get("status"),
+        notes=payload.get("notes"),
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Wishlist item not found")
+    return updated
+
+
+@app.delete("/api/wishlist/{item_id}")
+async def api_delete_wishlist_item(
+    item_id: int,
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    success = db.delete_wishlist_item(item_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Wishlist item not found")
+    return {"status": "deleted", "id": item_id}
+
+
+@app.patch("/api/wishlist/{item_id}/platforms")
+async def api_update_wishlist_platforms(
+    item_id: int,
+    payload: Dict[str, Any],
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    try:
+        updated = db.update_wishlist_platforms(
+            wishlist_item_id=item_id,
+            platform_targets=payload.get("platform_targets"),
+            remove_platforms=payload.get("remove_platforms"),
+            allow_smart_upgrade=payload.get("allow_smart_upgrade"),
+            force_track_owned=payload.get("force_track_owned", False),
+        )
+        return updated
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.post("/api/wishlist/{item_id}/price")
+async def api_record_wishlist_price(
+    item_id: int,
+    payload: Dict[str, Any],
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    price_val = payload.get("price_usd")
+    if price_val is None:
+        raise HTTPException(status_code=400, detail="price_usd is required")
+    platform = payload.get("platform") or "PC"
+    res = mcp_server.update_item_price(
+        wishlist_item_id=item_id,
+        price_usd=float(price_val),
+        platform=platform,
+        storefront=payload.get("storefront") or "manual",
+        edition_name=payload.get("edition_name") or "Standard Edition",
+        edition_tier=payload.get("edition_tier") or "base",
+        regular_price_usd=payload.get("regular_price_usd"),
+        store_url=payload.get("store_url") or "",
+        store_sku_id=payload.get("store_sku_id"),
+    )
+    if "error" in res:
+        raise HTTPException(status_code=400, detail=res["error"])
+    return res
+
+
+@app.post("/api/wishlist/{item_id}/purchase")
+async def api_mark_wishlist_purchased(
+    item_id: int,
+    payload: Dict[str, Any],
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    platform = payload.get("platform") or "PC"
+    try:
+        res = db.mark_wishlist_item_purchased(
+            wishlist_item_id=item_id,
+            platform=platform,
+            edition_name=payload.get("edition_name"),
+            price_paid_usd=payload.get("price_paid_usd"),
+            completion_status=payload.get("completion_status") or "Plan to Play",
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/wishlist/{item_id}/history")
+async def api_get_wishlist_history(
+    item_id: int,
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    item = db.get_wishlist_item(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Wishlist item not found")
+    history_by_sku = {}
+    for s in item.get("skus") or []:
+        history_by_sku[s["id"]] = db.get_sku_price_history(s["id"], limit=50)
+    return {
+        "item": item,
+        "price_history_by_sku": history_by_sku,
+    }
+
+
+@app.post("/api/wishlist/sync")
+async def api_sync_wishlist_prices(request: Request = None) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user_db = _get_active_user_db_path(user_id)
+    db_path = str(user_db) if user_db.exists() else None
+    res = await wishlist_sync.sync_wishlist_prices_for_db(db_path=db_path)
+    return res
+
+
+# --- Web Push VAPID Endpoints ---
+
+@app.get("/api/push/vapid-public-key")
+async def api_get_vapid_public_key() -> Dict[str, str]:
+    keys = web_push.get_or_create_vapid_keys()
+    return {"publicKey": keys["public_key"]}
+
+
+@app.post("/api/push/subscribe")
+async def api_push_subscribe(
+    payload: Dict[str, Any],
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    endpoint = payload.get("endpoint")
+    keys = payload.get("keys") or {}
+    p256dh = keys.get("p256dh")
+    auth = keys.get("auth")
+    if not endpoint or not p256dh or not auth:
+        raise HTTPException(status_code=400, detail="endpoint, keys.p256dh, and keys.auth are required")
+
+    sub = db.upsert_push_subscription(
+        endpoint=endpoint,
+        p256dh_key=p256dh,
+        auth_key=auth,
+        user_agent=request.headers.get("User-Agent", "") if request else "",
+        device_label=payload.get("device_label") or "",
+    )
+    return {"status": "subscribed", "subscription": sub}
+
+
+@app.delete("/api/push/subscribe")
+async def api_push_unsubscribe(
+    payload: Dict[str, Any],
+    request: Request = None,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    endpoint = payload.get("endpoint")
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="endpoint is required")
+    success = db.delete_push_subscription(endpoint)
+    return {"status": "unsubscribed", "deleted": success}
+
+
+@app.post("/api/push/test")
+async def api_push_test(request: Request = None) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request) if request else (None, None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    subs = db.list_active_push_subscriptions()
+    if not subs:
+        return {"status": "no_subscriptions", "message": "No active push subscriptions registered for this user"}
+
+    keys = web_push.get_or_create_vapid_keys()
+    claim_email = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:admin@localhost.localdomain")
+    test_payload = json.dumps({
+        "title": "🔔 Vertex Web Push Connected",
+        "body": "Wishlist and Smart Upgrade deal alerts will appear here when price drops occur!",
+        "icon": "/static/icons/icon-192.png",
+        "badge": "/static/icons/icon-192.png",
+        "tag": "push-test",
+        "data": {"url": "/#tab-wishlist"},
+    })
+
+    sent_count = 0
+    for s in subs:
+        sub_info = {
+            "endpoint": s["endpoint"],
+            "keys": {"p256dh": s["p256dh_key"], "auth": s["auth_key"]},
+        }
+        res = web_push._send_raw_push(
+            subscription_info=sub_info,
+            payload_json_str=test_payload,
+            vapid_private_key=keys["private_key"],
+            vapid_claims={"sub": claim_email},
+        )
+        if res.get("status") in ("sent", "mock_delivered"):
+            sent_count += 1
+
+    return {"status": "ok", "subscriptions_targeted": len(subs), "notifications_sent": sent_count}
+
+
 from oauth_provider import get_oauth_routes
 for oauth_route in get_oauth_routes():
     app.routes.append(oauth_route)
+
 

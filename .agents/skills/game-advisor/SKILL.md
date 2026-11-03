@@ -35,6 +35,20 @@ When adding a new game (such as a Nintendo Switch or PS4 title):
 1. First search `/api/search-external?q=<title>` to get the high-resolution `cover_url` and `release_year`.
 2. Add the game via `POST http://localhost:8095/api/games` or the `add_game_to_library` MCP tool.
 
-## 4. Authentication & Account Status
+## 4. Wishlist, Price Monitoring & Smart Upgrades
+
+Use the dedicated Wishlist MCP tools and resources to track desired games across PC (Steam, GOG, Epic), Xbox, and PlayStation:
+- **Search candidates**: `search_game_candidates(query)` cross-references external store metadata and flags library ownership conflicts before adding.
+- **Add to wishlist**: `add_to_wishlist(title, platform_targets=[{"platform": "PC", "target_price_usd": 19.99}])` automatically auto-mutes platforms the user already owns or has played unless `force_track_owned=True`.
+- **Update target platforms**: `update_wishlist_platforms(wishlist_item_id, platform_targets=[...])`.
+- **Record deal prices**: `update_item_price(price_usd, platform, storefront="manual", edition_name="Standard Edition")` reports physical or ad-hoc deals, updating All-Time Lows (ATL).
+- **Get deals**: `get_wishlist_deals(platform=None, smart_upgrades_only=False)` detects both standard deals and "Smart Upgrades" (higher-tier editions like Deluxe/Ultimate that drop to $\le$ base edition target price).
+- **Mark purchased**: `mark_as_purchased(platform, wishlist_item_id)` migrates the title into the user's active library with purchase metadata.
+- **MCP Resources**:
+  - `vertex://wishlist/active`: All active watched games, target thresholds, and latest prices.
+  - `vertex://wishlist/{id}/history`: Chronological price history, ATL, and edition SKU breakdown.
+
+## 5. Authentication & Account Status
 
 All API calls and MCP tools require an active user account. If an account is pending, suspended, or its hosted subscription lapses, REST endpoints return `401 Unauthorized`, `402 Payment Required`, or `403 Forbidden`, and MCP Bearer token verification rejects requests. Users with `awaiting_payment` or `subscription_lapsed` statuses can manage their billing at `/billing`.
+

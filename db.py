@@ -119,6 +119,126 @@ def init_db(db_path: Optional[str] = None) -> None:
                 detected_at TEXT NOT NULL,
                 FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS canonical_games (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                normalized_title TEXT UNIQUE NOT NULL,
+                title TEXT NOT NULL,
+                release_year INTEGER,
+                developer TEXT DEFAULT '',
+                publisher TEXT DEFAULT '',
+                cover_url TEXT,
+                genres TEXT DEFAULT '[]',
+                critic_score INTEGER,
+                library_game_id INTEGER DEFAULT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(library_game_id) REFERENCES games(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_canonical_games_norm ON canonical_games(normalized_title);
+            CREATE INDEX IF NOT EXISTS idx_canonical_games_lib ON canonical_games(library_game_id);
+
+            CREATE TABLE IF NOT EXISTS game_editions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_game_id INTEGER NOT NULL,
+                edition_name TEXT NOT NULL,
+                edition_tier TEXT NOT NULL DEFAULT 'base',
+                tier_rank INTEGER NOT NULL DEFAULT 1,
+                is_base_edition INTEGER NOT NULL DEFAULT 0,
+                included_dlc_notes TEXT DEFAULT '',
+                cover_url TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(canonical_game_id, edition_name),
+                FOREIGN KEY(canonical_game_id) REFERENCES canonical_games(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_game_editions_canonical ON game_editions(canonical_game_id);
+
+            CREATE TABLE IF NOT EXISTS edition_platform_skus (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                edition_id INTEGER NOT NULL,
+                platform_family TEXT NOT NULL,
+                platform_label TEXT NOT NULL,
+                storefront TEXT NOT NULL,
+                store_sku_id TEXT NOT NULL,
+                itad_plain TEXT DEFAULT NULL,
+                store_url TEXT DEFAULT '',
+                msrp_usd REAL DEFAULT NULL,
+                current_price_usd REAL DEFAULT NULL,
+                regular_price_usd REAL DEFAULT NULL,
+                discount_pct INTEGER DEFAULT 0,
+                historical_low_usd REAL DEFAULT NULL,
+                is_authorized_seller INTEGER NOT NULL DEFAULT 1,
+                is_drm_free INTEGER NOT NULL DEFAULT 0,
+                last_checked_at TEXT DEFAULT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(edition_id, storefront, store_sku_id),
+                FOREIGN KEY(edition_id) REFERENCES game_editions(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_skus_edition ON edition_platform_skus(edition_id);
+            CREATE INDEX IF NOT EXISTS idx_skus_platform_family ON edition_platform_skus(platform_family);
+            CREATE INDEX IF NOT EXISTS idx_skus_storefront_sku ON edition_platform_skus(storefront, store_sku_id);
+
+            CREATE TABLE IF NOT EXISTS wishlist_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_game_id INTEGER NOT NULL UNIQUE,
+                preferred_edition_id INTEGER DEFAULT NULL,
+                allow_smart_upgrade INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'active',
+                notes TEXT DEFAULT '',
+                added_via TEXT NOT NULL DEFAULT 'web',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(canonical_game_id) REFERENCES canonical_games(id) ON DELETE CASCADE,
+                FOREIGN KEY(preferred_edition_id) REFERENCES game_editions(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_wishlist_status ON wishlist_items(status);
+
+            CREATE TABLE IF NOT EXISTS wishlist_platform_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wishlist_item_id INTEGER NOT NULL,
+                platform_family TEXT NOT NULL,
+                allowed_storefronts TEXT DEFAULT '[]',
+                target_price_usd REAL NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                muted_owned_conflict INTEGER NOT NULL DEFAULT 0,
+                last_alerted_at TEXT DEFAULT NULL,
+                last_alerted_price_usd REAL DEFAULT NULL,
+                last_alerted_edition_id INTEGER DEFAULT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(wishlist_item_id, platform_family),
+                FOREIGN KEY(wishlist_item_id) REFERENCES wishlist_items(id) ON DELETE CASCADE,
+                FOREIGN KEY(last_alerted_edition_id) REFERENCES game_editions(id) ON DELETE SET NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_wpt_wishlist_item ON wishlist_platform_targets(wishlist_item_id);
+
+            CREATE TABLE IF NOT EXISTS price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sku_id INTEGER NOT NULL,
+                storefront TEXT NOT NULL,
+                price_usd REAL NOT NULL,
+                regular_price_usd REAL DEFAULT NULL,
+                discount_pct INTEGER DEFAULT 0,
+                is_all_time_low INTEGER NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT 'daily_sync',
+                recorded_at TEXT NOT NULL,
+                FOREIGN KEY(sku_id) REFERENCES edition_platform_skus(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_price_history_sku_time ON price_history(sku_id, recorded_at DESC);
+
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                endpoint TEXT UNIQUE NOT NULL,
+                p256dh_key TEXT NOT NULL,
+                auth_key TEXT NOT NULL,
+                user_agent TEXT DEFAULT '',
+                device_label TEXT DEFAULT '',
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT DEFAULT NULL
+            );
             """
         )
         cols = {
@@ -2306,3 +2426,960 @@ def get_game_achievements(game_id: int, db_path: Optional[str] = None) -> Dict[s
         "per_platform_summary": per_platform_summary,
         "achievements": achievements_list,
     }
+
+
+# ==============================================================================
+# Multi-Platform Wishlist, Edition Hierarchy, Price Monitoring & Smart Upgrades
+# ==============================================================================
+
+EDITION_TIER_RANKS = {
+    "base": 1,
+    "standard": 1,
+    "deluxe": 2,
+    "gold": 3,
+    "complete": 3,
+    "ultimate": 4,
+    "goty": 4,
+    "collector": 5,
+}
+
+
+def normalize_platform_family(platform_str: Optional[str]) -> str:
+    """Normalize a platform string or storefront into a standard platform family."""
+    if not platform_str:
+        return "PC"
+    p = platform_str.strip().lower()
+    if any(k in p for k in ("steam", "gog", "epic", "pc", "windows", "fanatical", "humble", "gmg")):
+        return "PC"
+    if "xbox" in p:
+        return "Xbox"
+    if any(k in p for k in ("playstation", "ps4", "ps5", "psn")):
+        return "PlayStation"
+    if any(k in p for k in ("switch", "nintendo")):
+        return "Nintendo Switch"
+    return platform_str.strip()
+
+
+def infer_edition_tier(edition_name: str) -> Tuple[str, int]:
+    """Infer edition tier and rank (1-5) from edition name."""
+    name = (edition_name or "").lower()
+    if "collector" in name:
+        return ("collector", 5)
+    if "ultimate" in name:
+        return ("ultimate", 4)
+    if "goty" in name or "game of the year" in name:
+        return ("goty", 4)
+    if "complete" in name:
+        return ("complete", 3)
+    if "gold" in name:
+        return ("gold", 3)
+    if "deluxe" in name:
+        return ("deluxe", 2)
+    return ("base", 1)
+
+
+def check_library_ownership_conflicts(
+    title: str,
+    canonical_game_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Check if a game (by title or canonical_game_id) already exists in the user's
+    owned library or play history. Returns conflict status and platforms.
+    """
+    norm_title = normalize_game_title(title)
+    with get_connection(db_path) as conn:
+        lib_game_id = None
+        if canonical_game_id is not None:
+            c_row = conn.execute(
+                "SELECT library_game_id FROM canonical_games WHERE id = ?",
+                (canonical_game_id,),
+            ).fetchone()
+            if c_row and c_row["library_game_id"]:
+                lib_game_id = c_row["library_game_id"]
+
+        all_games = conn.execute(
+            """
+            SELECT id, title, platform, source, playtime_hours, ownership_status,
+                   is_game_pass, achievements_unlocked, canonical_id
+            FROM games
+            """
+        ).fetchall()
+
+        matched_rows = []
+        for g in all_games:
+            is_match = False
+            if lib_game_id is not None and (g["id"] == lib_game_id or g["canonical_id"] == lib_game_id):
+                is_match = True
+            elif normalize_game_title(g["title"]) == norm_title:
+                is_match = True
+
+            if is_match:
+                matched_rows.append(g)
+
+    conflicted_platforms = set()
+    library_games = []
+    for g in matched_rows:
+        has_ownership = (
+            g["ownership_status"] in ("Owned", "Subscription")
+            or bool(g["is_game_pass"])
+            or float(g["playtime_hours"] or 0.0) > 0.0
+            or int(g["achievements_unlocked"] or 0) > 0
+        )
+        fam = normalize_platform_family(g["platform"])
+        if has_ownership:
+            conflicted_platforms.add(fam)
+
+        library_games.append({
+            "id": g["id"],
+            "title": g["title"],
+            "platform": g["platform"],
+            "platform_family": fam,
+            "ownership_status": g["ownership_status"],
+            "is_game_pass": bool(g["is_game_pass"]),
+            "playtime_hours": float(g["playtime_hours"] or 0.0),
+            "achievements_unlocked": int(g["achievements_unlocked"] or 0),
+        })
+
+    warning = None
+    if conflicted_platforms:
+        parts = []
+        for fam in sorted(conflicted_platforms):
+            fam_games = [g for g in library_games if g["platform_family"] == fam]
+            playtime = max((g["playtime_hours"] for g in fam_games), default=0.0)
+            status = fam_games[0]["ownership_status"] if fam_games else "Owned"
+            if playtime > 0:
+                parts.append(f"{status} on {fam} ({playtime:.1f} hrs played)")
+            else:
+                parts.append(f"{status} on {fam}")
+        warning = f"Already in Library: {', '.join(parts)}"
+
+    return {
+        "already_in_library": len(conflicted_platforms) > 0,
+        "conflicted_platforms": sorted(list(conflicted_platforms)),
+        "library_games": library_games,
+        "conflict_warning": warning,
+    }
+
+
+def upsert_canonical_game(
+    title: str,
+    release_year: Optional[int] = None,
+    developer: str = "",
+    publisher: str = "",
+    cover_url: Optional[str] = None,
+    genres: Optional[List[str]] = None,
+    critic_score: Optional[int] = None,
+    library_game_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    norm = normalize_game_title(title)
+    now = datetime.now(timezone.utc).isoformat()
+    genres_json = json.dumps(genres or [])
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO canonical_games (
+                normalized_title, title, release_year, developer, publisher,
+                cover_url, genres, critic_score, library_game_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(normalized_title) DO UPDATE SET
+                title = excluded.title,
+                release_year = COALESCE(excluded.release_year, canonical_games.release_year),
+                developer = CASE WHEN excluded.developer != '' THEN excluded.developer ELSE canonical_games.developer END,
+                publisher = CASE WHEN excluded.publisher != '' THEN excluded.publisher ELSE canonical_games.publisher END,
+                cover_url = COALESCE(excluded.cover_url, canonical_games.cover_url),
+                genres = CASE WHEN excluded.genres != '[]' THEN excluded.genres ELSE canonical_games.genres END,
+                critic_score = COALESCE(excluded.critic_score, canonical_games.critic_score),
+                library_game_id = COALESCE(excluded.library_game_id, canonical_games.library_game_id),
+                updated_at = excluded.updated_at
+            """,
+            (
+                norm, title, release_year, developer, publisher,
+                cover_url, genres_json, critic_score, library_game_id, now, now
+            ),
+        )
+        row = conn.execute("SELECT * FROM canonical_games WHERE normalized_title = ?", (norm,)).fetchone()
+        res = dict(row)
+        res["genres"] = json.loads(res.get("genres") or "[]")
+        return res
+
+
+def get_canonical_game(canonical_id: int, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM canonical_games WHERE id = ?", (canonical_id,)).fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        res["genres"] = json.loads(res.get("genres") or "[]")
+        return res
+
+
+def get_canonical_game_by_title(title: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    norm = normalize_game_title(title)
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM canonical_games WHERE normalized_title = ?", (norm,)).fetchone()
+        if not row:
+            return None
+        res = dict(row)
+        res["genres"] = json.loads(res.get("genres") or "[]")
+        return res
+
+
+def upsert_game_edition(
+    canonical_game_id: int,
+    edition_name: str = "Standard Edition",
+    edition_tier: Optional[str] = None,
+    tier_rank: Optional[int] = None,
+    is_base_edition: Optional[bool] = None,
+    included_dlc_notes: str = "",
+    cover_url: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    if edition_tier is None or tier_rank is None:
+        inferred_tier, inferred_rank = infer_edition_tier(edition_name)
+        edition_tier = edition_tier or inferred_tier
+        tier_rank = tier_rank or inferred_rank
+
+    if is_base_edition is None:
+        is_base_edition = (tier_rank == 1 or "standard" in edition_name.lower() or "base" in edition_name.lower())
+
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO game_editions (
+                canonical_game_id, edition_name, edition_tier, tier_rank,
+                is_base_edition, included_dlc_notes, cover_url, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(canonical_game_id, edition_name) DO UPDATE SET
+                edition_tier = excluded.edition_tier,
+                tier_rank = excluded.tier_rank,
+                is_base_edition = excluded.is_base_edition,
+                included_dlc_notes = CASE WHEN excluded.included_dlc_notes != '' THEN excluded.included_dlc_notes ELSE game_editions.included_dlc_notes END,
+                cover_url = COALESCE(excluded.cover_url, game_editions.cover_url),
+                updated_at = excluded.updated_at
+            """,
+            (
+                canonical_game_id, edition_name, edition_tier, tier_rank,
+                1 if is_base_edition else 0, included_dlc_notes, cover_url, now, now
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM game_editions WHERE canonical_game_id = ? AND edition_name = ?",
+            (canonical_game_id, edition_name),
+        ).fetchone()
+        res = dict(row)
+        res["is_base_edition"] = bool(res["is_base_edition"])
+        return res
+
+
+def list_game_editions(canonical_game_id: int, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM game_editions WHERE canonical_game_id = ? ORDER BY tier_rank ASC, id ASC",
+            (canonical_game_id,),
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["is_base_edition"] = bool(d["is_base_edition"])
+            result.append(d)
+        return result
+
+
+def _append_price_history_internal(
+    conn: sqlite3.Connection,
+    sku_id: int,
+    storefront: str,
+    price_usd: float,
+    regular_price_usd: Optional[float],
+    discount_pct: int,
+    is_all_time_low: bool,
+    source: str,
+    recorded_at: str,
+) -> None:
+    last_row = conn.execute(
+        "SELECT * FROM price_history WHERE sku_id = ? ORDER BY recorded_at DESC LIMIT 1",
+        (sku_id,),
+    ).fetchone()
+    today_prefix = recorded_at[:10]
+    if last_row and last_row["recorded_at"].startswith(today_prefix) and abs(last_row["price_usd"] - price_usd) < 0.001:
+        return
+
+    conn.execute(
+        """
+        INSERT INTO price_history (
+            sku_id, storefront, price_usd, regular_price_usd, discount_pct,
+            is_all_time_low, source, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            sku_id, storefront, price_usd, regular_price_usd, discount_pct,
+            1 if is_all_time_low else 0, source, recorded_at
+        ),
+    )
+
+
+def upsert_edition_sku(
+    edition_id: int,
+    platform_family: str,
+    platform_label: str,
+    storefront: str,
+    store_sku_id: str,
+    itad_plain: Optional[str] = None,
+    store_url: str = "",
+    msrp_usd: Optional[float] = None,
+    current_price_usd: Optional[float] = None,
+    regular_price_usd: Optional[float] = None,
+    discount_pct: Optional[int] = None,
+    is_authorized_seller: bool = True,
+    is_drm_free: bool = False,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    norm_family = normalize_platform_family(platform_family)
+
+    if discount_pct is None and current_price_usd is not None and regular_price_usd and regular_price_usd > 0:
+        discount_pct = max(0, int(round((1.0 - (current_price_usd / regular_price_usd)) * 100)))
+
+    with get_connection(db_path) as conn:
+        existing = conn.execute(
+            "SELECT * FROM edition_platform_skus WHERE edition_id = ? AND storefront = ? AND store_sku_id = ?",
+            (edition_id, storefront, store_sku_id),
+        ).fetchone()
+
+        hist_low = current_price_usd
+        if existing and existing["historical_low_usd"] is not None:
+            if current_price_usd is not None:
+                hist_low = min(existing["historical_low_usd"], current_price_usd)
+            else:
+                hist_low = existing["historical_low_usd"]
+
+        conn.execute(
+            """
+            INSERT INTO edition_platform_skus (
+                edition_id, platform_family, platform_label, storefront, store_sku_id,
+                itad_plain, store_url, msrp_usd, current_price_usd, regular_price_usd,
+                discount_pct, historical_low_usd, is_authorized_seller, is_drm_free,
+                last_checked_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(edition_id, storefront, store_sku_id) DO UPDATE SET
+                platform_family = excluded.platform_family,
+                platform_label = excluded.platform_label,
+                itad_plain = COALESCE(excluded.itad_plain, edition_platform_skus.itad_plain),
+                store_url = CASE WHEN excluded.store_url != '' THEN excluded.store_url ELSE edition_platform_skus.store_url END,
+                msrp_usd = COALESCE(excluded.msrp_usd, edition_platform_skus.msrp_usd),
+                current_price_usd = COALESCE(excluded.current_price_usd, edition_platform_skus.current_price_usd),
+                regular_price_usd = COALESCE(excluded.regular_price_usd, edition_platform_skus.regular_price_usd),
+                discount_pct = COALESCE(excluded.discount_pct, edition_platform_skus.discount_pct),
+                historical_low_usd = excluded.historical_low_usd,
+                is_authorized_seller = excluded.is_authorized_seller,
+                is_drm_free = excluded.is_drm_free,
+                last_checked_at = excluded.last_checked_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                edition_id, norm_family, platform_label, storefront, store_sku_id,
+                itad_plain, store_url, msrp_usd, current_price_usd, regular_price_usd,
+                discount_pct or 0, hist_low, 1 if is_authorized_seller else 0,
+                1 if is_drm_free else 0, now if current_price_usd is not None else None, now, now
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM edition_platform_skus WHERE edition_id = ? AND storefront = ? AND store_sku_id = ?",
+            (edition_id, storefront, store_sku_id),
+        ).fetchone()
+        res = dict(row)
+        res["is_authorized_seller"] = bool(res["is_authorized_seller"])
+        res["is_drm_free"] = bool(res["is_drm_free"])
+
+        if current_price_usd is not None:
+            _append_price_history_internal(
+                conn=conn,
+                sku_id=res["id"],
+                storefront=storefront,
+                price_usd=current_price_usd,
+                regular_price_usd=regular_price_usd,
+                discount_pct=discount_pct or 0,
+                is_all_time_low=bool(hist_low is not None and current_price_usd <= hist_low + 0.001),
+                source="sync",
+                recorded_at=now,
+            )
+        return res
+
+
+def record_sku_price(
+    sku_id: int,
+    price_usd: float,
+    regular_price_usd: Optional[float] = None,
+    discount_pct: Optional[int] = None,
+    source: str = "daily_sync",
+    recorded_at: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    now = recorded_at or datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        sku = conn.execute("SELECT * FROM edition_platform_skus WHERE id = ?", (sku_id,)).fetchone()
+        if not sku:
+            raise ValueError(f"SKU {sku_id} not found")
+
+        cur_low = sku["historical_low_usd"]
+        is_atl = (cur_low is None or price_usd <= cur_low + 0.001)
+        new_hist_low = min(cur_low, price_usd) if cur_low is not None else price_usd
+
+        if discount_pct is None and regular_price_usd and regular_price_usd > 0:
+            discount_pct = max(0, int(round((1.0 - (price_usd / regular_price_usd)) * 100)))
+
+        conn.execute(
+            """
+            UPDATE edition_platform_skus
+            SET current_price_usd = ?,
+                regular_price_usd = COALESCE(?, regular_price_usd),
+                discount_pct = COALESCE(?, discount_pct),
+                historical_low_usd = ?,
+                last_checked_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (price_usd, regular_price_usd, discount_pct, new_hist_low, now, now, sku_id),
+        )
+
+        _append_price_history_internal(
+            conn=conn,
+            sku_id=sku_id,
+            storefront=sku["storefront"],
+            price_usd=price_usd,
+            regular_price_usd=regular_price_usd,
+            discount_pct=discount_pct or 0,
+            is_all_time_low=is_atl,
+            source=source,
+            recorded_at=now,
+        )
+
+        return {
+            "sku_id": sku_id,
+            "price_usd": price_usd,
+            "is_all_time_low": is_atl,
+            "historical_low_usd": new_hist_low,
+        }
+
+
+def get_sku_price_history(sku_id: int, limit: int = 100, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM price_history WHERE sku_id = ? ORDER BY recorded_at DESC LIMIT ?",
+            (sku_id, limit),
+        ).fetchall()
+        return [
+            {
+                **dict(r),
+                "is_all_time_low": bool(r["is_all_time_low"]),
+            }
+            for r in rows
+        ]
+
+
+def get_wishlist_item(item_id: int, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM wishlist_items WHERE id = ?", (item_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["allow_smart_upgrade"] = bool(item["allow_smart_upgrade"])
+
+        canonical_row = conn.execute(
+            "SELECT * FROM canonical_games WHERE id = ?", (item["canonical_game_id"],)
+        ).fetchone()
+        if canonical_row:
+            c = dict(canonical_row)
+            c["genres"] = json.loads(c.get("genres") or "[]")
+            item["canonical_game"] = c
+        else:
+            item["canonical_game"] = None
+
+        targets = conn.execute(
+            "SELECT * FROM wishlist_platform_targets WHERE wishlist_item_id = ?",
+            (item_id,),
+        ).fetchall()
+        item["targets"] = []
+        for t in targets:
+            td = dict(t)
+            td["allowed_storefronts"] = json.loads(td.get("allowed_storefronts") or "[]")
+            td["is_active"] = bool(td["is_active"])
+            td["muted_owned_conflict"] = bool(td["muted_owned_conflict"])
+            item["targets"].append(td)
+
+        # Fetch editions and skus
+        editions = conn.execute(
+            "SELECT * FROM game_editions WHERE canonical_game_id = ? ORDER BY tier_rank ASC, id ASC",
+            (item["canonical_game_id"],),
+        ).fetchall()
+        ed_list = []
+        all_skus = []
+        for ed in editions:
+            e_dict = dict(ed)
+            e_dict["is_base_edition"] = bool(e_dict["is_base_edition"])
+            skus = conn.execute(
+                "SELECT * FROM edition_platform_skus WHERE edition_id = ?", (e_dict["id"],)
+            ).fetchall()
+            e_dict["skus"] = [
+                {
+                    **dict(s),
+                    "is_authorized_seller": bool(s["is_authorized_seller"]),
+                    "is_drm_free": bool(s["is_drm_free"]),
+                }
+                for s in skus
+            ]
+            all_skus.extend(e_dict["skus"])
+            ed_list.append(e_dict)
+        item["editions"] = ed_list
+        item["skus"] = all_skus
+
+        # Conflict info
+        if item["canonical_game"]:
+            item["conflict"] = check_library_ownership_conflicts(
+                title=item["canonical_game"]["title"],
+                canonical_game_id=item["canonical_game_id"],
+                db_path=db_path,
+            )
+        else:
+            item["conflict"] = None
+
+        return item
+
+
+def get_wishlist_item_by_title(title: str, db_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    norm = normalize_game_title(title)
+    with get_connection(db_path) as conn:
+        c_row = conn.execute("SELECT id FROM canonical_games WHERE normalized_title = ?", (norm,)).fetchone()
+        if not c_row:
+            return None
+        w_row = conn.execute("SELECT id FROM wishlist_items WHERE canonical_game_id = ?", (c_row["id"],)).fetchone()
+        if not w_row:
+            return None
+        return get_wishlist_item(w_row["id"], db_path=db_path)
+
+
+def add_wishlist_item(
+    title: str,
+    platform_targets: Optional[List[Dict[str, Any]]] = None,
+    release_year: Optional[int] = None,
+    developer: str = "",
+    publisher: str = "",
+    cover_url: Optional[str] = None,
+    genres: Optional[List[str]] = None,
+    critic_score: Optional[int] = None,
+    allow_smart_upgrade: bool = True,
+    preferred_edition_id: Optional[int] = None,
+    notes: str = "",
+    added_via: str = "web",
+    force_track_owned: bool = False,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    canonical = upsert_canonical_game(
+        title=title,
+        release_year=release_year,
+        developer=developer,
+        publisher=publisher,
+        cover_url=cover_url,
+        genres=genres,
+        critic_score=critic_score,
+        db_path=db_path,
+    )
+    upsert_game_edition(
+        canonical_game_id=canonical["id"],
+        edition_name="Standard Edition",
+        edition_tier="base",
+        tier_rank=1,
+        is_base_edition=True,
+        cover_url=cover_url,
+        db_path=db_path,
+    )
+
+    conflict = check_library_ownership_conflicts(
+        title=title,
+        canonical_game_id=canonical["id"],
+        db_path=db_path,
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO wishlist_items (
+                canonical_game_id, preferred_edition_id, allow_smart_upgrade,
+                status, notes, added_via, created_at, updated_at
+            ) VALUES (?, ?, ?, 'active', ?, ?, ?, ?)
+            ON CONFLICT(canonical_game_id) DO UPDATE SET
+                preferred_edition_id = COALESCE(excluded.preferred_edition_id, wishlist_items.preferred_edition_id),
+                allow_smart_upgrade = excluded.allow_smart_upgrade,
+                status = 'active',
+                notes = CASE WHEN excluded.notes != '' THEN excluded.notes ELSE wishlist_items.notes END,
+                updated_at = excluded.updated_at
+            """,
+            (
+                canonical["id"], preferred_edition_id, 1 if allow_smart_upgrade else 0,
+                notes, added_via, now, now
+            ),
+        )
+        item_row = conn.execute(
+            "SELECT * FROM wishlist_items WHERE canonical_game_id = ?",
+            (canonical["id"],),
+        ).fetchone()
+        wishlist_item_id = item_row["id"]
+
+        if platform_targets:
+            for pt in platform_targets:
+                fam = normalize_platform_family(pt.get("platform") or pt.get("platform_family") or "PC")
+                price = float(pt.get("target_price_usd", 19.99))
+                allowed_sf = json.dumps(pt.get("storefronts") or pt.get("allowed_storefronts") or [])
+                is_conflicted = fam in conflict["conflicted_platforms"]
+                is_active = 1
+                muted = 0
+                if is_conflicted and not force_track_owned:
+                    is_active = 0
+                    muted = 1
+                elif "is_active" in pt:
+                    is_active = 1 if pt["is_active"] else 0
+
+                conn.execute(
+                    """
+                    INSERT INTO wishlist_platform_targets (
+                        wishlist_item_id, platform_family, allowed_storefronts,
+                        target_price_usd, is_active, muted_owned_conflict,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(wishlist_item_id, platform_family) DO UPDATE SET
+                        allowed_storefronts = excluded.allowed_storefronts,
+                        target_price_usd = excluded.target_price_usd,
+                        is_active = excluded.is_active,
+                        muted_owned_conflict = excluded.muted_owned_conflict,
+                        updated_at = excluded.updated_at
+                    """,
+                    (wishlist_item_id, fam, allowed_sf, price, is_active, muted, now, now),
+                )
+
+    return get_wishlist_item(wishlist_item_id, db_path=db_path)
+
+
+def update_wishlist_item(
+    item_id: int,
+    allow_smart_upgrade: Optional[bool] = None,
+    preferred_edition_id: Optional[int] = None,
+    status: Optional[str] = None,
+    notes: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        fields = []
+        vals = []
+        if allow_smart_upgrade is not None:
+            fields.append("allow_smart_upgrade = ?")
+            vals.append(1 if allow_smart_upgrade else 0)
+        if preferred_edition_id is not None:
+            fields.append("preferred_edition_id = ?")
+            vals.append(preferred_edition_id)
+        if status is not None:
+            fields.append("status = ?")
+            vals.append(status)
+        if notes is not None:
+            fields.append("notes = ?")
+            vals.append(notes)
+        if not fields:
+            return get_wishlist_item(item_id, db_path=db_path)
+
+        fields.append("updated_at = ?")
+        vals.append(now)
+        vals.append(item_id)
+
+        conn.execute(f"UPDATE wishlist_items SET {', '.join(fields)} WHERE id = ?", tuple(vals))
+    return get_wishlist_item(item_id, db_path=db_path)
+
+
+def update_wishlist_platforms(
+    wishlist_item_id: int,
+    platform_targets: Optional[List[Dict[str, Any]]] = None,
+    remove_platforms: Optional[List[str]] = None,
+    allow_smart_upgrade: Optional[bool] = None,
+    force_track_owned: bool = False,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    item = get_wishlist_item(wishlist_item_id, db_path=db_path)
+    if not item:
+        raise ValueError(f"Wishlist item {wishlist_item_id} not found")
+
+    if allow_smart_upgrade is not None:
+        update_wishlist_item(wishlist_item_id, allow_smart_upgrade=allow_smart_upgrade, db_path=db_path)
+
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        if remove_platforms:
+            for p in remove_platforms:
+                fam = normalize_platform_family(p)
+                conn.execute(
+                    "DELETE FROM wishlist_platform_targets WHERE wishlist_item_id = ? AND platform_family = ?",
+                    (wishlist_item_id, fam),
+                )
+
+        if platform_targets:
+            conflict = item.get("conflict") or check_library_ownership_conflicts(
+                title=item["canonical_game"]["title"],
+                canonical_game_id=item["canonical_game_id"],
+                db_path=db_path,
+            )
+            for pt in platform_targets:
+                fam = normalize_platform_family(pt.get("platform") or pt.get("platform_family") or "PC")
+                price = float(pt.get("target_price_usd", 19.99))
+                allowed_sf = json.dumps(pt.get("storefronts") or pt.get("allowed_storefronts") or [])
+                is_conflicted = fam in conflict["conflicted_platforms"]
+                is_active = 1
+                muted = 0
+                if is_conflicted and not force_track_owned:
+                    is_active = 0
+                    muted = 1
+                elif "is_active" in pt:
+                    is_active = 1 if pt["is_active"] else 0
+
+                conn.execute(
+                    """
+                    INSERT INTO wishlist_platform_targets (
+                        wishlist_item_id, platform_family, allowed_storefronts,
+                        target_price_usd, is_active, muted_owned_conflict,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(wishlist_item_id, platform_family) DO UPDATE SET
+                        allowed_storefronts = excluded.allowed_storefronts,
+                        target_price_usd = excluded.target_price_usd,
+                        is_active = excluded.is_active,
+                        muted_owned_conflict = excluded.muted_owned_conflict,
+                        updated_at = excluded.updated_at
+                    """,
+                    (wishlist_item_id, fam, allowed_sf, price, is_active, muted, now, now),
+                )
+
+    return get_wishlist_item(wishlist_item_id, db_path=db_path)
+
+
+def delete_wishlist_item(item_id: int, db_path: Optional[str] = None) -> bool:
+    with get_connection(db_path) as conn:
+        cursor = conn.execute("DELETE FROM wishlist_items WHERE id = ?", (item_id,))
+        return cursor.rowcount > 0
+
+
+def list_wishlist_items(status: str = "active", db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    with get_connection(db_path) as conn:
+        if status == "all":
+            rows = conn.execute("SELECT id FROM wishlist_items ORDER BY updated_at DESC").fetchall()
+        else:
+            rows = conn.execute("SELECT id FROM wishlist_items WHERE status = ? ORDER BY updated_at DESC", (status,)).fetchall()
+        return [get_wishlist_item(r["id"], db_path=db_path) for r in rows if r["id"]]
+
+
+def _matches_platform_target(sku: Dict[str, Any], target: Dict[str, Any]) -> bool:
+    target_fam = target.get("platform_family")
+    sku_fam = sku.get("platform_family")
+    if target_fam and sku_fam and target_fam != sku_fam:
+        return False
+    allowed = target.get("allowed_storefronts") or []
+    if allowed and sku.get("storefront") not in allowed:
+        return False
+    return True
+
+
+def evaluate_wishlist_deals(
+    wishlist_item_id: Optional[int] = None,
+    db_path: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Evaluates deals for active wishlist items against their active platform targets.
+    Detects both standard target deals and Smart Upgrade deals.
+    """
+    if wishlist_item_id is not None:
+        item = get_wishlist_item(wishlist_item_id, db_path=db_path)
+        items = [item] if item and item.get("status") == "active" else []
+    else:
+        items = list_wishlist_items(status="active", db_path=db_path)
+
+    all_deals: List[Dict[str, Any]] = []
+
+    for item in items:
+        if not item or not item.get("targets") or not item.get("skus"):
+            continue
+        allow_upgrade = bool(item.get("allow_smart_upgrade", True))
+        editions = item.get("editions") or []
+        edition_by_id = {e["id"]: e for e in editions}
+        skus = item.get("skus") or []
+
+        for target in item["targets"]:
+            if not target.get("is_active") or target.get("muted_owned_conflict"):
+                continue
+
+            base_target_usd = float(target["target_price_usd"])
+
+            base_prices = [
+                float(s["current_price_usd"])
+                for s in skus
+                if s.get("current_price_usd") is not None
+                and _matches_platform_target(s, target)
+                and edition_by_id.get(s["edition_id"], {}).get("tier_rank", 1) == 1
+            ]
+            current_base_price = min(base_prices) if base_prices else None
+
+            for sku in skus:
+                price = sku.get("current_price_usd")
+                if price is None or not _matches_platform_target(sku, target):
+                    continue
+                price_f = float(price)
+                if price_f > base_target_usd:
+                    continue
+
+                ed = edition_by_id.get(sku["edition_id"], {})
+                tier_rank = int(ed.get("tier_rank") or 1)
+                is_smart_upgrade = bool(allow_upgrade and tier_rank > 1)
+
+                if not allow_upgrade and tier_rank > 1 and item.get("preferred_edition_id") != ed.get("id"):
+                    continue
+
+                atl = sku.get("historical_low_usd")
+                is_atl = bool(atl is not None and price_f <= float(atl) + 0.01)
+
+                canonical = item.get("canonical_game") or {}
+
+                all_deals.append({
+                    "wishlist_item_id": item["id"],
+                    "canonical_game_id": item["canonical_game_id"],
+                    "game_title": canonical.get("title", ""),
+                    "cover_url": canonical.get("cover_url"),
+                    "edition_id": ed.get("id"),
+                    "edition_name": ed.get("edition_name", "Standard Edition"),
+                    "edition_tier": ed.get("edition_tier", "base"),
+                    "tier_rank": tier_rank,
+                    "sku_id": sku["id"],
+                    "platform_family": sku["platform_family"],
+                    "platform_label": sku["platform_label"],
+                    "storefront": sku["storefront"],
+                    "store_url": sku.get("store_url") or "",
+                    "current_price_usd": round(price_f, 2),
+                    "regular_price_usd": sku.get("regular_price_usd"),
+                    "discount_pct": int(sku.get("discount_pct") or 0),
+                    "target_price_usd": round(base_target_usd, 2),
+                    "savings_below_target_usd": round(base_target_usd - price_f, 2),
+                    "current_base_edition_price_usd": current_base_price,
+                    "is_smart_upgrade": is_smart_upgrade,
+                    "is_all_time_low": is_atl,
+                    "is_drm_free": bool(sku.get("is_drm_free")),
+                    "deal_headline": (
+                        f"SMART UPGRADE: {ed.get('edition_name')} is ${price_f:.2f} "
+                        f"(meets your ${base_target_usd:.2f} Base target!)"
+                        if is_smart_upgrade
+                        else f"TARGET MET: {ed.get('edition_name')} is ${price_f:.2f} "
+                             f"(target ${base_target_usd:.2f})"
+                    ),
+                })
+
+    all_deals.sort(
+        key=lambda d: (-int(d["is_smart_upgrade"]), -d["tier_rank"], d["current_price_usd"])
+    )
+    return all_deals
+
+
+def mark_wishlist_item_purchased(
+    wishlist_item_id: int,
+    platform: str,
+    edition_name: Optional[str] = None,
+    price_paid_usd: Optional[float] = None,
+    completion_status: str = "Plan to Play",
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    with get_connection(db_path) as conn:
+        item = conn.execute("SELECT * FROM wishlist_items WHERE id = ?", (wishlist_item_id,)).fetchone()
+        if not item:
+            raise ValueError(f"Wishlist item {wishlist_item_id} not found")
+
+        canonical = conn.execute("SELECT * FROM canonical_games WHERE id = ?", (item["canonical_game_id"],)).fetchone()
+        if not canonical:
+            raise ValueError("Canonical game not found")
+
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            "UPDATE wishlist_items SET status = 'purchased', updated_at = ? WHERE id = ?",
+            (now, wishlist_item_id),
+        )
+
+    ed_str = f" {edition_name}" if edition_name else ""
+    price_str = f" for ${price_paid_usd:.2f}" if price_paid_usd is not None else ""
+    purchase_note = f"Purchased{ed_str}{price_str}".strip()
+
+    notes = purchase_note
+    if canonical["developer"] or canonical["publisher"]:
+        notes += f" | Dev: {canonical['developer']} Pub: {canonical['publisher']}"
+
+    added = add_manual_game(
+        title=canonical["title"],
+        platform=platform,
+        completion_status=completion_status,
+        playtime_hours=0.0,
+        critic_score=canonical["critic_score"],
+        release_year=canonical["release_year"],
+        cover_url=canonical["cover_url"],
+        notes=notes,
+        ownership_status="Owned",
+        db_path=db_path,
+    )
+
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "UPDATE canonical_games SET library_game_id = ?, updated_at = ? WHERE id = ?",
+            (added["id"], now, canonical["id"]),
+        )
+
+    updated_item = get_wishlist_item(wishlist_item_id, db_path=db_path)
+    return {
+        **updated_item,
+        "library_game_id": added["id"],
+    }
+
+
+def upsert_push_subscription(
+    endpoint: str,
+    p256dh_key: str,
+    auth_key: str,
+    user_agent: str = "",
+    device_label: str = "",
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO push_subscriptions (
+                endpoint, p256dh_key, auth_key, user_agent, device_label,
+                is_active, created_at, last_used_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(endpoint) DO UPDATE SET
+                p256dh_key = excluded.p256dh_key,
+                auth_key = excluded.auth_key,
+                user_agent = excluded.user_agent,
+                device_label = excluded.device_label,
+                is_active = 1,
+                last_used_at = excluded.last_used_at
+            """,
+            (endpoint, p256dh_key, auth_key, user_agent, device_label, now, now),
+        )
+        row = conn.execute("SELECT * FROM push_subscriptions WHERE endpoint = ?", (endpoint,)).fetchone()
+        return dict(row)
+
+
+def delete_push_subscription(endpoint: str, db_path: Optional[str] = None) -> bool:
+    with get_connection(db_path) as conn:
+        cursor = conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+        return cursor.rowcount > 0
+
+
+def list_active_push_subscriptions(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    with get_connection(db_path) as conn:
+        rows = conn.execute("SELECT * FROM push_subscriptions WHERE is_active = 1").fetchall()
+        return [dict(r) for r in rows]
+

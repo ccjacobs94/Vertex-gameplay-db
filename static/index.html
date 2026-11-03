@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=28">
+  <link rel="stylesheet" href="/static/styles.css?v=29">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -100,6 +100,18 @@
       >
         <span class="tab-icon" aria-hidden="true">📊</span>
         <span>Play Habits &amp; Insights</span>
+      </button>
+      <button
+        type="button"
+        id="tab-wishlist"
+        class="view-tab-btn"
+        role="tab"
+        aria-selected="false"
+        aria-controls="wishlist-view-section"
+      >
+        <span class="tab-icon" aria-hidden="true">🏷️</span>
+        <span>Wishlist &amp; Deals</span>
+        <span id="wishlist-badge" class="badge-pill tab-deal-badge" hidden>0</span>
       </button>
     </nav>
 
@@ -439,6 +451,89 @@
             <!-- Rendered dynamically -->
           </div>
         </article>
+      </div>
+    </section>
+
+    <!-- Wishlist, Price Monitoring & Smart Upgrades Dashboard Section -->
+    <section aria-labelledby="wishlist-heading" id="wishlist-view-section" class="wishlist-view-section" hidden>
+      <div class="section-header wishlist-section-header">
+        <div>
+          <h2 id="wishlist-heading">🏷️ Multi-Platform Wishlist &amp; Deal Monitor</h2>
+          <p class="section-subtitle">
+            Tracking price drops across PC (Steam/GOG/Epic), Xbox, and PlayStation with Smart Upgrade detection.
+          </p>
+        </div>
+        <div class="wishlist-header-actions">
+          <button type="button" id="btn-toggle-push" class="btn btn-secondary btn-push-toggle" title="Toggle Web Push Deal Alerts">
+            <span id="push-toggle-icon">🔔</span>
+            <span id="push-toggle-label">Enable Deal Alerts</span>
+          </button>
+          <button type="button" id="btn-sync-wishlist" class="btn btn-secondary">
+            🔄 Sync Prices Now
+          </button>
+          <button type="button" id="btn-open-wishlist-add" class="btn btn-primary">
+            + Watch Game
+          </button>
+        </div>
+      </div>
+
+      <!-- Wishlist Pulse KPI Strip -->
+      <div class="wishlist-pulse-grid" id="wishlist-pulse-grid" aria-label="Wishlist key metrics">
+        <article class="habits-kpi-card" id="kpi-watched-card">
+          <span class="habits-kpi-label">Watched Games</span>
+          <strong class="habits-kpi-value" id="wkpi-watched">0</strong>
+          <span class="habits-kpi-sub">Active tracked titles</span>
+        </article>
+        <article class="habits-kpi-card" id="kpi-deals-card">
+          <span class="habits-kpi-label">Target Deals Met</span>
+          <strong class="habits-kpi-value text-emerald" id="wkpi-deals">0</strong>
+          <span class="habits-kpi-sub">Priced below threshold</span>
+        </article>
+        <article class="habits-kpi-card" id="kpi-upgrades-card">
+          <span class="habits-kpi-label">Smart Upgrade Alerts</span>
+          <strong class="habits-kpi-value text-accent" id="wkpi-upgrades">0</strong>
+          <span class="habits-kpi-sub">Deluxe/Ultimate ≤ Base target</span>
+        </article>
+        <article class="habits-kpi-card" id="kpi-atl-card">
+          <span class="habits-kpi-label">All-Time Lows</span>
+          <strong class="habits-kpi-value text-purple" id="wkpi-atl">0</strong>
+          <span class="habits-kpi-sub">Historical lowest price</span>
+        </article>
+      </div>
+
+      <!-- Wishlist Filter Bar -->
+      <div class="wishlist-filter-bar">
+        <div class="wishlist-filter-group">
+          <label for="wishlist-status-filter" class="filter-label">Status:</label>
+          <select id="wishlist-status-filter" class="form-select">
+            <option value="active">Active Tracked</option>
+            <option value="purchased">Purchased</option>
+            <option value="all">All Items</option>
+          </select>
+        </div>
+        <div class="wishlist-filter-group">
+          <label for="wishlist-platform-filter" class="filter-label">Platform:</label>
+          <select id="wishlist-platform-filter" class="form-select">
+            <option value="">All Platforms</option>
+            <option value="PC">PC</option>
+            <option value="Xbox">Xbox</option>
+            <option value="PlayStation">PlayStation</option>
+          </select>
+        </div>
+        <div class="wishlist-filter-group">
+          <label class="checkbox-label" title="Show only Smart Upgrade deals">
+            <input type="checkbox" id="wishlist-smart-only-toggle" />
+            <span>🌟 Smart Upgrades Only</span>
+          </label>
+        </div>
+        <div class="wishlist-search-box">
+          <input type="search" id="wishlist-search-input" class="form-input" placeholder="Filter tracked games..." />
+        </div>
+      </div>
+
+      <!-- Wishlist Cards Grid -->
+      <div id="wishlist-grid" class="wishlist-grid" aria-live="polite">
+        <!-- Rendered dynamically -->
       </div>
     </section>
   </main>
@@ -1591,6 +1686,165 @@
         </div>
       </footer>
     </div>
+  <!-- Wishlist Search-to-Confirm Visual Verification Modal -->
+  <dialog id="wishlist-add-dialog" class="modal-dialog" closedby="any" aria-labelledby="wishlist-add-title">
+    <div class="modal-content modal-content-wide">
+      <div class="sheet-drag-handle" aria-hidden="true"></div>
+      <header class="modal-header">
+        <h2 id="wishlist-add-title">Watch Game on Wishlist</h2>
+        <button type="button" class="btn-icon btn-close" id="btn-close-wishlist-add" aria-label="Close dialog">✕</button>
+      </header>
+
+      <div class="modal-body">
+        <!-- Step 1: Candidate Search -->
+        <div id="wishlist-step-search" class="wishlist-modal-step">
+          <p class="modal-instruction">Search catalogs to visually verify cover art, release year, editions, and library ownership before tracking.</p>
+          <div class="candidate-search-row">
+            <input type="search" id="wishlist-candidate-input" class="form-input" placeholder="Search game title (e.g. Cyberpunk 2077, Elden Ring)..." />
+            <button type="button" id="btn-search-candidates" class="btn btn-primary">Search</button>
+          </div>
+          <div id="candidates-loading" class="candidates-loading" hidden>🔍 Searching game catalogs...</div>
+          <div id="candidates-list" class="candidates-list"></div>
+        </div>
+
+        <!-- Step 2: Target Configuration -->
+        <form id="wishlist-config-form" class="wishlist-modal-step" hidden>
+          <div class="selected-game-preview" id="selected-game-preview"></div>
+
+          <div class="form-group smart-upgrade-toggle-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="cfg-smart-upgrade" checked />
+              <span><strong>Enable Smart Upgrade Detection</strong></span>
+            </label>
+            <p class="field-help">Alert me if a Deluxe, Ultimate, or Complete edition drops to or below my Base target price.</p>
+          </div>
+
+          <fieldset class="platform-targets-matrix">
+            <legend class="matrix-legend">Platform Targets &amp; USD Thresholds</legend>
+
+            <!-- PC Platform Target -->
+            <div class="target-row" id="target-row-pc">
+              <div class="target-toggle-col">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="cfg-pc-active" checked />
+                  <span class="platform-name">💻 PC (Steam, GOG, Epic)</span>
+                </label>
+                <span class="conflict-badge" id="pc-conflict-badge" hidden></span>
+              </div>
+              <div class="target-price-col">
+                <label for="cfg-pc-price" class="price-input-label">Target ($ USD):</label>
+                <div class="price-input-wrapper">
+                  <span class="currency-prefix">$</span>
+                  <input type="number" step="0.01" min="0" id="cfg-pc-price" class="form-input price-input" value="19.99" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Xbox Platform Target -->
+            <div class="target-row" id="target-row-xbox">
+              <div class="target-toggle-col">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="cfg-xbox-active" checked />
+                  <span class="platform-name">🎮 Xbox (Series X|S &amp; One)</span>
+                </label>
+                <span class="conflict-badge" id="xbox-conflict-badge" hidden></span>
+              </div>
+              <div class="target-price-col">
+                <label for="cfg-xbox-price" class="price-input-label">Target ($ USD):</label>
+                <div class="price-input-wrapper">
+                  <span class="currency-prefix">$</span>
+                  <input type="number" step="0.01" min="0" id="cfg-xbox-price" class="form-input price-input" value="29.99" />
+                </div>
+              </div>
+            </div>
+
+            <!-- PlayStation Platform Target -->
+            <div class="target-row" id="target-row-psn">
+              <div class="target-toggle-col">
+                <label class="checkbox-label">
+                  <input type="checkbox" id="cfg-psn-active" checked />
+                  <span class="platform-name">🕹️ PlayStation (PS5 &amp; PS4)</span>
+                </label>
+                <span class="conflict-badge" id="psn-conflict-badge" hidden></span>
+              </div>
+              <div class="target-price-col">
+                <label for="cfg-psn-price" class="price-input-label">Target ($ USD):</label>
+                <div class="price-input-wrapper">
+                  <span class="currency-prefix">$</span>
+                  <input type="number" step="0.01" min="0" id="cfg-psn-price" class="form-input price-input" value="29.99" />
+                </div>
+              </div>
+            </div>
+          </fieldset>
+
+          <div class="form-group">
+            <label for="cfg-wishlist-notes" class="form-label">Personal Notes (optional)</label>
+            <input type="text" id="cfg-wishlist-notes" class="form-input" placeholder="e.g. Waiting for DLC bundle or friend co-op" />
+          </div>
+
+          <div class="modal-actions">
+            <button type="button" id="btn-back-to-candidates" class="btn btn-secondary">← Back to Results</button>
+            <button type="submit" id="btn-save-wishlist-item" class="btn btn-primary">Save to Wishlist</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Wishlist Price History Dialog -->
+  <dialog id="wishlist-history-dialog" class="modal-dialog" closedby="any" aria-labelledby="history-dialog-title">
+    <div class="modal-content">
+      <div class="sheet-drag-handle" aria-hidden="true"></div>
+      <header class="modal-header">
+        <h2 id="history-dialog-title">Price History &amp; All-Time Lows</h2>
+        <button type="button" class="btn-icon btn-close" id="btn-close-wishlist-history" aria-label="Close dialog">✕</button>
+      </header>
+      <div class="modal-body" id="wishlist-history-body"></div>
+    </div>
+  </dialog>
+
+  <!-- Wishlist Mark As Purchased Dialog -->
+  <dialog id="wishlist-purchase-dialog" class="modal-dialog" closedby="any" aria-labelledby="purchase-dialog-title">
+    <div class="modal-content">
+      <div class="sheet-drag-handle" aria-hidden="true"></div>
+      <header class="modal-header">
+        <h2 id="purchase-dialog-title">Mark Game as Purchased</h2>
+        <button type="button" class="btn-icon btn-close" id="btn-close-wishlist-purchase" aria-label="Close dialog">✕</button>
+      </header>
+      <form id="wishlist-purchase-form" class="modal-body">
+        <input type="hidden" id="purchase-item-id" />
+        <div class="form-group">
+          <label for="purchase-platform" class="form-label">Platform Purchased On</label>
+          <select id="purchase-platform" class="form-select" required>
+            <option value="PC">PC (Steam / GOG / Epic)</option>
+            <option value="Xbox">Xbox Series X|S / Xbox One</option>
+            <option value="PlayStation 5">PlayStation 5</option>
+            <option value="PlayStation 4">PlayStation 4</option>
+            <option value="Nintendo Switch">Nintendo Switch</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="purchase-edition" class="form-label">Edition Purchased</label>
+          <input type="text" id="purchase-edition" class="form-input" value="Standard Edition" />
+        </div>
+        <div class="form-group">
+          <label for="purchase-price" class="form-label">Price Paid ($ USD)</label>
+          <input type="number" step="0.01" min="0" id="purchase-price" class="form-input" placeholder="e.g. 19.99" />
+        </div>
+        <div class="form-group">
+          <label for="purchase-status" class="form-label">Initial Library Backlog Status</label>
+          <select id="purchase-status" class="form-select">
+            <option value="Plan to Play" selected>Plan to Play</option>
+            <option value="Playing">Playing</option>
+            <option value="Not Played">Not Played</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" id="btn-cancel-purchase">Cancel</button>
+          <button type="submit" class="btn btn-primary">Confirm &amp; Add to Library</button>
+        </div>
+      </form>
+    </div>
   </dialog>
 
   <button type="button" id="btn-scroll-top" class="floating-top-btn" aria-label="Scroll to top" hidden>
@@ -1606,6 +1860,13 @@
     <button type="button" id="mnav-habits" class="mnav-item" aria-label="Play Habits Dashboard">
       <span class="mnav-icon" aria-hidden="true">📊</span>
       <span class="mnav-label">Habits</span>
+    </button>
+    <button type="button" id="mnav-wishlist" class="mnav-item" aria-label="Wishlist &amp; Deals">
+      <span class="mnav-icon-wrap">
+        <span class="mnav-icon" aria-hidden="true">🏷️</span>
+        <span id="mnav-wishlist-badge" class="mnav-badge" hidden>0</span>
+      </span>
+      <span class="mnav-label">Wishlist</span>
     </button>
     <button type="button" id="mnav-triage" class="mnav-item" aria-label="Quick Triage">
       <span class="mnav-icon-wrap">
@@ -1631,6 +1892,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=28"></script>
+  <script src="/static/app.js?v=29"></script>
 </body>
 </html>
