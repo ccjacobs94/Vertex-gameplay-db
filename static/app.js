@@ -4202,7 +4202,11 @@ function renderWishlistGrid() {
       skusByFamily[fam].push(sku);
     }
 
-    const targetsHtml = (item.targets || []).map(target => {
+    const allTargets = item.targets || [];
+    const monitoredTargets = allTargets.filter(t => t.is_active || t.muted_owned_conflict);
+    const displayTargets = monitoredTargets.length > 0 ? monitoredTargets : allTargets;
+
+    const targetsHtml = displayTargets.map(target => {
       const fam = target.platform_family;
       const targetPriceNum = Number(target.target_price_usd || 0);
       const priceText = `$${targetPriceNum.toFixed(2)}`;
@@ -4263,10 +4267,13 @@ function renderWishlistGrid() {
             : "";
           const editionBadge = isUpgradeEd && ed.edition_name
             ? `<span class="marketplace-edition-tag">${escapeHtml(ed.edition_name)}</span>`
-            : "";
+            : `<span class="marketplace-edition-base">Standard</span>`;
           const storeNameNode = sku.store_url
-            ? `<a href="${escapeHtml(sku.store_url)}" target="_blank" rel="noopener noreferrer" class="marketplace-name-link" title="Open ${escapeHtml(sfLabel)} store page">${escapeHtml(sfLabel)} ↗</a>`
+            ? `<a href="${escapeHtml(sku.store_url)}" target="_blank" rel="noopener noreferrer" class="marketplace-name-link" title="Open ${escapeHtml(sfLabel)} store listing">${escapeHtml(sfLabel)}</a>`
             : `<span class="marketplace-name">${escapeHtml(sfLabel)}</span>`;
+          const storeVisitBtn = sku.store_url
+            ? `<a href="${escapeHtml(sku.store_url)}" target="_blank" rel="noopener noreferrer" class="btn-store-link" title="1-click open ${escapeHtml(sfLabel)} listing" aria-label="Open ${escapeHtml(sfLabel)} store page">Store ↗</a>`
+            : "";
 
           return `
             <div class="marketplace-price-row ${skuMet ? 'deal-met' : ''}">
@@ -4288,6 +4295,7 @@ function renderWishlistGrid() {
                 <span class="marketplace-target-price" title="Your ${escapeHtml(fam)} target price">
                   Target ${priceText}
                 </span>
+                ${storeVisitBtn}
               </div>
             </div>
           `;
@@ -4330,7 +4338,10 @@ function renderWishlistGrid() {
           ${item.notes ? `<div style="font-size: 0.8rem; color: var(--text-secondary); font-style: italic;">📝 ${escapeHtml(item.notes)}</div>` : ''}
         </div>
         <div class="wishlist-card-footer">
-          <button type="button" class="btn btn-sm btn-secondary" onclick="openWishlistHistoryModal(${item.id})">History</button>
+          <div style="display: flex; gap: 0.35rem;">
+            <button type="button" class="btn btn-sm btn-secondary" onclick="openWishlistHistoryModal(${item.id})">History</button>
+            <button type="button" class="btn btn-sm btn-secondary" title="Edit monitored platforms &amp; target prices" onclick="openWishlistEditPlatformsModal(${item.id})">⚙️ Stores</button>
+          </div>
           <div style="display: flex; gap: 0.4rem;">
             ${item.status === 'active' ? `<button type="button" class="btn btn-sm btn-primary" onclick="openWishlistPurchaseModal(${item.id})">Mark Purchased</button>` : `<span class="badge-pill" style="background: rgba(16,185,129,0.2); color: #34d399;">Purchased</span>`}
             <button type="button" class="btn btn-sm btn-icon" title="Remove from wishlist" onclick="deleteWishlistItem(${item.id})">🗑️</button>
@@ -4345,6 +4356,11 @@ function openWishlistAddModal() {
   const dialog = document.getElementById("wishlist-add-dialog");
   if (!dialog) return;
   state.selectedCandidate = null;
+  state.editingWishlistItemId = null;
+  const titleEl = document.getElementById("wishlist-add-title");
+  if (titleEl) titleEl.textContent = "Watch Game on Wishlist";
+  const backBtn = document.getElementById("btn-back-to-candidates");
+  if (backBtn) backBtn.hidden = false;
   const stepSearch = document.getElementById("wishlist-step-search");
   const stepConfig = document.getElementById("wishlist-config-form");
   const candidateInput = document.getElementById("wishlist-candidate-input");
@@ -4357,6 +4373,102 @@ function openWishlistAddModal() {
     candidateInput.value = "";
     setTimeout(() => candidateInput.focus(), 100);
   }
+  dialog.showModal();
+}
+
+function openWishlistEditPlatformsModal(itemId) {
+  const item = (state.wishlistItems || []).find(i => i.id === itemId);
+  if (!item) return;
+  const dialog = document.getElementById("wishlist-add-dialog");
+  if (!dialog) return;
+
+  const canonical = item.canonical_game || {};
+  state.editingWishlistItemId = item.id;
+  state.selectedCandidate = {
+    title: canonical.title || "Untitled Game",
+    release_year: canonical.release_year,
+    developer: canonical.developer || "",
+    publisher: canonical.publisher || "",
+    cover_url: canonical.cover_url,
+    genres: canonical.genres || [],
+    critic_score: canonical.critic_score,
+    ownership_conflict: item.conflict || {},
+  };
+
+  const titleEl = document.getElementById("wishlist-add-title");
+  if (titleEl) titleEl.textContent = "Edit Monitored Stores & Target Prices";
+
+  const stepSearch = document.getElementById("wishlist-step-search");
+  const stepConfig = document.getElementById("wishlist-config-form");
+  const backBtn = document.getElementById("btn-back-to-candidates");
+  const preview = document.getElementById("selected-game-preview");
+
+  if (stepSearch) stepSearch.hidden = true;
+  if (stepConfig) stepConfig.hidden = false;
+  if (backBtn) backBtn.hidden = true;
+
+  if (preview) {
+    preview.innerHTML = `
+      <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1.25rem; padding: 0.75rem; background: rgba(255,255,255,0.03); border-radius: var(--radius-md);">
+        <img src="${escapeHtml(canonical.cover_url || '/static/vertex_logo.svg')}" style="width: 48px; height: 72px; object-fit: cover; border-radius: 4px;" alt="" />
+        <div>
+          <h3 style="margin: 0; font-size: 1.1rem;">${escapeHtml(canonical.title || '')}</h3>
+          <div style="font-size: 0.8rem; color: var(--text-secondary);">${canonical.release_year || ''} &bull; ${escapeHtml(canonical.developer || canonical.publisher || 'Cross-Platform')}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  const targetsByFam = {};
+  for (const t of item.targets || []) {
+    targetsByFam[t.platform_family] = t;
+  }
+
+  const conflict = item.conflict || {};
+  const conflictedPlats = new Set(conflict.conflicted_platforms || []);
+
+  const pcTarget = targetsByFam["PC"];
+  const pcCheck = document.getElementById("cfg-pc-active");
+  const pcPrice = document.getElementById("cfg-pc-price");
+  const pcBadge = document.getElementById("pc-conflict-badge");
+  if (pcCheck) pcCheck.checked = pcTarget ? Boolean(pcTarget.is_active) : false;
+  if (pcPrice && pcTarget) pcPrice.value = Number(pcTarget.target_price_usd).toFixed(2);
+  if (pcBadge) {
+    const isOwned = conflictedPlats.has("PC");
+    pcBadge.hidden = !isOwned;
+    pcBadge.textContent = isOwned ? "Owned in Library" : "";
+  }
+
+  const xbTarget = targetsByFam["Xbox"];
+  const xbCheck = document.getElementById("cfg-xbox-active");
+  const xbPrice = document.getElementById("cfg-xbox-price");
+  const xbBadge = document.getElementById("xbox-conflict-badge");
+  if (xbCheck) xbCheck.checked = xbTarget ? Boolean(xbTarget.is_active) : false;
+  if (xbPrice && xbTarget) xbPrice.value = Number(xbTarget.target_price_usd).toFixed(2);
+  if (xbBadge) {
+    const isOwned = conflictedPlats.has("Xbox");
+    xbBadge.hidden = !isOwned;
+    xbBadge.textContent = isOwned ? "Owned in Library" : "";
+  }
+
+  const psTarget = targetsByFam["PlayStation"];
+  const psCheck = document.getElementById("cfg-psn-active");
+  const psPrice = document.getElementById("cfg-psn-price");
+  const psBadge = document.getElementById("psn-conflict-badge");
+  if (psCheck) psCheck.checked = psTarget ? Boolean(psTarget.is_active) : false;
+  if (psPrice && psTarget) psPrice.value = Number(psTarget.target_price_usd).toFixed(2);
+  if (psBadge) {
+    const isOwned = conflictedPlats.has("PlayStation");
+    psBadge.hidden = !isOwned;
+    psBadge.textContent = isOwned ? "Owned in Library" : "";
+  }
+
+  const smartCheck = document.getElementById("cfg-smart-upgrade");
+  if (smartCheck) smartCheck.checked = Boolean(item.allow_smart_upgrade);
+
+  const notesInput = document.getElementById("cfg-wishlist-notes");
+  if (notesInput) notesInput.value = item.notes || "";
+
   dialog.showModal();
 }
 
@@ -4430,12 +4542,18 @@ function selectCandidateForConfig(idx) {
   const conflictedPlats = new Set(conflict.conflicted_platforms || []);
 
   if (preview) {
+    const ownedBanner = conflict.already_in_library
+      ? `<div style="margin-top: 0.4rem; font-size: 0.78rem; color: #fbbf24; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.3); padding: 0.3rem 0.6rem; border-radius: 6px;">
+           ℹ️ ${escapeHtml(conflict.conflict_warning || 'Detected in library')}. Unchecked platforms below will be hidden unless you check them to monitor anyway.
+         </div>`
+      : "";
     preview.innerHTML = `
       <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 1.25rem; padding: 0.75rem; background: rgba(255,255,255,0.03); border-radius: var(--radius-md);">
         <img src="${escapeHtml(candidate.cover_url || '/static/vertex_logo.svg')}" style="width: 48px; height: 72px; object-fit: cover; border-radius: 4px;" alt="" />
-        <div>
+        <div style="flex: 1;">
           <h3 style="margin: 0; font-size: 1.1rem;">${escapeHtml(candidate.title)}</h3>
           <div style="font-size: 0.8rem; color: var(--text-secondary);">${candidate.release_year || ''} &bull; ${escapeHtml(candidate.developer || candidate.publisher || '')}</div>
+          ${ownedBanner}
         </div>
       </div>
     `;
@@ -4449,7 +4567,7 @@ function selectCandidateForConfig(idx) {
     pcCheck.checked = !isOwned;
     if (pcBadge) {
       pcBadge.hidden = !isOwned;
-      pcBadge.textContent = isOwned ? "Muted — Owned in Library" : "";
+      pcBadge.textContent = isOwned ? "Auto-unchecked (Owned in Library — check to monitor anyway)" : "";
     }
   }
 
@@ -4460,7 +4578,7 @@ function selectCandidateForConfig(idx) {
     xbCheck.checked = !isOwned;
     if (xbBadge) {
       xbBadge.hidden = !isOwned;
-      xbBadge.textContent = isOwned ? "Muted — Owned in Library" : "";
+      xbBadge.textContent = isOwned ? "Auto-unchecked (Owned in Library — check to monitor anyway)" : "";
     }
   }
 
@@ -4471,7 +4589,7 @@ function selectCandidateForConfig(idx) {
     psCheck.checked = !isOwned;
     if (psBadge) {
       psBadge.hidden = !isOwned;
-      psBadge.textContent = isOwned ? "Muted — Owned in Library" : "";
+      psBadge.textContent = isOwned ? "Auto-unchecked (Owned in Library — check to monitor anyway)" : "";
     }
   }
 }
@@ -4518,16 +4636,49 @@ async function submitWishlistConfig(e) {
   };
 
   try {
-    const res = await fetch("/api/wishlist", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error("Failed to save wishlist item");
+    const saveBtn = document.getElementById("btn-save-wishlist-item");
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.textContent = "⏳ Checking Stores...";
+    }
+    if (state.editingWishlistItemId) {
+      const editId = state.editingWishlistItemId;
+      const res = await fetch(`/api/wishlist/${editId}/platforms`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform_targets: targets,
+          allow_smart_upgrade: allowSmart,
+          force_track_owned: userOverrodeOwned,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to update monitored platforms");
+      if (notes !== undefined) {
+        await fetch(`/api/wishlist/${editId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ notes }),
+        });
+      }
+      state.editingWishlistItemId = null;
+    } else {
+      const res = await fetch("/api/wishlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("Failed to save wishlist item");
+    }
     document.getElementById("wishlist-add-dialog")?.close();
     fetchWishlistAndDeals();
   } catch (err) {
     alert(`Could not save wishlist item: ${err.message}`);
+  } finally {
+    const saveBtn = document.getElementById("btn-save-wishlist-item");
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save to Wishlist";
+    }
   }
 }
 
@@ -4575,6 +4726,10 @@ async function openWishlistHistoryModal(itemId) {
       for (const t of item.targets || []) {
         targetsByFamily[t.platform_family] = t;
       }
+      const editionsById = {};
+      for (const ed of item.editions || []) {
+        editionsById[ed.id] = ed;
+      }
 
       contentHtml += skus.map(s => {
         const history = historyBySku[s.id] || [];
@@ -4584,13 +4739,19 @@ async function openWishlistHistoryModal(itemId) {
           : null;
         const sfLabel = formatWishlistStorefrontLabel(s.storefront);
         const scanStr = formatWishlistLastScanTimestamp(s.last_checked_at);
+        const ed = editionsById[s.edition_id] || {};
+        const edName = ed.edition_name || "Standard Edition";
+        const storeBtn = s.store_url
+          ? `<a href="${escapeHtml(s.store_url)}" target="_blank" rel="noopener noreferrer" class="btn-store-link" style="margin-left: 0.4rem;">Store ↗</a>`
+          : "";
         return `
           <div style="margin-bottom: 1.25rem; background: rgba(255,255,255,0.03); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
               <div>
-                <strong>${escapeHtml(s.platform_label || s.platform_family)} &bull; ${escapeHtml(sfLabel)}</strong>
+                <strong>${escapeHtml(sfLabel)} &bull; ${escapeHtml(edName)}</strong>
+                ${storeBtn}
                 <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.15rem;">
-                  Last scan: ${escapeHtml(scanStr)}
+                  ${escapeHtml(s.platform_label || s.platform_family)} &bull; Last scan: ${escapeHtml(scanStr)}
                 </div>
               </div>
               <div style="text-align: right;">
@@ -4780,6 +4941,7 @@ async function toggleWebPushSubscription() {
 }
 
 window.openWishlistAddModal = openWishlistAddModal;
+window.openWishlistEditPlatformsModal = openWishlistEditPlatformsModal;
 window.openWishlistHistoryModal = openWishlistHistoryModal;
 window.openWishlistPurchaseModal = openWishlistPurchaseModal;
 window.deleteWishlistItem = deleteWishlistItem;

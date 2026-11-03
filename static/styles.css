@@ -5219,6 +5219,34 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   font-weight: 600;
 }
 
+.marketplace-edition-tag.marketplace-edition-base {
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-secondary);
+  border-color: rgba(148, 163, 184, 0.25);
+}
+
+.btn-store-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-inline-start: 0.35rem;
+  padding: 0.18rem 0.48rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.14);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.btn-store-link:hover {
+  background: rgba(59, 130, 246, 0.28);
+  border-color: #60a5fa;
+  color: #ffffff;
+}
+
 .marketplace-discount-badge {
   font-size: 0.68rem;
   padding: 0.08rem 0.35rem;
