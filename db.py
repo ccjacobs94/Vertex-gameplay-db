@@ -3056,18 +3056,28 @@ def add_wishlist_item(
 
         if platform_targets:
             for pt in platform_targets:
-                fam = normalize_platform_family(pt.get("platform") or pt.get("platform_family") or "PC")
-                price = float(pt.get("target_price_usd", 19.99))
-                allowed_sf = json.dumps(pt.get("storefronts") or pt.get("allowed_storefronts") or [])
-                is_conflicted = fam in conflict["conflicted_platforms"]
-                is_active = 1
-                muted = 0
-                if is_conflicted and not force_track_owned:
-                    is_active = 0
-                    muted = 1
-                elif "is_active" in pt:
-                    is_active = 1 if pt["is_active"] else 0
-                    muted = 1 if (is_conflicted and not is_active) else 0
+                if isinstance(pt, str):
+                    fam = normalize_platform_family(pt)
+                    price = 19.99
+                    allowed_sf = json.dumps([])
+                    is_conflicted = fam in conflict["conflicted_platforms"]
+                    is_active = 0 if (is_conflicted and not force_track_owned) else 1
+                    muted = 1 if (is_conflicted and not force_track_owned) else 0
+                elif isinstance(pt, dict):
+                    fam = normalize_platform_family(pt.get("platform") or pt.get("platform_family") or "PC")
+                    price = float(pt.get("target_price_usd", 19.99))
+                    allowed_sf = json.dumps(pt.get("storefronts") or pt.get("allowed_storefronts") or [])
+                    is_conflicted = fam in conflict["conflicted_platforms"]
+                    is_active = 1
+                    muted = 0
+                    if is_conflicted and not force_track_owned:
+                        is_active = 0
+                        muted = 1
+                    elif "is_active" in pt:
+                        is_active = 1 if pt["is_active"] else 0
+                        muted = 1 if (is_conflicted and not is_active) else 0
+                else:
+                    continue
 
                 conn.execute(
                     """
@@ -3156,18 +3166,28 @@ def update_wishlist_platforms(
                 db_path=db_path,
             )
             for pt in platform_targets:
-                fam = normalize_platform_family(pt.get("platform") or pt.get("platform_family") or "PC")
-                price = float(pt.get("target_price_usd", 19.99))
-                allowed_sf = json.dumps(pt.get("storefronts") or pt.get("allowed_storefronts") or [])
-                is_conflicted = fam in conflict["conflicted_platforms"]
-                is_active = 1
-                muted = 0
-                if is_conflicted and not force_track_owned:
-                    is_active = 0
-                    muted = 1
-                elif "is_active" in pt:
-                    is_active = 1 if pt["is_active"] else 0
-                    muted = 1 if (is_conflicted and not is_active) else 0
+                if isinstance(pt, str):
+                    fam = normalize_platform_family(pt)
+                    price = 19.99
+                    allowed_sf = json.dumps([])
+                    is_conflicted = fam in conflict["conflicted_platforms"]
+                    is_active = 0 if (is_conflicted and not force_track_owned) else 1
+                    muted = 1 if (is_conflicted and not force_track_owned) else 0
+                elif isinstance(pt, dict):
+                    fam = normalize_platform_family(pt.get("platform") or pt.get("platform_family") or "PC")
+                    price = float(pt.get("target_price_usd", 19.99))
+                    allowed_sf = json.dumps(pt.get("storefronts") or pt.get("allowed_storefronts") or [])
+                    is_conflicted = fam in conflict["conflicted_platforms"]
+                    is_active = 1
+                    muted = 0
+                    if is_conflicted and not force_track_owned:
+                        is_active = 0
+                        muted = 1
+                    elif "is_active" in pt:
+                        is_active = 1 if pt["is_active"] else 0
+                        muted = 1 if (is_conflicted and not is_active) else 0
+                else:
+                    continue
 
                 conn.execute(
                     """

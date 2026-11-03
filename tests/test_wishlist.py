@@ -321,5 +321,27 @@ class TestWishlistDatabase(unittest.TestCase):
         self.assertEqual(json.loads(game["genres"]), ["Survival Horror", "Adventure"])
 
 
+    def test_wishlist_accepts_string_platform_targets(self):
+        # Test adding wishlist item with list of strings instead of dicts
+        item = db.add_wishlist_item(
+            title="Dead Cells",
+            platform_targets=["PC", "Xbox", "PlayStation"],
+            db_path=self.db_path,
+        )
+        self.assertIsNotNone(item)
+        target_fams = {t["platform_family"] for t in item["targets"]}
+        self.assertEqual(target_fams, {"PC", "Xbox", "PlayStation"})
+
+        # Test updating with strings
+        updated = db.update_wishlist_platforms(
+            wishlist_item_id=item["id"],
+            platform_targets=["PC"],
+            remove_platforms=["Xbox", "PlayStation"],
+            db_path=self.db_path,
+        )
+        active_fams = {t["platform_family"] for t in updated["targets"]}
+        self.assertEqual(active_fams, {"PC"})
+
+
 if __name__ == "__main__":
     unittest.main()
