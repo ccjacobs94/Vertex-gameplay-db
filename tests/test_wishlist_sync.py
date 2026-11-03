@@ -330,6 +330,302 @@ class TestWishlistSyncAndPush(unittest.IsolatedAsyncioTestCase):
             row = conn.execute("SELECT current_price_usd FROM edition_platform_skus WHERE id = ?", (pc_sku["id"],)).fetchone()
             self.assertEqual(row["current_price_usd"], 14.99)
 
+    def test_title_matching_and_edition_extraction(self):
+        # Exact title
+        self.assertTrue(wishlist_sync.matches_canonical_title("Hades", "Hades"))
+        # Sequel / different games must NOT match
+        self.assertFalse(wishlist_sync.matches_canonical_title("Hades", "Hades II"))
+        self.assertFalse(wishlist_sync.matches_canonical_title("Forza Horizon 5", "Forza Horizon 4"))
+        self.assertFalse(wishlist_sync.matches_canonical_title("Portal", "Portal 2"))
+
+        # Edition variations of the canonical game must match
+        self.assertTrue(wishlist_sync.matches_canonical_title("Hades II", "Hades II - Deluxe Edition"))
+        self.assertTrue(wishlist_sync.matches_canonical_title("Forza Horizon 5", "Forza Horizon 5 Premium Edition"))
+        self.assertTrue(wishlist_sync.matches_canonical_title("Cyberpunk 2077", "Cyberpunk 2077: Ultimate Edition"))
+        self.assertTrue(wishlist_sync.matches_canonical_title("The Witcher 3: Wild Hunt", "The Witcher 3: Wild Hunt - Complete Edition"))
+
+        # Edition extraction
+        self.assertEqual(wishlist_sync.extract_edition_name("Hades II - Deluxe Edition"), "Deluxe Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Forza Horizon 5 Premium Edition"), "Premium Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Cyberpunk 2077: Ultimate Edition"), "Ultimate Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Death Stranding Director's Cut"), "Director's Cut")
+        self.assertEqual(wishlist_sync.extract_edition_name("The Witcher 3 - Complete Edition"), "Complete Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Persona 5 Royal - Standard Edition"), "Standard Edition")
+
+    @patch("httpx.AsyncClient.get")
+    async def test_auto_discovery_newly_added_wishlist_item_zero_initial_skus(self, mock_get):
+        # Setup mock router for external APIs
+        def mock_router(url, *args, **kwargs):
+            url_str = str(url)
+            params = kwargs.get("params") or {}
+            resp = MagicMock()
+            resp.status_code = 200
+
+            if "cheapshark.com/api/1.0/games" in url_str:
+                if "title" in params or "title=" in url_str:
+                    resp.json.return_value = [
+                        {"gameID": "214532", "external": "Hades II", "steamAppID": "1145350"},
+                        {"gameID": "214533", "external": "Hades II - Deluxe Edition"},
+                    ]
+                elif params.get("id") == "214532" or "id=214532" in url_str:
+                    resp.json.return_value = {
+                        "info": {"title": "Hades II"},
+                        "cheapestPriceEver": {"price": "19.99"},
+                        "deals": [
+                            {"storeID": "1", "price": "24.99", "retailPrice": "29.99", "savings": "16.6", "dealID": "deal_cs1"},
+                            {"storeID": "25", "price": "29.99", "retailPrice": "29.99", "savings": "0.0", "dealID": "deal_cs2"},
+                        ],
+                    }
+                elif params.get("id") == "214533" or "id=214533" in url_str:
+                    resp.json.return_value = {
+                        "info": {"title": "Hades II - Deluxe Edition"},
+                        "cheapestPriceEver": {"price": "29.99"},
+                        "deals": [
+                            {"storeID": "1", "price": "34.99", "retailPrice": "39.99", "savings": "12.5", "dealID": "deal_cs3"},
+                        ],
+                    }
+                elif "ids" in params or "ids=" in url_str:
+                    resp.json.return_value = {
+                        "214532": {
+                            "info": {"title": "Hades II"},
+                            "cheapestPriceEver": {"price": "19.99"},
+                            "deals": [
+                                {"storeID": "1", "price": "24.99", "retailPrice": "29.99", "savings": "16.6", "dealID": "deal_cs1"},
+                                {"storeID": "25", "price": "29.99", "retailPrice": "29.99", "savings": "0.0", "dealID": "deal_cs2"},
+                            ],
+                        },
+                        "214533": {
+                            "info": {"title": "Hades II - Deluxe Edition"},
+                            "cheapestPriceEver": {"price": "29.99"},
+                            "deals": [
+                                {"storeID": "1", "price": "34.99", "retailPrice": "39.99", "savings": "12.5", "dealID": "deal_cs3"},
+                            ],
+                        },
+                    }
+                else:
+                    resp.json.return_value = {}
+                return resp
+
+            if "store.steampowered.com/api/storesearch" in url_str:
+                resp.json.return_value = {
+                    "total": 1,
+                    "items": [{"id": 1145350, "name": "Hades II"}],
+                }
+                return resp
+
+            if "store.steampowered.com/api/appdetails" in url_str:
+                resp.json.return_value = {
+                    "1145350": {
+                        "success": True,
+                        "data": {
+                            "name": "Hades II",
+                            "price_overview": {"final": 2999, "initial": 2999, "discount_percent": 0},
+                            "package_groups": [
+                                {
+                                    "subs": [
+                                        {"packageid": 9001, "option_text": "Hades II Deluxe Edition - $39.99", "price_in_cents_with_discount": 3999, "percent_savings": 0}
+                                    ]
+                                }
+                            ],
+                        },
+                    }
+                }
+                return resp
+
+            if "catalog.gog.com/v1/catalog" in url_str:
+                resp.json.return_value = {
+                    "products": [
+                        {
+                            "id": "1207658930",
+                            "title": "Hades II",
+                            "slug": "hades_ii",
+                            "price": {"final": "29.99", "base": "29.99", "discount": 0},
+                        }
+                    ]
+                }
+                return resp
+
+            if "displaycatalog.mp.microsoft.com/v7.0/productFamilies/autosuggest" in url_str:
+                resp.json.return_value = {
+                    "ResultSets": [
+                        {
+                            "Suggests": [
+                                {"Title": "Hades II", "Id": "9NBLGGH4R6P9", "ProductFamilyName": "Games"}
+                            ]
+                        }
+                    ]
+                }
+                return resp
+
+            if "displaycatalog.mp.microsoft.com/v7.0/products" in url_str:
+                resp.json.return_value = {
+                    "Products": [
+                        {
+                            "ProductId": "9NBLGGH4R6P9",
+                            "Properties": {"XboxConsoleGenOptimized": ["XboxSeriesX"]},
+                            "DisplaySkuAvailabilities": [
+                                {
+                                    "Availabilities": [
+                                        {"OrderManagementData": {"Price": {"ListPrice": 29.99, "MSRP": 29.99}}}
+                                    ]
+                                }
+                            ],
+                        }
+                    ]
+                }
+                return resp
+
+            if "playstation.com" in url_str:
+                resp.status_code = 403
+                return resp
+
+            resp.status_code = 404
+            return resp
+
+        mock_get.side_effect = mock_router
+
+        # Add newly added wishlist item with 0 initial SKUs
+        item = db.add_wishlist_item(
+            title="Hades II",
+            platform_targets=[
+                {"platform": "PC", "target_price_usd": 20.00},
+                {"platform": "Xbox", "target_price_usd": 20.00},
+                {"platform": "PlayStation", "target_price_usd": 20.00},
+            ],
+            db_path=self.db_path,
+        )
+        self.assertEqual(len(item["skus"]), 0)
+
+        # Trigger batch sync (which runs discovery for items with 0 SKUs)
+        results = await wishlist_sync.sync_wishlist_prices_for_db(db_path=self.db_path)
+        self.assertGreater(results["updated_skus"], 0)
+
+        # Re-fetch item from DB and verify discovered editions, SKUs, and prices
+        updated_item = db.get_wishlist_item(item["id"], db_path=self.db_path)
+        skus = updated_item["skus"]
+        self.assertGreater(len(skus), 0)
+
+        # Check editions: Standard Edition and Deluxe Edition must be present
+        editions = updated_item["editions"]
+        edition_names = {e["edition_name"] for e in editions}
+        self.assertIn("Standard Edition", edition_names)
+        self.assertIn("Deluxe Edition", edition_names)
+
+        # Check storefront SKUs exist for PC, Xbox, and PlayStation (via resilient fallback)
+        platforms = {s["platform_family"] for s in skus}
+        self.assertIn("PC", platforms)
+        self.assertIn("Xbox", platforms)
+        self.assertIn("PlayStation", platforms)
+
+        # Verify historical low ATL was recorded from CheapShark ($19.99)
+        cs_skus = [s for s in skus if s["storefront"] in ("cheapshark", "steam", "epic")]
+        self.assertTrue(any(s.get("historical_low_usd") == 19.99 for s in cs_skus))
+
+        # Verify price_history rows were inserted for the discovered SKUs
+        for s in skus:
+            history = db.get_sku_price_history(s["id"], db_path=self.db_path)
+            if s.get("current_price_usd") is not None:
+                self.assertGreaterEqual(len(history), 1)
+
+    @patch("httpx.AsyncClient.get")
+    async def test_smart_upgrade_deal_detected_from_discovered_editions(self, mock_get):
+        # CheapShark returns Deluxe Edition on sale for $18.99 while user targeted Base at $20.00
+        def mock_router(url, *args, **kwargs):
+            url_str = str(url)
+            params = kwargs.get("params") or {}
+            resp = MagicMock()
+            resp.status_code = 200
+
+            if "cheapshark.com/api/1.0/games" in url_str:
+                if "title" in params or "title=" in url_str:
+                    resp.json.return_value = [
+                        {"gameID": "500", "external": "Cyberpunk 2077"},
+                        {"gameID": "501", "external": "Cyberpunk 2077: Ultimate Edition"},
+                    ]
+                elif params.get("id") == "500" or "id=500" in url_str:
+                    resp.json.return_value = {
+                        "info": {"title": "Cyberpunk 2077"},
+                        "cheapestPriceEver": {"price": "29.99"},
+                        "deals": [
+                            {"storeID": "1", "price": "29.99", "retailPrice": "59.99", "savings": "50.0", "dealID": "deal1"}
+                        ],
+                    }
+                elif params.get("id") == "501" or "id=501" in url_str:
+                    resp.json.return_value = {
+                        "info": {"title": "Cyberpunk 2077: Ultimate Edition"},
+                        "cheapestPriceEver": {"price": "18.99"},
+                        "deals": [
+                            {"storeID": "1", "price": "18.99", "retailPrice": "79.99", "savings": "76.0", "dealID": "deal2"}
+                        ],
+                    }
+                elif "ids" in params or "ids=" in url_str:
+                    resp.json.return_value = {
+                        "500": {
+                            "info": {"title": "Cyberpunk 2077"},
+                            "cheapestPriceEver": {"price": "29.99"},
+                            "deals": [
+                                {"storeID": "1", "price": "29.99", "retailPrice": "59.99", "savings": "50.0", "dealID": "deal1"}
+                            ],
+                        },
+                        "501": {
+                            "info": {"title": "Cyberpunk 2077: Ultimate Edition"},
+                            "cheapestPriceEver": {"price": "18.99"},
+                            "deals": [
+                                {"storeID": "1", "price": "18.99", "retailPrice": "79.99", "savings": "76.0", "dealID": "deal2"}
+                            ],
+                        },
+                    }
+                return resp
+            resp.status_code = 404
+            return resp
+
+        mock_get.side_effect = mock_router
+
+        # Add wishlist item with PC target $20.00 and allow_smart_upgrade=True
+        item = db.add_wishlist_item(
+            title="Cyberpunk 2077",
+            platform_targets=[{"platform": "PC", "target_price_usd": 20.00}],
+            allow_smart_upgrade=True,
+            db_path=self.db_path,
+        )
+
+        results = await wishlist_sync.sync_wishlist_prices_for_db(db_path=self.db_path)
+        self.assertGreater(results["deals_found"], 0)
+
+        deals = db.evaluate_wishlist_deals(wishlist_item_id=item["id"], db_path=self.db_path)
+        smart_deals = [d for d in deals if d.get("is_smart_upgrade")]
+        self.assertGreaterEqual(len(smart_deals), 1)
+        deal = smart_deals[0]
+        self.assertEqual(deal["edition_name"], "Ultimate Edition")
+        self.assertEqual(deal["current_price_usd"], 18.99)
+        self.assertTrue(deal["is_smart_upgrade"])
+        self.assertIn("SMART UPGRADE", deal["deal_headline"])
+
+    @patch("httpx.AsyncClient.get")
+    async def test_network_error_resilience_during_discovery(self, mock_get):
+        mock_get.side_effect = Exception("Network Connection Refused")
+
+        item = db.add_wishlist_item(
+            title="Offline Game Test",
+            platform_targets=[
+                {"platform": "PC", "target_price_usd": 15.00},
+                {"platform": "PlayStation", "target_price_usd": 15.00},
+            ],
+            db_path=self.db_path,
+        )
+
+        # Batch sync must complete without unhandled exceptions
+        results = await wishlist_sync.sync_wishlist_prices_for_db(db_path=self.db_path)
+        self.assertIsInstance(results, dict)
+        self.assertIn("updated_skus", results)
+
+        # Fallback PlayStation SKU should still be recorded for watched platform
+        updated_item = db.get_wishlist_item(item["id"], db_path=self.db_path)
+        ps_skus = [s for s in updated_item["skus"] if s["platform_family"] == "PlayStation"]
+        self.assertGreaterEqual(len(ps_skus), 1)
+        self.assertEqual(ps_skus[0]["storefront"], "psn_store")
+
 
 if __name__ == "__main__":
     unittest.main()
+

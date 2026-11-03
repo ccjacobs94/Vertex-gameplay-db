@@ -2016,7 +2016,8 @@ async def api_list_wishlist(
     user_id, _ = _get_active_user(request) if request else (None, None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
-    return db.list_wishlist_items(status=status)
+    user_db = _get_active_user_db_path(user_id)
+    return db.list_wishlist_items(status=status, db_path=str(user_db))
 
 
 @app.post("/api/wishlist")
@@ -2031,6 +2032,9 @@ async def api_add_wishlist(
     if not title:
         raise HTTPException(status_code=400, detail="Title is required")
 
+    user_db = _get_active_user_db_path(user_id)
+    db_path = str(user_db)
+
     item = db.add_wishlist_item(
         title=title,
         platform_targets=payload.get("platform_targets"),
@@ -2044,7 +2048,17 @@ async def api_add_wishlist(
         notes=payload.get("notes") or "",
         added_via="web",
         force_track_owned=payload.get("force_track_owned", False),
+        db_path=db_path,
     )
+
+    try:
+        await wishlist_sync.discover_skus_for_item(item["id"], db_path=db_path)
+        refreshed = db.get_wishlist_item(item["id"], db_path=db_path)
+        if refreshed:
+            item = refreshed
+    except Exception as exc:
+        logger.warning("Auto-discovery failed on wishlist add for %s: %s", title, exc)
+
     return item
 
 
@@ -2057,7 +2071,9 @@ async def api_get_wishlist_deals(
     user_id, _ = _get_active_user(request) if request else (None, None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
-    deals = db.evaluate_wishlist_deals()
+    user_db = _get_active_user_db_path(user_id)
+    db_path = str(user_db)
+    deals = db.evaluate_wishlist_deals(db_path=db_path)
     if platform:
         fam = db.normalize_platform_family(platform)
         deals = [d for d in deals if d.get("platform_family") == fam or platform.lower() in (d.get("platform_label") or "").lower()]
@@ -2079,7 +2095,8 @@ async def api_get_wishlist_item(
     user_id, _ = _get_active_user(request) if request else (None, None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
-    item = db.get_wishlist_item(item_id)
+    user_db = _get_active_user_db_path(user_id)
+    item = db.get_wishlist_item(item_id, db_path=str(user_db))
     if not item:
         raise HTTPException(status_code=404, detail="Wishlist item not found")
     return item
@@ -2094,12 +2111,14 @@ async def api_update_wishlist_item(
     user_id, _ = _get_active_user(request) if request else (None, None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
+    user_db = _get_active_user_db_path(user_id)
     updated = db.update_wishlist_item(
         item_id=item_id,
         allow_smart_upgrade=payload.get("allow_smart_upgrade"),
         preferred_edition_id=payload.get("preferred_edition_id"),
         status=payload.get("status"),
         notes=payload.get("notes"),
+        db_path=str(user_db),
     )
     if not updated:
         raise HTTPException(status_code=404, detail="Wishlist item not found")
@@ -2114,7 +2133,8 @@ async def api_delete_wishlist_item(
     user_id, _ = _get_active_user(request) if request else (None, None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
-    success = db.delete_wishlist_item(item_id)
+    user_db = _get_active_user_db_path(user_id)
+    success = db.delete_wishlist_item(item_id, db_path=str(user_db))
     if not success:
         raise HTTPException(status_code=404, detail="Wishlist item not found")
     return {"status": "deleted", "id": item_id}
@@ -2129,6 +2149,7 @@ async def api_update_wishlist_platforms(
     user_id, _ = _get_active_user(request) if request else (None, None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
+    user_db = _get_active_user_db_path(user_id)
     try:
         updated = db.update_wishlist_platforms(
             wishlist_item_id=item_id,
@@ -2136,6 +2157,7 @@ async def api_update_wishlist_platforms(
             remove_platforms=payload.get("remove_platforms"),
             allow_smart_upgrade=payload.get("allow_smart_upgrade"),
             force_track_owned=payload.get("force_track_owned", False),
+            db_path=str(user_db),
         )
         return updated
     except ValueError as e:
@@ -2155,6 +2177,7 @@ async def api_record_wishlist_price(
     if price_val is None:
         raise HTTPException(status_code=400, detail="price_usd is required")
     platform = payload.get("platform") or "PC"
+    user_db = _get_active_user_db_path(user_id)
     res = mcp_server.update_item_price(
         wishlist_item_id=item_id,
         price_usd=float(price_val),
@@ -2165,6 +2188,7 @@ async def api_record_wishlist_price(
         regular_price_usd=payload.get("regular_price_usd"),
         store_url=payload.get("store_url") or "",
         store_sku_id=payload.get("store_sku_id"),
+        db_path=str(user_db),
     )
     if "error" in res:
         raise HTTPException(status_code=400, detail=res["error"])
@@ -2181,6 +2205,7 @@ async def api_mark_wishlist_purchased(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
     platform = payload.get("platform") or "PC"
+    user_db = _get_active_user_db_path(user_id)
     try:
         res = db.mark_wishlist_item_purchased(
             wishlist_item_id=item_id,
@@ -2188,6 +2213,7 @@ async def api_mark_wishlist_purchased(
             edition_name=payload.get("edition_name"),
             price_paid_usd=payload.get("price_paid_usd"),
             completion_status=payload.get("completion_status") or "Plan to Play",
+            db_path=str(user_db),
         )
         return res
     except ValueError as e:
@@ -2202,12 +2228,14 @@ async def api_get_wishlist_history(
     user_id, _ = _get_active_user(request) if request else (None, None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
-    item = db.get_wishlist_item(item_id)
+    user_db = _get_active_user_db_path(user_id)
+    db_path = str(user_db)
+    item = db.get_wishlist_item(item_id, db_path=db_path)
     if not item:
         raise HTTPException(status_code=404, detail="Wishlist item not found")
     history_by_sku = {}
     for s in item.get("skus") or []:
-        history_by_sku[s["id"]] = db.get_sku_price_history(s["id"], limit=50)
+        history_by_sku[s["id"]] = db.get_sku_price_history(s["id"], limit=50, db_path=db_path)
     return {
         "item": item,
         "price_history_by_sku": history_by_sku,

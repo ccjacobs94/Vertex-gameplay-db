@@ -12,6 +12,8 @@ try:
 except ImportError:
     from mcp.server.fastmcp import FastMCP
 
+import wishlist_sync
+
 from db import (
     add_manual_game,
     add_wishlist_item,
@@ -737,6 +739,14 @@ async def add_to_wishlist(
                     db_path=db_path,
                 )
         item = get_wishlist_item(item["id"], db_path=db_path)
+    else:
+        try:
+            await wishlist_sync.discover_skus_for_item(item["id"], db_path=db_path)
+            refreshed = get_wishlist_item(item["id"], db_path=db_path)
+            if refreshed:
+                item = refreshed
+        except Exception:
+            pass
 
     deals = evaluate_wishlist_deals(wishlist_item_id=item["id"], db_path=db_path) if item else []
     return _sanitize_output({
