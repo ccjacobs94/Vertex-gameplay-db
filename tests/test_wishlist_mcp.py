@@ -192,6 +192,39 @@ class TestWishlistMCP(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(history_data["id"], w_id)
             self.assertIn("editions", history_data)
 
+    async def test_update_wishlist_platforms(self):
+        with patch("mcp_server.get_default_db_path", return_value=self.db_path):
+            item = await mcp_server.add_to_wishlist(
+                title="Armored Core VI",
+                platform_targets=[
+                    {"platform": "PC", "target_price_usd": 39.99},
+                    {"platform": "PlayStation", "target_price_usd": 49.99},
+                ],
+            )
+            w_id = item["wishlist_item"]["id"]
+
+            # 1. Update target price by item_id
+            up1 = mcp_server.update_wishlist_platforms(
+                wishlist_item_id=w_id,
+                platform_targets=[{"platform": "PC", "target_price_usd": 29.99}],
+            )
+            self.assertEqual(up1["status"], "updated")
+            targets1 = {t["platform_family"]: t for t in up1["wishlist_item"]["targets"]}
+            self.assertEqual(targets1["PC"]["target_price_usd"], 29.99)
+            self.assertEqual(targets1["PlayStation"]["target_price_usd"], 49.99)
+
+            # 2. Update and remove platform by title
+            up2 = mcp_server.update_wishlist_platforms(
+                title="Armored Core VI",
+                remove_platforms=["PlayStation"],
+                allow_smart_upgrade=False,
+            )
+            self.assertEqual(up2["status"], "updated")
+            self.assertFalse(up2["wishlist_item"]["allow_smart_upgrade"])
+            targets2 = {t["platform_family"]: t for t in up2["wishlist_item"]["targets"]}
+            self.assertIn("PC", targets2)
+            self.assertNotIn("PlayStation", targets2)
+
 
 if __name__ == "__main__":
     unittest.main()

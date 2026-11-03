@@ -164,12 +164,16 @@ async def _periodic_wishlist_sync_loop() -> None:
                 default_user = get_auth_username()
                 active_users = [default_user]
             for uid in active_users:
-                user_db = Path(USERS_DB_DIR) / uid / "games.db"
-                db_path = str(user_db) if user_db.exists() else None
+                token = set_current_user_id(uid)
                 try:
+                    init_db()
+                    user_db = _get_active_user_db_path(uid)
+                    db_path = str(user_db)
                     await wishlist_sync.sync_wishlist_prices_for_db(db_path=db_path)
                 except Exception as exc:
                     logger.warning("Wishlist price sync failed for user %s: %s", uid, exc)
+                finally:
+                    reset_current_user_id(token)
         except Exception as exc:
             logger.error("Error in scheduled wishlist sync loop: %s", exc)
         await asyncio.sleep(max(WISHLIST_SYNC_INTERVAL_HOURS, 1.0) * 3600)
@@ -2216,7 +2220,7 @@ async def api_sync_wishlist_prices(request: Request = None) -> Dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
     user_db = _get_active_user_db_path(user_id)
-    db_path = str(user_db) if user_db.exists() else None
+    db_path = str(user_db)
     res = await wishlist_sync.sync_wishlist_prices_for_db(db_path=db_path)
     return res
 

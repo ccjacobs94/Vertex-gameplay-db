@@ -4360,20 +4360,26 @@ async function submitWishlistConfig(e) {
   if (!c) return;
 
   const targets = [];
-  const pcActive = document.getElementById("cfg-pc-active")?.checked;
+  const pcActive = Boolean(document.getElementById("cfg-pc-active")?.checked);
   const pcPrice = parseFloat(document.getElementById("cfg-pc-price")?.value) || 19.99;
-  if (pcActive) targets.push({ platform: "PC", target_price_usd: pcPrice });
+  targets.push({ platform: "PC", target_price_usd: pcPrice, is_active: pcActive });
 
-  const xbActive = document.getElementById("cfg-xbox-active")?.checked;
+  const xbActive = Boolean(document.getElementById("cfg-xbox-active")?.checked);
   const xbPrice = parseFloat(document.getElementById("cfg-xbox-price")?.value) || 29.99;
-  if (xbActive) targets.push({ platform: "Xbox", target_price_usd: xbPrice });
+  targets.push({ platform: "Xbox", target_price_usd: xbPrice, is_active: xbActive });
 
-  const psActive = document.getElementById("cfg-psn-active")?.checked;
+  const psActive = Boolean(document.getElementById("cfg-psn-active")?.checked);
   const psPrice = parseFloat(document.getElementById("cfg-psn-price")?.value) || 29.99;
-  if (psActive) targets.push({ platform: "PlayStation", target_price_usd: psPrice });
+  targets.push({ platform: "PlayStation", target_price_usd: psPrice, is_active: psActive });
 
   const allowSmart = document.getElementById("cfg-smart-upgrade")?.checked ?? true;
   const notes = document.getElementById("cfg-wishlist-notes")?.value || "";
+
+  const conflict = c.ownership_conflict || {};
+  const conflictedPlats = new Set(conflict.conflicted_platforms || []);
+  const userOverrodeOwned = (pcActive && conflictedPlats.has("PC")) ||
+                           (xbActive && conflictedPlats.has("Xbox")) ||
+                           (psActive && conflictedPlats.has("PlayStation"));
 
   const payload = {
     title: c.title,
@@ -4386,7 +4392,7 @@ async function submitWishlistConfig(e) {
     platform_targets: targets,
     allow_smart_upgrade: allowSmart,
     notes: notes,
-    force_track_owned: true,
+    force_track_owned: userOverrodeOwned,
   };
 
   try {

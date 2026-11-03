@@ -153,14 +153,17 @@ class TestWishlistDatabase(unittest.TestCase):
         self.assertGreaterEqual(len(history), 3)
 
     def test_library_ownership_conflict_detection_and_muting(self):
-        # User already owns Halo Infinite on Xbox with 25.5 hours playtime
+        # User already owns Halo Infinite on Xbox with 25.5 hours playtime (synced as Xbox / PC)
         db.add_manual_game(
             title="Halo Infinite",
-            platform="Xbox",
+            platform="Xbox / PC",
             ownership_status="Owned",
             playtime_hours=25.5,
             db_path=self.db_path,
         )
+
+        # Checking platform family normalization for Xbox / PC connector platform
+        self.assertEqual(db.normalize_platform_family("Xbox / PC"), "Xbox")
 
         # Checking conflicts for Halo Infinite
         conflict = db.check_library_ownership_conflicts(
@@ -304,7 +307,7 @@ class TestWishlistDatabase(unittest.TestCase):
         self.assertEqual(purchased["status"], "purchased")
         self.assertIsNotNone(purchased.get("library_game_id"))
 
-        # Check that it exists in the main `games` table
+        # Check that it exists in the main `games` table with preserved metadata
         with db.get_connection(self.db_path) as conn:
             game = conn.execute(
                 "SELECT * FROM games WHERE id = ?", (purchased["library_game_id"],)
@@ -314,6 +317,8 @@ class TestWishlistDatabase(unittest.TestCase):
         self.assertEqual(game["platform"], "PC")
         self.assertEqual(game["completion_status"], "Plan to Play")
         self.assertIn("Purchased Deluxe Edition for $34.99", game["notes"])
+        import json
+        self.assertEqual(json.loads(game["genres"]), ["Survival Horror", "Adventure"])
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ from db import (
     resolve_playtime_prompt,
     update_game,
     update_wishlist_item,
-    update_wishlist_platforms,
+    update_wishlist_platforms as db_update_wishlist_platforms,
     upsert_canonical_game,
     upsert_edition_sku,
     upsert_game_edition,
@@ -769,7 +769,7 @@ def update_wishlist_platforms(
     if item_id is None:
         return {"error": "Must provide either wishlist_item_id or valid title"}
 
-    updated = update_wishlist_platforms(
+    updated = db_update_wishlist_platforms(
         wishlist_item_id=item_id,
         platform_targets=platform_targets,
         remove_platforms=remove_platforms,
@@ -830,7 +830,7 @@ def update_item_price(
         storefront=storefront,
         store_sku_id=sku_id_str,
         store_url=store_url,
-        current_price_usd=price_usd,
+        current_price_usd=None,
         regular_price_usd=regular_price_usd,
         db_path=db_path,
     )
@@ -933,18 +933,18 @@ def resource_wishlist_active() -> str:
     return json.dumps(_sanitize_output(items), indent=2)
 
 
-@mcp.resource("vertex://wishlist/{wishlist_id}/history")
-def resource_wishlist_history(wishlist_id: str) -> str:
+@mcp.resource("vertex://wishlist/{id}/history")
+def resource_wishlist_history(id: str) -> str:
     """Historical price log, All-Time Lows, and edition SKU breakdown for a wishlist item."""
     db_path = get_default_db_path()
     try:
-        w_id = int(wishlist_id)
-    except ValueError:
-        return json.dumps({"error": f"Invalid wishlist ID '{wishlist_id}'"})
+        w_id = int(id)
+    except (ValueError, TypeError):
+        return json.dumps({"error": f"Invalid wishlist ID '{id}'"})
 
     item = get_wishlist_item(w_id, db_path=db_path)
     if not item:
-        return json.dumps({"error": f"Wishlist item {wishlist_id} not found"})
+        return json.dumps({"error": f"Wishlist item {id} not found"})
 
     history_by_sku: Dict[int, List[Dict[str, Any]]] = {}
     for s in item.get("skus") or []:

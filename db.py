@@ -2449,14 +2449,14 @@ def normalize_platform_family(platform_str: Optional[str]) -> str:
     if not platform_str:
         return "PC"
     p = platform_str.strip().lower()
-    if any(k in p for k in ("steam", "gog", "epic", "pc", "windows", "fanatical", "humble", "gmg")):
-        return "PC"
     if "xbox" in p:
         return "Xbox"
     if any(k in p for k in ("playstation", "ps4", "ps5", "psn")):
         return "PlayStation"
     if any(k in p for k in ("switch", "nintendo")):
         return "Nintendo Switch"
+    if any(k in p for k in ("steam", "gog", "epic", "pc", "windows", "fanatical", "humble", "gmg")):
+        return "PC"
     return platform_str.strip()
 
 
@@ -3042,6 +3042,7 @@ def add_wishlist_item(
                     muted = 1
                 elif "is_active" in pt:
                     is_active = 1 if pt["is_active"] else 0
+                    muted = 1 if (is_conflicted and not is_active) else 0
 
                 conn.execute(
                     """
@@ -3141,6 +3142,7 @@ def update_wishlist_platforms(
                     muted = 1
                 elif "is_active" in pt:
                     is_active = 1 if pt["is_active"] else 0
+                    muted = 1 if (is_conflicted and not is_active) else 0
 
                 conn.execute(
                     """
@@ -3316,6 +3318,8 @@ def mark_wishlist_item_purchased(
     if canonical["developer"] or canonical["publisher"]:
         notes += f" | Dev: {canonical['developer']} Pub: {canonical['publisher']}"
 
+    raw_genres = canonical["genres"]
+    canonical_genres = json.loads(raw_genres) if raw_genres else []
     added = add_manual_game(
         title=canonical["title"],
         platform=platform,
@@ -3323,6 +3327,7 @@ def mark_wishlist_item_purchased(
         playtime_hours=0.0,
         critic_score=canonical["critic_score"],
         release_year=canonical["release_year"],
+        genres=canonical_genres,
         cover_url=canonical["cover_url"],
         notes=notes,
         ownership_status="Owned",

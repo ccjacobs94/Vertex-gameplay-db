@@ -94,6 +94,9 @@ async def dispatch_wishlist_deal_alerts(
         return []
 
     subscriptions = db.list_active_push_subscriptions(db_path=db_path)
+    if not subscriptions:
+        return []
+
     keys = get_or_create_vapid_keys(db_path=system_db_path)
     claim_email = os.environ.get("VAPID_CLAIM_EMAIL", "mailto:admin@localhost.localdomain")
     vapid_claims = {"sub": claim_email}
@@ -166,6 +169,7 @@ async def dispatch_wishlist_deal_alerts(
             payload_str = json.dumps(notification_payload)
 
             # Send to all subscriptions
+            delivered_any = False
             for sub in subscriptions:
                 sub_info = {
                     "endpoint": sub["endpoint"],
@@ -174,12 +178,17 @@ async def dispatch_wishlist_deal_alerts(
                         "auth": sub["auth_key"],
                     },
                 }
-                _send_raw_push(
+                res = _send_raw_push(
                     subscription_info=sub_info,
                     payload_json_str=payload_str,
                     vapid_private_key=keys["private_key"],
                     vapid_claims=vapid_claims,
                 )
+                if res.get("status") in ("sent", "mock_delivered"):
+                    delivered_any = True
+
+            if not delivered_any:
+                continue
 
             # Update target record
             conn.execute(

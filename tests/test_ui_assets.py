@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=29 and sw to v25
-        self.assertIn('href="/static/styles.css?v=29"', index_html)
-        self.assertIn('src="/static/app.js?v=29"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v25";', sw_js)
+        # Cache buster must be bumped to v=30 and sw to v26
+        self.assertIn('href="/static/styles.css?v=30"', index_html)
+        self.assertIn('src="/static/app.js?v=30"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v26";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
