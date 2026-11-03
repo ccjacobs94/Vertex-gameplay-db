@@ -2150,6 +2150,7 @@ async def api_update_wishlist_platforms(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
     user_db = _get_active_user_db_path(user_id)
+    db_path = str(user_db)
     try:
         updated = db.update_wishlist_platforms(
             wishlist_item_id=item_id,
@@ -2157,8 +2158,15 @@ async def api_update_wishlist_platforms(
             remove_platforms=payload.get("remove_platforms"),
             allow_smart_upgrade=payload.get("allow_smart_upgrade"),
             force_track_owned=payload.get("force_track_owned", False),
-            db_path=str(user_db),
+            db_path=db_path,
         )
+        try:
+            await wishlist_sync.discover_skus_for_item(item_id, db_path=db_path)
+            refreshed = db.get_wishlist_item(item_id, db_path=db_path)
+            if refreshed:
+                updated = refreshed
+        except Exception as exc:
+            logger.warning("Auto-discovery failed on wishlist platform update for %s: %s", item_id, exc)
         return updated
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

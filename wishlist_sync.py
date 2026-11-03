@@ -500,6 +500,27 @@ EDITION_KEYWORDS = {
     "platinum", "silver", "classic", "legendary", "master",
 }
 
+ADDON_EXCLUDE_WORDS = {
+    "upgrade", "soundtrack", "ost", "artbook", "wallpaper", "avatar",
+    "skin", "outfit", "costume", "weapon", "item", "bonus", "preorder",
+    "demo", "trial", "beta", "playtest", "server", "mod", "coin", "currency",
+}
+
+
+def _parse_usd_float(val: Any) -> Optional[float]:
+    """Parses a USD price value from float, int, or string like '$59.99'."""
+    if val is None or val == "":
+        return None
+    if isinstance(val, (int, float)):
+        return round(float(val), 2)
+    cleaned = re.sub(r"[^0-9.]", "", str(val))
+    if not cleaned:
+        return None
+    try:
+        return round(float(cleaned), 2)
+    except (ValueError, TypeError):
+        return None
+
 
 def matches_canonical_title(canonical_title: str, candidate_title: str) -> bool:
     t_norm = db.normalize_game_title(canonical_title)
@@ -516,6 +537,9 @@ def matches_canonical_title(canonical_title: str, candidate_title: str) -> bool:
     # Candidate has extra words (e.g. edition name or subtitle)
     if len(c_words) > len(t_words) and c_words[:len(t_words)] == t_words:
         extra = set(c_words[len(t_words):])
+        # Reject standalone DLC upgrades, soundtracks, artbooks, outfits, demos
+        if extra & ADDON_EXCLUDE_WORDS:
+            return False
         # Disallow sequel numbers (e.g. '2', '3', '4') unless they were already in canonical
         sequel_numbers = {w for w in extra if w.isdigit() and len(w) < 4}
         if sequel_numbers:
@@ -608,8 +632,11 @@ async def discover_skus_for_item(
 
     existing_skus = item.get("skus") or []
     existing_families = {s["platform_family"] for s in existing_skus}
+    existing_pc_storefronts = {s["storefront"] for s in existing_skus if s.get("platform_family") == "PC"}
 
-    needed_families = target_families - existing_families if existing_skus else target_families
+    needed_families = set(target_families - existing_families) if existing_skus else set(target_families)
+    if "PC" in target_families and len(existing_pc_storefronts) < 2:
+        needed_families.add("PC")
 
     if not needed_families:
         return {"discovered_editions": 0, "discovered_skus": 0}
@@ -779,6 +806,8 @@ async def discover_skus_for_item(
             gog = GOGDirectAdapter()
             gog_prods = await gog.search_catalog(title)
             for prod in gog_prods:
+                if prod.get("productType") in ("pack", "dlc"):
+                    continue
                 p_title = prod.get("title") or ""
                 if not matches_canonical_title(title, p_title):
                     continue
@@ -786,11 +815,14 @@ async def discover_skus_for_item(
                 ed_name = extract_edition_name(p_title, canonical_title=title, default="Standard Edition")
                 ed_obj = _get_or_create_edition(ed_name)
                 p_data = prod.get("price") or {}
-                cur = float(p_data.get("final") or 0) if p_data.get("final") else None
-                reg = float(p_data.get("base") or cur) if p_data.get("base") else cur
-                disc = int(p_data.get("discount") or 0)
+                final_raw = (p_data.get("finalMoney") or {}).get("amount") or p_data.get("final")
+                base_raw = (p_data.get("baseMoney") or {}).get("amount") or p_data.get("base") or final_raw
+                cur = _parse_usd_float(final_raw)
+                reg = _parse_usd_float(base_raw) if base_raw is not None else cur
+                disc_raw = p_data.get("discount") or (p_data.get("finalMoney") or {}).get("discount") or 0
+                disc = int(_parse_usd_float(disc_raw) or 0)
                 slug = prod.get("slug") or ""
-                store_url = f"https://www.gog.com/en/game/{slug}" if slug else f"https://www.gog.com/game/{pid}"
+                store_url = prod.get("storeLink") or (f"https://www.gog.com/en/game/{slug}" if slug else f"https://www.gog.com/game/{pid}")
                 db.upsert_edition_sku(
                     edition_id=ed_obj["id"],
                     platform_family="PC",
@@ -964,7 +996,9 @@ async def discover_missing_skus_for_db(db_path: Optional[str] = None) -> int:
         targets = [t for t in item.get("targets", []) if t.get("is_active") and not t.get("muted_owned_conflict")]
         target_fams = {t["platform_family"] for t in targets}
         existing_fams = {s["platform_family"] for s in item.get("skus", [])}
-        if not item.get("skus") or (target_fams - existing_fams):
+        existing_pc_sfs = {s["storefront"] for s in item.get("skus", []) if s.get("platform_family") == "PC"}
+        needs_pc_stores = ("PC" in target_fams and len(existing_pc_sfs) < 2)
+        if not item.get("skus") or (target_fams - existing_fams) or needs_pc_stores:
             res = await discover_skus_for_item(item_id, db_path=db_path)
             total_discovered_skus += res.get("discovered_skus", 0)
     return total_discovered_skus

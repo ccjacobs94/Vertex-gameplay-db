@@ -367,6 +367,141 @@ class TestWishlistSyncAndPush(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(wishlist_sync.extract_edition_name("Tomb Raider: Anniversary", canonical_title="Tomb Raider: Anniversary"), "Standard Edition")
         self.assertEqual(wishlist_sync.extract_edition_name("Tomb Raider: Anniversary - Deluxe Edition", canonical_title="Tomb Raider: Anniversary"), "Deluxe Edition")
 
+        # Upgrade packs / soundtrack / DLC add-ons must NOT match as standalone full-game editions
+        self.assertFalse(wishlist_sync.matches_canonical_title("CONTROL Resonant", "CONTROL Resonant Digital Deluxe Upgrade"))
+        self.assertFalse(wishlist_sync.matches_canonical_title("CONTROL Resonant", "CONTROL Resonant Original Soundtrack"))
+        self.assertTrue(wishlist_sync.matches_canonical_title("CONTROL Resonant", "CONTROL Resonant Digital Deluxe Edition"))
+
+    @patch("httpx.AsyncClient.get")
+    async def test_gog_currency_symbol_parsing_and_target_platform_expansion(self, mock_get):
+        # Regression test: GOG catalog v1 returns "$59.99" with leading '$' and productType='pack' for upgrades;
+        # Also tests that enabling PC after initially only watching Xbox discovers PC storefronts on next sync.
+        def mock_router(url, *args, **kwargs):
+            url_str = str(url)
+            resp = MagicMock()
+            resp.status_code = 200
+
+            if "displaycatalog.mp.microsoft.com/v7.0/productFamilies/autosuggest" in url_str:
+                resp.json.return_value = {
+                    "Results": [
+                        {
+                            "ProductFamilyName": "Games",
+                            "Products": [
+                                {"Title": "CONTROL Resonant", "ProductId": "9P092299FSGW", "Type": "Game"},
+                                {"Title": "CONTROL Resonant Digital Deluxe Upgrade", "ProductId": "9P3T5QQ5SDP0", "Type": "Game"},
+                            ],
+                        }
+                    ]
+                }
+                return resp
+
+            if "displaycatalog.mp.microsoft.com/v7.0/products" in url_str:
+                resp.json.return_value = {
+                    "Products": [
+                        {
+                            "ProductId": "9P092299FSGW",
+                            "Properties": {"XboxConsoleGenOptimized": ["XboxSeriesX"]},
+                            "DisplaySkuAvailabilities": [
+                                {
+                                    "Availabilities": [
+                                        {"OrderManagementData": {"Price": {"ListPrice": 59.99, "MSRP": 59.99}}}
+                                    ]
+                                }
+                            ],
+                        }
+                    ]
+                }
+                return resp
+
+            if "catalog.gog.com/v1/catalog" in url_str:
+                resp.json.return_value = {
+                    "products": [
+                        {
+                            "id": "1627372090",
+                            "productType": "game",
+                            "title": "CONTROL Resonant",
+                            "slug": "control_resonant",
+                            "price": {
+                                "final": "$59.99",
+                                "base": "$59.99",
+                                "discount": None,
+                                "finalMoney": {"amount": "59.99", "currency": "USD"},
+                                "baseMoney": {"amount": "59.99", "currency": "USD"},
+                            },
+                        },
+                        {
+                            "id": "1846427364",
+                            "productType": "pack",
+                            "title": "CONTROL Resonant Digital Deluxe Upgrade",
+                            "slug": "control_resonant_digital_deluxe_upgrade",
+                            "price": {"final": "$10.00", "base": "$10.00", "discount": None},
+                        },
+                    ]
+                }
+                return resp
+
+            if "store.steampowered.com/api/storesearch" in url_str:
+                resp.json.return_value = {
+                    "total": 1,
+                    "items": [{"id": 3669870, "name": "CONTROL Resonant"}],
+                }
+                return resp
+
+            if "store.steampowered.com/api/appdetails" in url_str:
+                resp.json.return_value = {
+                    "3669870": {
+                        "success": True,
+                        "data": {
+                            "name": "CONTROL Resonant",
+                            "price_overview": {"final": 4799, "initial": 5999, "discount_percent": 20},
+                        },
+                    }
+                }
+                return resp
+
+            resp.status_code = 404
+            return resp
+
+        mock_get.side_effect = mock_router
+
+        # 1. Add item watching ONLY Xbox initially (PC & PlayStation deselected / is_active=False)
+        item = db.add_wishlist_item(
+            title="CONTROL Resonant",
+            platform_targets=[
+                {"platform": "PC", "target_price_usd": 19.99, "is_active": False},
+                {"platform": "Xbox", "target_price_usd": 35.00, "is_active": True},
+                {"platform": "PlayStation", "target_price_usd": 29.99, "is_active": False},
+            ],
+            db_path=self.db_path,
+        )
+        await wishlist_sync.discover_skus_for_item(item["id"], db_path=self.db_path)
+        item_after_xb = db.get_wishlist_item(item["id"], db_path=self.db_path)
+        # Only Xbox SKUs should be discovered (and NOT the $10 upgrade DLC)
+        self.assertEqual({s["platform_family"] for s in item_after_xb["skus"]}, {"Xbox"})
+        self.assertEqual(len(item_after_xb["skus"]), 1)
+
+        # 2. User enables PC monitoring -> discover_skus_for_item must now discover Steam & GOG SKUs
+        db.update_wishlist_platforms(
+            wishlist_item_id=item["id"],
+            platform_targets=[
+                {"platform": "PC", "target_price_usd": 19.99, "is_active": True},
+                {"platform": "Xbox", "target_price_usd": 35.00, "is_active": True},
+                {"platform": "PlayStation", "target_price_usd": 29.99, "is_active": False},
+            ],
+            db_path=self.db_path,
+        )
+        await wishlist_sync.discover_skus_for_item(item["id"], db_path=self.db_path)
+        item_after_pc = db.get_wishlist_item(item["id"], db_path=self.db_path)
+        storefronts = {s["storefront"] for s in item_after_pc["skus"]}
+        self.assertIn("xbox_store", storefronts)
+        self.assertIn("steam", storefronts)
+        self.assertIn("gog", storefronts)
+        self.assertNotIn("psn_store", storefronts)
+
+        gog_sku = [s for s in item_after_pc["skus"] if s["storefront"] == "gog"][0]
+        self.assertEqual(gog_sku["current_price_usd"], 59.99)
+        self.assertEqual(gog_sku["store_url"], "https://www.gog.com/en/game/control_resonant")
+
     @patch("httpx.AsyncClient.get")
     async def test_auto_discovery_newly_added_wishlist_item_zero_initial_skus(self, mock_get):
         # Setup mock router for external APIs
