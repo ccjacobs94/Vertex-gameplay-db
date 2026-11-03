@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=33 and sw to v29
-        self.assertIn('href="/static/styles.css?v=33"', index_html)
-        self.assertIn('src="/static/app.js?v=33"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v29";', sw_js)
+        # Cache buster must be bumped to v=34 and sw to v30
+        self.assertIn('href="/static/styles.css?v=34"', index_html)
+        self.assertIn('src="/static/app.js?v=34"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v30";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -145,9 +145,10 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn('document.getElementById("btn-mobile-logout")', app_js)
         self.assertIn('document.getElementById("btn-settings-logout")', app_js)
 
-        # CSS styles mobile header actions and 6-column bottom navigation
+        # CSS styles mobile header actions and 7-column bottom navigation + 3-column view-tabs-bar
         self.assertIn(".mobile-header-actions", styles_css)
-        self.assertIn("grid-template-columns: repeat(6, 1fr)", styles_css)
+        self.assertIn("grid-template-columns: repeat(7, minmax(0, 1fr))", styles_css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", styles_css)
 
     def test_admin_delete_user_modal_integration(self):
         index_path = os.path.join(self.static_dir, "index.html")
@@ -262,14 +263,17 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.deleteWishlistItem = deleteWishlistItem;", app_js)
         self.assertIn("window.selectCandidateForConfig = selectCandidateForConfig;", app_js)
 
-        # 5. Cache buster must be bumped to v=33 and sw to v29
-        self.assertIn('href="/static/styles.css?v=33"', index_html)
-        self.assertIn('src="/static/app.js?v=33"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v29";', sw_js)
+        # 5. Cache buster must be bumped to v=34 and sw to v30
+        self.assertIn('href="/static/styles.css?v=34"', index_html)
+        self.assertIn('src="/static/app.js?v=34"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v30";', sw_js)
 
-        # 6. Per-marketplace price, last scan timestamp, and target comparison view on wishlist cards
+        # 6. Abridged platform summary (lowest price per platform) with 1-click expandable detailed store view
         self.assertIn("function formatWishlistStorefrontLabel(", app_js)
         self.assertIn("function formatWishlistLastScanTimestamp(", app_js)
+        self.assertIn("<details class=\"", app_js)
+        self.assertIn("<summary class=\"wishlist-platform-header wishlist-abridged-row\"", app_js)
+        self.assertIn("abridged-lowest-price", app_js)
         self.assertIn("marketplace-price-row", app_js)
         self.assertIn("btn-store-link", app_js)
         self.assertIn("Last scan:", app_js)
