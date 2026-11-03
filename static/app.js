@@ -4640,6 +4640,13 @@ async function toggleWebPushSubscription() {
   }
 }
 
+window.openWishlistAddModal = openWishlistAddModal;
+window.openWishlistHistoryModal = openWishlistHistoryModal;
+window.openWishlistPurchaseModal = openWishlistPurchaseModal;
+window.deleteWishlistItem = deleteWishlistItem;
+window.selectCandidateForConfig = selectCandidateForConfig;
+window.fetchWishlistAndDeals = fetchWishlistAndDeals;
+
 document.addEventListener("DOMContentLoaded", () => {
   applyViewMode(state.viewMode);
   fetchStats();

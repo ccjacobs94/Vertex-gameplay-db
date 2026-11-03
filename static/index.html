@@ -12,7 +12,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="/static/styles.css?v=30">
+  <link rel="stylesheet" href="/static/styles.css?v=31">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -471,7 +471,7 @@
           <button type="button" id="btn-sync-wishlist" class="btn btn-secondary">
             🔄 Sync Prices Now
           </button>
-          <button type="button" id="btn-open-wishlist-add" class="btn btn-primary">
+          <button type="button" id="btn-open-wishlist-add" class="btn btn-primary" onclick="window.openWishlistAddModal && window.openWishlistAddModal()">
             + Watch Game
           </button>
         </div>
@@ -1686,6 +1686,8 @@
         </div>
       </footer>
     </div>
+  </dialog>
+
   <!-- Wishlist Search-to-Confirm Visual Verification Modal -->
   <dialog id="wishlist-add-dialog" class="modal-dialog" closedby="any" aria-labelledby="wishlist-add-title">
     <div class="modal-content modal-content-wide">
@@ -1892,6 +1894,6 @@
     </button>
   </nav>
 
-  <script src="/static/app.js?v=30"></script>
+  <script src="/static/app.js?v=31"></script>
 </body>
 </html>

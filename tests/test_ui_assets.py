@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=30 and sw to v26
-        self.assertIn('href="/static/styles.css?v=30"', index_html)
-        self.assertIn('src="/static/app.js?v=30"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v26";', sw_js)
+        # Cache buster must be bumped to v=31 and sw to v27
+        self.assertIn('href="/static/styles.css?v=31"', index_html)
+        self.assertIn('src="/static/app.js?v=31"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v27";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -210,6 +210,61 @@ class TestUIBrandAssets(unittest.TestCase):
 
         # 8. Compositor layer promotion for sticky/fixed elements
         self.assertIn("transform: translateZ(0);", styles_css)
+
+    def test_wishlist_modal_dialogs_structure_and_exports(self):
+        index_path = os.path.join(self.static_dir, "index.html")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        sw_path = os.path.join(self.static_dir, "sw.js")
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+        with open(sw_path, "r", encoding="utf-8") as f:
+            sw_js = f.read()
+
+        # 1. Dialog opening and closing tags must be balanced (no unclosed dialog nesting)
+        dialog_opens = index_html.count("<dialog")
+        dialog_closes = index_html.count("</dialog>")
+        self.assertEqual(
+            dialog_opens,
+            dialog_closes,
+            f"Mismatched <dialog> tags: {dialog_opens} opening vs {dialog_closes} closing",
+        )
+
+        # 2. triage-dialog must be properly closed before wishlist-add-dialog
+        triage_idx = index_html.find('id="triage-dialog"')
+        wishlist_add_idx = index_html.find('id="wishlist-add-dialog"')
+        self.assertNotEqual(triage_idx, -1)
+        self.assertNotEqual(wishlist_add_idx, -1)
+        triage_slice = index_html[triage_idx:wishlist_add_idx]
+        self.assertIn(
+            "</dialog>",
+            triage_slice,
+            "triage-dialog must have a closing </dialog> before wishlist-add-dialog",
+        )
+
+        # 3. + Watch Game button must have inline window fallback handler
+        self.assertIn(
+            'id="btn-open-wishlist-add"',
+            index_html,
+        )
+        self.assertIn(
+            'onclick="window.openWishlistAddModal && window.openWishlistAddModal()"',
+            index_html,
+        )
+
+        # 4. app.js must export wishlist modal functions to window
+        self.assertIn("window.openWishlistAddModal = openWishlistAddModal;", app_js)
+        self.assertIn("window.openWishlistHistoryModal = openWishlistHistoryModal;", app_js)
+        self.assertIn("window.openWishlistPurchaseModal = openWishlistPurchaseModal;", app_js)
+        self.assertIn("window.deleteWishlistItem = deleteWishlistItem;", app_js)
+        self.assertIn("window.selectCandidateForConfig = selectCandidateForConfig;", app_js)
+
+        # 5. Cache buster must be bumped to v=31 and sw to v27
+        self.assertIn('href="/static/styles.css?v=31"', index_html)
+        self.assertIn('src="/static/app.js?v=31"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v27";', sw_js)
 
 
 if __name__ == "__main__":
