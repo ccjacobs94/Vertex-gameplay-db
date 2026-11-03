@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=31 and sw to v27
-        self.assertIn('href="/static/styles.css?v=31"', index_html)
-        self.assertIn('src="/static/app.js?v=31"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v27";', sw_js)
+        # Cache buster must be bumped to v=32 and sw to v28
+        self.assertIn('href="/static/styles.css?v=32"', index_html)
+        self.assertIn('src="/static/app.js?v=32"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v28";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -261,10 +261,18 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.deleteWishlistItem = deleteWishlistItem;", app_js)
         self.assertIn("window.selectCandidateForConfig = selectCandidateForConfig;", app_js)
 
-        # 5. Cache buster must be bumped to v=31 and sw to v27
-        self.assertIn('href="/static/styles.css?v=31"', index_html)
-        self.assertIn('src="/static/app.js?v=31"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v27";', sw_js)
+        # 5. Cache buster must be bumped to v=32 and sw to v28
+        self.assertIn('href="/static/styles.css?v=32"', index_html)
+        self.assertIn('src="/static/app.js?v=32"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v28";', sw_js)
+
+        # 6. Per-marketplace price, last scan timestamp, and target comparison view on wishlist cards
+        self.assertIn("function formatWishlistStorefrontLabel(", app_js)
+        self.assertIn("function formatWishlistLastScanTimestamp(", app_js)
+        self.assertIn("marketplace-price-row", app_js)
+        self.assertIn("Last scan:", app_js)
+        self.assertIn("marketplace-price-compare", app_js)
+        self.assertIn("marketplace-target-price", app_js)
 
 
 if __name__ == "__main__":
