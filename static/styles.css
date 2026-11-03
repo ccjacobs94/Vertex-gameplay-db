@@ -2966,7 +2966,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
     z-index: 30;
     transform: translateZ(0);
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     align-items: center;
     background-color: rgba(15, 22, 38, 0.92);
     backdrop-filter: blur(18px);
@@ -3732,15 +3732,35 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 /* Responsive Overrides */
 @media (max-width: 768px) {
   .view-tabs-bar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     inline-size: 100%;
-    justify-content: stretch;
+    max-inline-size: 100%;
+    padding: 0.25rem;
+    gap: 0.25rem;
+    box-sizing: border-box;
   }
 
   .view-tab-btn {
-    flex: 1 1 50%;
+    min-inline-size: 0;
+    inline-size: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     justify-content: center;
-    font-size: 0.86rem;
-    padding-inline: 0.5rem;
+    text-align: center;
+    gap: 0.15rem;
+    padding-block: 0.42rem;
+    padding-inline: 0.2rem;
+    font-size: clamp(0.66rem, 2.5vw, 0.78rem);
+    line-height: 1.15;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .view-tab-btn .tab-icon {
+    font-size: 1.05rem;
+    line-height: 1;
   }
 
   .habits-pulse-grid {
@@ -5135,11 +5155,16 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   border: 1px solid var(--border-subtle);
   overflow: hidden;
   font-size: 0.84rem;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.wishlist-platform-group:hover {
+  border-color: rgba(255, 255, 255, 0.18);
 }
 
 .wishlist-platform-group.met {
   border-color: rgba(16, 185, 129, 0.4);
-  background: rgba(16, 185, 129, 0.05);
+  background: rgba(16, 185, 129, 0.06);
 }
 
 .wishlist-platform-group.muted {
@@ -5150,14 +5175,89 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.45rem 0.75rem;
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 0.5rem;
+  padding: 0.55rem 0.8rem;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.wishlist-platform-header::-webkit-details-marker {
+  display: none;
+}
+
+.wishlist-platform-group[open] .wishlist-platform-header {
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .wishlist-platform-group.met .wishlist-platform-header {
   background: rgba(16, 185, 129, 0.12);
   color: #34d399;
+}
+
+.abridged-platform-left {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.abridged-store-hint {
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.abridged-platform-right {
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.abridged-lowest-price {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: var(--text-primary);
+}
+
+.abridged-lowest-price.met {
+  color: #34d399;
+}
+
+.abridged-lowest-price.unpriced {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.abridged-target-sub {
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.wishlist-platform-group.met .abridged-target-sub {
+  color: #6ee7b7;
+}
+
+.abridged-expand-caret {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  transition: transform 0.18s ease;
+  display: inline-block;
+  margin-inline-start: 0.1rem;
+}
+
+.wishlist-platform-group[open] .abridged-expand-caret {
+  transform: rotate(180deg);
+  color: #60a5fa;
 }
 
 .marketplace-rows-list {
@@ -5428,6 +5528,28 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   width: 90px;
   padding: 0.4rem 0.25rem;
   font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .wishlist-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+  }
+
+  .wishlist-grid {
+    grid-template-columns: 1fr;
+    gap: 0.9rem;
+  }
+
+  .marketplace-price-row {
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.48rem 0.65rem;
+  }
+
+  .marketplace-price-compare {
+    margin-inline-start: auto;
+  }
 }
 
 

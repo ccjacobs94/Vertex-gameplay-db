@@ -749,6 +749,15 @@ async def discover_skus_for_item(
                     continue
                 app_details = await steam.get_app_details(appid)
                 if app_details:
+                    header_img = app_details.get("header_image")
+                    cur_cover = canonical.get("cover_url") or ""
+                    if header_img and (not cur_cover or (cur_cover.endswith("/library_600x900.jpg") and re.search(r"/[0-9a-f]{40}/", header_img))):
+                        with db.get_connection(db_path) as conn:
+                            conn.execute(
+                                "UPDATE canonical_games SET cover_url = ? WHERE id = ?",
+                                (header_img, c_id),
+                            )
+                            conn.commit()
                     p_overview = app_details.get("price_overview")
                     cur_price = float(p_overview.get("final") or 0) / 100.0 if p_overview else None
                     reg_price = float(p_overview.get("initial") or 0) / 100.0 if p_overview else cur_price

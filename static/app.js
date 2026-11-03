@@ -307,6 +307,7 @@ function switchMainTab(tabName, shouldScroll = false) {
   const habSec = document.getElementById("habits-view-section");
   const wishSec = document.getElementById("wishlist-view-section");
   const metricsBar = document.getElementById("metrics-bar");
+  const controlsBar = document.getElementById("controls-bar");
   const promptsBanner = document.getElementById("playtime-prompts-banner");
 
   const isHabits = state.activeTab === "habits";
@@ -332,6 +333,7 @@ function switchMainTab(tabName, shouldScroll = false) {
 
   if (libSec) libSec.hidden = !isLibrary;
   if (metricsBar) metricsBar.hidden = !isLibrary;
+  if (controlsBar) controlsBar.hidden = isWishlist;
   if (promptsBanner) promptsBanner.hidden = !isLibrary || (state.playtimePrompts || []).length === 0;
   if (habSec) habSec.hidden = !isHabits;
   if (wishSec) wishSec.hidden = !isWishlist;
@@ -4195,19 +4197,36 @@ function renderWishlistGrid() {
       editionsById[ed.id] = ed;
     }
 
-    const skusByFamily = {};
+    const skusByFamilyMap = {};
     for (const sku of item.skus || []) {
       const fam = sku.platform_family || "PC";
-      if (!skusByFamily[fam]) skusByFamily[fam] = [];
-      skusByFamily[fam].push(sku);
+      if (!skusByFamilyMap[fam]) skusByFamilyMap[fam] = new Map();
+      const dedupeKey = `${String(sku.storefront || "").toLowerCase()}:${sku.edition_id || 0}`;
+      const existing = skusByFamilyMap[fam].get(dedupeKey);
+      if (!existing) {
+        skusByFamilyMap[fam].set(dedupeKey, sku);
+      } else {
+        const curIsDirect = sku.store_url && !sku.store_url.includes("cheapshark.com/redirect");
+        const exIsDirect = existing.store_url && !existing.store_url.includes("cheapshark.com/redirect");
+        if (curIsDirect && !exIsDirect) {
+          skusByFamilyMap[fam].set(dedupeKey, sku);
+        }
+      }
+    }
+    const skusByFamily = {};
+    for (const [fam, mapObj] of Object.entries(skusByFamilyMap)) {
+      skusByFamily[fam] = Array.from(mapObj.values());
     }
 
     const allTargets = item.targets || [];
     const monitoredTargets = allTargets.filter(t => t.is_active || t.muted_owned_conflict);
     const displayTargets = monitoredTargets.length > 0 ? monitoredTargets : allTargets;
+    if (!state.expandedWishlistPlatforms) state.expandedWishlistPlatforms = new Set();
 
     const targetsHtml = displayTargets.map(target => {
       const fam = target.platform_family;
+      const expandKey = `${item.id}:${fam}`;
+      const isExpanded = state.expandedWishlistPlatforms.has(expandKey);
       const targetPriceNum = Number(target.target_price_usd || 0);
       const priceText = `$${targetPriceNum.toFixed(2)}`;
       const famIcon = fam === "Xbox" ? "🎮" : fam === "PlayStation" ? "🕹️" : "💻";
@@ -4217,9 +4236,14 @@ function renderWishlistGrid() {
         return pa - pb;
       });
 
+      const pricedSkus = familySkus.filter(s => s.current_price_usd !== null && s.current_price_usd !== undefined);
+      const bestSku = pricedSkus.length > 0 ? pricedSkus[0] : null;
+      const bestPriceNum = bestSku ? Number(bestSku.current_price_usd) : null;
+      const bestStoreLabel = bestSku ? formatWishlistStorefrontLabel(bestSku.storefront) : "";
+
       const targetDeal = itemDeals.find(d => d.platform_family === fam);
-      const isMet = Boolean(targetDeal) || familySkus.some(
-        s => !target.muted_owned_conflict && target.is_active && s.current_price_usd !== null && s.current_price_usd !== undefined && Number(s.current_price_usd) <= targetPriceNum
+      const isMet = Boolean(targetDeal) || (
+        bestPriceNum !== null && !target.muted_owned_conflict && target.is_active && bestPriceNum <= targetPriceNum
       );
 
       let groupClass = "wishlist-platform-group";
@@ -4229,13 +4253,25 @@ function renderWishlistGrid() {
         groupClass += " met";
       }
 
-      let headerRight = `<span class="target-thresh">Target: <strong>${priceText}</strong></span>`;
+      const storeCountLabel = familySkus.length > 0
+        ? `<span class="abridged-store-hint">${bestStoreLabel ? `${escapeHtml(bestStoreLabel)}${familySkus.length > 1 ? ` +${familySkus.length - 1}` : ""}` : `${familySkus.length} stores`}</span>`
+        : `<span class="abridged-store-hint">Pending scan</span>`;
+
+      let abridgedRightHtml = "";
       if (target.muted_owned_conflict) {
-        headerRight = `<span class="text-secondary" style="font-size: 0.75rem;">Muted (Owned) &bull; Target: ${priceText}</span>`;
+        abridgedRightHtml = `<span class="text-secondary" style="font-size: 0.75rem;">Muted (Owned) &bull; Target ${priceText}</span>`;
       } else if (!target.is_active) {
-        headerRight = `<span class="text-secondary" style="font-size: 0.75rem;">Paused &bull; Target: ${priceText}</span>`;
-      } else if (isMet) {
-        headerRight = `<span class="target-thresh met-badge">Target: <strong>${priceText}</strong> 🔥</span>`;
+        abridgedRightHtml = `<span class="text-secondary" style="font-size: 0.75rem;">Paused &bull; Target ${priceText}</span>`;
+      } else if (bestPriceNum !== null) {
+        abridgedRightHtml = `
+          <span class="abridged-lowest-price ${isMet ? 'met' : ''}">$${bestPriceNum.toFixed(2)}</span>
+          <span class="abridged-target-sub">(Target ${priceText})${isMet ? ' 🔥' : ''}</span>
+        `;
+      } else {
+        abridgedRightHtml = `
+          <span class="abridged-lowest-price unpriced">—</span>
+          <span class="abridged-target-sub">(Target ${priceText})</span>
+        `;
       }
 
       let marketplaceRowsHtml = "";
@@ -4267,7 +4303,7 @@ function renderWishlistGrid() {
             : "";
           const editionBadge = isUpgradeEd && ed.edition_name
             ? `<span class="marketplace-edition-tag">${escapeHtml(ed.edition_name)}</span>`
-            : `<span class="marketplace-edition-base">Standard</span>`;
+            : `<span class="marketplace-edition-tag marketplace-edition-base">Standard</span>`;
           const storeNameNode = sku.store_url
             ? `<a href="${escapeHtml(sku.store_url)}" target="_blank" rel="noopener noreferrer" class="marketplace-name-link" title="Open ${escapeHtml(sfLabel)} store listing">${escapeHtml(sfLabel)}</a>`
             : `<span class="marketplace-name">${escapeHtml(sfLabel)}</span>`;
@@ -4303,22 +4339,28 @@ function renderWishlistGrid() {
       }
 
       return `
-        <div class="${groupClass}">
-          <div class="wishlist-platform-header">
-            <span>${famIcon} <strong>${escapeHtml(fam)}</strong></span>
-            <div>${headerRight}</div>
-          </div>
+        <details class="${groupClass}" ${isExpanded ? "open" : ""} ontoggle="window.onToggleWishlistPlatformDetails && window.onToggleWishlistPlatformDetails(${item.id}, '${escapeHtml(fam)}', this.open)">
+          <summary class="wishlist-platform-header wishlist-abridged-row" title="Click to toggle all ${familySkus.length} store prices for ${escapeHtml(fam)}">
+            <div class="abridged-platform-left">
+              <span>${famIcon} <strong>${escapeHtml(fam)}</strong></span>
+              ${storeCountLabel}
+            </div>
+            <div class="abridged-platform-right">
+              ${abridgedRightHtml}
+              <span class="abridged-expand-caret" aria-hidden="true">▾</span>
+            </div>
+          </summary>
           <div class="marketplace-rows-list">
             ${marketplaceRowsHtml}
           </div>
-        </div>
+        </details>
       `;
     }).join("");
 
     return `
       <article class="wishlist-card ${hasDeal ? 'has-deal' : ''} ${smartUpgradeDeal ? 'has-smart-upgrade' : ''}">
         <div class="wishlist-card-media">
-          <img src="${escapeHtml(coverUrl)}" alt="${escapeHtml(canonical.title || '')}" class="wishlist-card-cover" loading="lazy" />
+          <img src="${escapeHtml(coverUrl)}" alt="${escapeHtml(canonical.title || '')}" class="wishlist-card-cover" loading="lazy" onerror="if(!this.dataset.fallback){this.dataset.fallback='1';this.src='/static/vertex_logo.svg';}" />
           <div class="wishlist-badges-strip">
             ${smartUpgradeDeal ? `<div class="smart-upgrade-callout">🌟 Smart Upgrade: ${escapeHtml(smartUpgradeDeal.edition_name)} $${smartUpgradeDeal.current_price_usd.toFixed(2)}</div>` : ''}
             ${itemDeals.some(d => d.is_all_time_low) ? `<div class="atl-badge">🔥 All-Time Low</div>` : ''}
@@ -4940,6 +4982,16 @@ async function toggleWebPushSubscription() {
   }
 }
 
+function onToggleWishlistPlatformDetails(itemId, platformFamily, isOpen) {
+  if (!state.expandedWishlistPlatforms) state.expandedWishlistPlatforms = new Set();
+  const key = `${itemId}:${platformFamily}`;
+  if (isOpen) {
+    state.expandedWishlistPlatforms.add(key);
+  } else {
+    state.expandedWishlistPlatforms.delete(key);
+  }
+}
+
 window.openWishlistAddModal = openWishlistAddModal;
 window.openWishlistEditPlatformsModal = openWishlistEditPlatformsModal;
 window.openWishlistHistoryModal = openWishlistHistoryModal;
@@ -4947,6 +4999,7 @@ window.openWishlistPurchaseModal = openWishlistPurchaseModal;
 window.deleteWishlistItem = deleteWishlistItem;
 window.selectCandidateForConfig = selectCandidateForConfig;
 window.fetchWishlistAndDeals = fetchWishlistAndDeals;
+window.onToggleWishlistPlatformDetails = onToggleWishlistPlatformDetails;
 
 document.addEventListener("DOMContentLoaded", () => {
   applyViewMode(state.viewMode);
