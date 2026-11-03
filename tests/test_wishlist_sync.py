@@ -109,6 +109,43 @@ class TestWishlistSyncAndPush(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(dispatched3), 1)
         self.assertEqual(mock_send_push.call_count, 2)
 
+    async def test_empty_subscriptions_does_not_mark_target_alerted(self):
+        # Create wishlist item with PC target $20 and deal at $14.99 with NO push subscriptions
+        item = db.add_wishlist_item(
+            title="Silksong Deals",
+            platform_targets=[{"platform": "PC", "target_price_usd": 20.00}],
+            db_path=self.db_path,
+        )
+        ed = item["editions"][0]
+        db.upsert_edition_sku(
+            edition_id=ed["id"],
+            platform_family="PC",
+            platform_label="PC (Steam)",
+            storefront="steam",
+            store_sku_id="99999",
+            current_price_usd=14.99,
+            db_path=self.db_path,
+        )
+        deals = db.evaluate_wishlist_deals(wishlist_item_id=item["id"], db_path=self.db_path)
+        self.assertEqual(len(deals), 1)
+
+        # Dispatch when subscriptions table is completely empty
+        dispatched = await web_push.dispatch_wishlist_deal_alerts(
+            deals=deals,
+            db_path=self.db_path,
+            system_db_path=self.system_db_path,
+        )
+        self.assertEqual(len(dispatched), 0)
+
+        # Verify target was NOT marked as alerted
+        with db.get_connection(self.db_path) as conn:
+            target = conn.execute(
+                "SELECT * FROM wishlist_platform_targets WHERE wishlist_item_id = ?",
+                (item["id"],),
+            ).fetchone()
+            self.assertIsNone(target["last_alerted_at"])
+            self.assertIsNone(target["last_alerted_price_usd"])
+
     @patch("httpx.AsyncClient.post")
     async def test_itad_adapter_parsing_and_chunking(self, mock_post):
         mock_response = MagicMock()
