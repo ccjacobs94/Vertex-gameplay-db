@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "vertex-pwa-v24";
+const CACHE_NAME = "vertex-pwa-v25";
 const STATIC_ASSETS = [
   "/manifest.webmanifest",
   "/static/vertex_logo.svg",
@@ -56,7 +56,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Network-first with cache fallback for GET API calls (/api/games, /api/stats)
+  // Network-first with cache fallback for GET API calls (/api/games, /api/stats, /api/wishlist)
   if (url.pathname.startsWith("/api/")) {
     event.respondWith(
       fetch(request)
@@ -83,5 +83,47 @@ self.addEventListener("fetch", (event) => {
         return response;
       })
       .catch(() => caches.match(request).then((cached) => cached || caches.match("/")))
+  );
+});
+
+// RFC 8030 Web Push Notification Listener
+self.addEventListener("push", (event) => {
+  let data = {};
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch {
+      data = { title: "Vertex Deal Alert", body: event.data.text() };
+    }
+  }
+  const title = data.title || "Vertex Deal Alert";
+  const options = {
+    body: data.body || "A game on your wishlist has dropped in price!",
+    icon: data.icon || "/static/icons/icon-192.png",
+    badge: data.badge || "/static/icons/icon-192.png",
+    tag: data.tag || "vertex-deal-alert",
+    data: data.data || { url: "/#tab-wishlist" },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Notification click: Focus existing window or open wishlist view
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || "/#tab-wishlist";
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if ("focus" in client) {
+          if ("navigate" in client) {
+            client.navigate(targetUrl);
+          }
+          return client.focus();
+        }
+      }
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
+    })
   );
 });
