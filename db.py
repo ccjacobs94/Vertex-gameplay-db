@@ -2467,13 +2467,21 @@ def infer_edition_tier(edition_name: str) -> Tuple[str, int]:
         return ("collector", 5)
     if "ultimate" in name:
         return ("ultimate", 4)
+    if "premium" in name:
+        return ("ultimate", 4)
     if "goty" in name or "game of the year" in name:
         return ("goty", 4)
     if "complete" in name:
         return ("complete", 3)
     if "gold" in name:
         return ("gold", 3)
+    if "anniversary" in name:
+        return ("complete", 3)
     if "deluxe" in name:
+        return ("deluxe", 2)
+    if "director" in name:
+        return ("deluxe", 2)
+    if "enhanced" in name:
         return ("deluxe", 2)
     return ("base", 1)
 
@@ -2733,6 +2741,7 @@ def upsert_edition_sku(
     current_price_usd: Optional[float] = None,
     regular_price_usd: Optional[float] = None,
     discount_pct: Optional[int] = None,
+    historical_low_usd: Optional[float] = None,
     is_authorized_seller: bool = True,
     is_drm_free: bool = False,
     db_path: Optional[str] = None,
@@ -2751,10 +2760,13 @@ def upsert_edition_sku(
 
         hist_low = current_price_usd
         if existing and existing["historical_low_usd"] is not None:
+            hist_low = existing["historical_low_usd"]
             if current_price_usd is not None:
-                hist_low = min(existing["historical_low_usd"], current_price_usd)
-            else:
-                hist_low = existing["historical_low_usd"]
+                hist_low = min(hist_low, current_price_usd)
+            if historical_low_usd is not None:
+                hist_low = min(hist_low, historical_low_usd)
+        elif historical_low_usd is not None:
+            hist_low = min(historical_low_usd, current_price_usd) if current_price_usd is not None else historical_low_usd
 
         conn.execute(
             """

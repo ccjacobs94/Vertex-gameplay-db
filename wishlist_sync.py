@@ -19,6 +19,7 @@ import random
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
+from urllib.parse import quote
 
 import httpx
 
@@ -120,6 +121,33 @@ class CheapSharkAdapter:
         "15": "fanatical",
     }
 
+    async def search_games(self, query: str) -> List[Dict[str, Any]]:
+        url = "https://www.cheapshark.com/api/1.0/games"
+        params = {"title": query, "limit": "10"}
+        async with _make_client() as client:
+            try:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list):
+                        return data
+            except Exception as e:
+                logger.warning("CheapSharkAdapter search_games failed: %s", e)
+        return []
+
+    async def get_game_details(self, game_id: str) -> Optional[Dict[str, Any]]:
+        url = f"https://www.cheapshark.com/api/1.0/games?id={game_id}"
+        async with _make_client() as client:
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        return data.get(str(game_id)) or data
+            except Exception as e:
+                logger.warning("CheapSharkAdapter get_game_details failed: %s", e)
+        return None
+
     async def get_prices_for_game_ids(self, game_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         if not game_ids:
             return {}
@@ -142,13 +170,23 @@ class CheapSharkAdapter:
                             for d in deals:
                                 sid = str(d.get("storeID"))
                                 if sid in self.STORE_MAP:
+                                    sf_name = self.STORE_MAP[sid]
                                     p = float(d.get("price") or 0.0)
+                                    retail = float(d.get("retailPrice") or p)
+                                    savings = int(float(d.get("savings") or 0))
+                                    results[f"{gid}:{sf_name}"] = {
+                                        "current_price_usd": p,
+                                        "regular_price_usd": retail,
+                                        "discount_pct": savings,
+                                        "storefront": sf_name,
+                                        "historical_low_usd": atl,
+                                    }
                                     if best_deal is None or p < best_deal["price"]:
                                         best_deal = {
-                                            "storefront": self.STORE_MAP[sid],
+                                            "storefront": sf_name,
                                             "price": p,
-                                            "retail": float(d.get("retailPrice") or p),
-                                            "savings": int(float(d.get("savings") or 0)),
+                                            "retail": retail,
+                                            "savings": savings,
                                         }
                             if best_deal:
                                 results[str(gid)] = {
@@ -163,8 +201,85 @@ class CheapSharkAdapter:
         return results
 
 
+class SteamStoreAdapter:
+    """Steam Storefront API Client."""
+
+    async def search_games(self, query: str) -> List[Dict[str, Any]]:
+        clean_q = re.sub(r"[™®©]", "", query).strip()
+        url = "https://store.steampowered.com/api/storesearch/"
+        params = {"term": clean_q, "l": "english", "cc": "US"}
+        async with _make_client() as client:
+            try:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data.get("items") or []
+            except Exception as e:
+                logger.warning("SteamStoreAdapter search_games failed: %s", e)
+        return []
+
+    async def get_app_details(self, appid: int) -> Optional[Dict[str, Any]]:
+        url = "https://store.steampowered.com/api/appdetails"
+        params = {"appids": str(appid), "cc": "US", "l": "english"}
+        async with _make_client() as client:
+            try:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    entry = (payload or {}).get(str(appid)) or {}
+                    if entry.get("success"):
+                        return entry.get("data")
+            except Exception as e:
+                logger.warning("SteamStoreAdapter get_app_details failed: %s", e)
+        return None
+
+    async def get_prices_for_app_ids(self, app_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        if not app_ids:
+            return {}
+        results: Dict[str, Dict[str, Any]] = {}
+        for aid in app_ids:
+            try:
+                data = await self.get_app_details(int(aid))
+                if data:
+                    p_info = data.get("price_overview")
+                    if p_info:
+                        cur = float(p_info.get("final") or 0) / 100.0
+                        reg = float(p_info.get("initial") or cur * 100.0) / 100.0
+                        cut = int(p_info.get("discount_percent") or 0)
+                        results[str(aid)] = {
+                            "current_price_usd": round(cur, 2),
+                            "regular_price_usd": round(reg, 2),
+                            "discount_pct": cut,
+                            "storefront": "steam",
+                        }
+            except Exception as e:
+                logger.warning("SteamStoreAdapter get_prices failed for %s: %s", aid, e)
+        return results
+
+
 class GOGDirectAdapter:
     """GOG Direct Public Catalog & Price API Client."""
+
+    async def search_catalog(self, query: str) -> List[Dict[str, Any]]:
+        clean_q = re.sub(r"[™®©]", "", query).strip()
+        url = "https://catalog.gog.com/v1/catalog"
+        params = {
+            "query": clean_q,
+            "order": "desc:score",
+            "countryCode": "US",
+            "locale": "en-US",
+            "currencyCode": "USD",
+            "limit": "5",
+        }
+        async with _make_client() as client:
+            try:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    return data.get("products") or []
+            except Exception as e:
+                logger.warning("GOGDirectAdapter search_catalog failed: %s", e)
+        return []
 
     async def get_prices_for_product_ids(self, product_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         if not product_ids:
@@ -207,6 +322,27 @@ class GOGDirectAdapter:
 
 class XboxCatalogAdapter:
     """Microsoft Display Catalog API Client (Keyless)."""
+
+    async def search_autosuggest(self, query: str) -> List[Dict[str, Any]]:
+        clean_q = re.sub(r"[™®©]", "", query).strip()
+        url = "https://displaycatalog.mp.microsoft.com/v7.0/productFamilies/autosuggest"
+        params = {
+            "market": "US",
+            "languages": "en-US",
+            "query": clean_q,
+            "productFamilyNames": "Games",
+        }
+        async with _make_client() as client:
+            try:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    result_sets = data.get("ResultSets") or []
+                    if result_sets:
+                        return result_sets[0].get("Suggests") or []
+            except Exception as e:
+                logger.warning("XboxCatalogAdapter search_autosuggest failed: %s", e)
+        return []
 
     async def get_prices_for_big_ids(self, big_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         if not big_ids:
@@ -262,6 +398,39 @@ class XboxCatalogAdapter:
 class PSNStoreGraphQLAdapter:
     """PlayStation Store Public Web / GraphQL Operation Client."""
 
+    async def search_products(self, query: str) -> List[Dict[str, Any]]:
+        clean_q = re.sub(r"[™®©]", "", query).strip()
+        url = "https://web.np.playstation.com/api/graphql/v1/op"
+        headers = {
+            "x-psn-store-locale-override": "en-US",
+            "User-Agent": DEFAULT_USER_AGENT,
+        }
+        params = {
+            "operationName": "getSharedSearchSuggestions",
+            "variables": json.dumps({"searchTerm": clean_q, "countryCode": "US", "languageCode": "en"}),
+        }
+        async with _make_client() as client:
+            try:
+                resp = await client.get(url, params=params, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    suggestions = (
+                        data.get("data", {})
+                        .get("getSharedSearchSuggestions", {})
+                        .get("suggestions")
+                        or []
+                    )
+                    results = []
+                    for s in suggestions:
+                        title = s.get("text") or s.get("title") or ""
+                        prod_id = s.get("id") or s.get("productId")
+                        if prod_id:
+                            results.append({"id": prod_id, "title": title})
+                    return results
+            except Exception as e:
+                logger.warning("PSNStoreGraphQLAdapter search_products failed: %s", e)
+        return []
+
     async def get_product_price(self, product_or_concept_id: str) -> Optional[Dict[str, Any]]:
         url = "https://web.np.playstation.com/api/graphql/v1/op"
         headers = {
@@ -305,6 +474,432 @@ class PSNStoreGraphQLAdapter:
 
 
 # ==============================================================================
+# Edition & SKU Discovery Pipeline
+# ==============================================================================
+
+EDITION_KEYWORDS = {
+    "deluxe", "ultimate", "premium", "complete", "goty", "gold",
+    "collector", "collectors", "standard", "special", "anniversary",
+    "directors", "director", "cut", "bundle", "pack", "pass", "plus",
+    "enhanced", "expanded", "remastered", "digital", "launch", "day", "one",
+    "season", "edition", "year",
+}
+
+
+def matches_canonical_title(canonical_title: str, candidate_title: str) -> bool:
+    t_norm = db.normalize_game_title(canonical_title)
+    c_norm = db.normalize_game_title(candidate_title)
+    if not t_norm or not c_norm:
+        return False
+    if t_norm == c_norm:
+        return True
+    t_words = t_norm.split()
+    c_words = c_norm.split()
+    if t_words == c_words:
+        return True
+    if len(c_words) > len(t_words) and c_words[:len(t_words)] == t_words:
+        extra = set(c_words[len(t_words):])
+        if extra.issubset(EDITION_KEYWORDS):
+            return True
+    if len(t_words) > len(c_words) and t_words[:len(c_words)] == c_words:
+        extra = set(t_words[len(c_words):])
+        if extra.issubset(EDITION_KEYWORDS):
+            return True
+    return False
+
+
+def extract_edition_name(candidate_title: str, default: str = "Standard Edition") -> str:
+    lower = (candidate_title or "").lower()
+    if "collector" in lower:
+        return "Collector's Edition"
+    if "ultimate" in lower:
+        return "Ultimate Edition"
+    if "premium" in lower:
+        return "Premium Edition"
+    if "goty" in lower or "game of the year" in lower:
+        return "Game of the Year Edition"
+    if "complete" in lower:
+        return "Complete Edition"
+    if "gold" in lower:
+        return "Gold Edition"
+    if "deluxe" in lower:
+        return "Deluxe Edition"
+    if "director" in lower:
+        return "Director's Cut"
+    if "anniversary" in lower:
+        return "Anniversary Edition"
+    if "enhanced" in lower:
+        return "Enhanced Edition"
+    return default
+
+
+async def discover_skus_for_item(
+    wishlist_item_id: int,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Discovers editions, storefront SKUs, and initial USD prices for a wishlist item.
+    Inspects watched platform targets (PC, Xbox, PlayStation) and queries upstream
+    catalogs (CheapShark, Steam Store, GOG, Xbox Autosuggest/Catalog, PSN Store/GraphQL).
+    """
+    item = db.get_wishlist_item(wishlist_item_id, db_path=db_path)
+    if not item or not item.get("canonical_game"):
+        return {"discovered_editions": 0, "discovered_skus": 0}
+
+    canonical = item["canonical_game"]
+    title = canonical["title"]
+    c_id = canonical["id"]
+
+    targets = item.get("targets") or []
+    active_targets = [t for t in targets if t.get("is_active") and not t.get("muted_owned_conflict")]
+    target_families = {t["platform_family"] for t in active_targets} if active_targets else {"PC"}
+
+    existing_skus = item.get("skus") or []
+    existing_families = {s["platform_family"] for s in existing_skus}
+
+    needed_families = target_families - existing_families if existing_skus else target_families
+
+    if not needed_families:
+        return {"discovered_editions": 0, "discovered_skus": 0}
+
+    discovered_editions = 0
+    discovered_skus = 0
+
+    # Ensure base Standard Edition exists
+    base_edition = db.upsert_game_edition(
+        canonical_game_id=c_id,
+        edition_name="Standard Edition",
+        edition_tier="base",
+        tier_rank=1,
+        is_base_edition=True,
+        cover_url=canonical.get("cover_url"),
+        db_path=db_path,
+    )
+    edition_map: Dict[str, Dict[str, Any]] = {"Standard Edition": base_edition}
+
+    def _get_or_create_edition(ed_name: str) -> Dict[str, Any]:
+        nonlocal discovered_editions
+        if ed_name in edition_map:
+            return edition_map[ed_name]
+        tier, rank = db.infer_edition_tier(ed_name)
+        is_base = (rank == 1 or "standard" in ed_name.lower())
+        ed = db.upsert_game_edition(
+            canonical_game_id=c_id,
+            edition_name=ed_name,
+            edition_tier=tier,
+            tier_rank=rank,
+            is_base_edition=is_base,
+            cover_url=canonical.get("cover_url"),
+            db_path=db_path,
+        )
+        edition_map[ed_name] = ed
+        discovered_editions += 1
+        return ed
+
+    # 1. PC Discovery (CheapShark, Steam Store Direct, GOG Direct)
+    if "PC" in needed_families:
+        # A) CheapShark discovery (covers Steam, GOG, Epic, Humble, GMG, Fanatical deals + ATL)
+        try:
+            cs = CheapSharkAdapter()
+            cs_results = await cs.search_games(title)
+            for cs_item in cs_results:
+                cand_title = cs_item.get("external") or ""
+                if not matches_canonical_title(title, cand_title):
+                    continue
+                gid = str(cs_item.get("gameID"))
+                ed_name = extract_edition_name(cand_title, default="Standard Edition")
+                ed = _get_or_create_edition(ed_name)
+
+                details = await cs.get_game_details(gid)
+                if details:
+                    deals = details.get("deals") or []
+                    cheapest_ever = details.get("cheapestPriceEver", {}).get("price")
+                    atl = float(cheapest_ever) if cheapest_ever else None
+                    for d in deals:
+                        sid = str(d.get("storeID"))
+                        storefront = cs.STORE_MAP.get(sid)
+                        if not storefront:
+                            continue
+                        p = float(d.get("price") or 0.0)
+                        retail = float(d.get("retailPrice") or p)
+                        savings = int(float(d.get("savings") or 0))
+                        deal_id = d.get("dealID")
+                        store_url = f"https://www.cheapshark.com/redirect?dealID={deal_id}" if deal_id else ""
+                        plat_label = f"PC ({storefront.upper() if storefront != 'gmg' else 'Green Man Gaming'})"
+                        db.upsert_edition_sku(
+                            edition_id=ed["id"],
+                            platform_family="PC",
+                            platform_label=plat_label,
+                            storefront=storefront,
+                            store_sku_id=gid,
+                            store_url=store_url,
+                            current_price_usd=p,
+                            regular_price_usd=retail,
+                            discount_pct=savings,
+                            historical_low_usd=atl,
+                            is_authorized_seller=True,
+                            is_drm_free=(storefront == "gog"),
+                            db_path=db_path,
+                        )
+                        discovered_skus += 1
+        except Exception as e:
+            logger.warning("PC CheapShark discovery failed for %s: %s", title, e)
+
+        # B) Steam Store Direct discovery (official appdetails, package_groups / editions)
+        try:
+            steam = SteamStoreAdapter()
+            steam_items = await steam.search_games(title)
+            for item_data in steam_items:
+                s_name = item_data.get("name") or ""
+                if not matches_canonical_title(title, s_name):
+                    continue
+                appid = item_data.get("id")
+                if not appid:
+                    continue
+                app_details = await steam.get_app_details(appid)
+                if app_details:
+                    p_overview = app_details.get("price_overview")
+                    cur_price = float(p_overview.get("final") or 0) / 100.0 if p_overview else None
+                    reg_price = float(p_overview.get("initial") or 0) / 100.0 if p_overview else cur_price
+                    disc = int(p_overview.get("discount_percent") or 0) if p_overview else 0
+                    store_url = f"https://store.steampowered.com/app/{appid}"
+
+                    db.upsert_edition_sku(
+                        edition_id=base_edition["id"],
+                        platform_family="PC",
+                        platform_label="PC (Steam)",
+                        storefront="steam",
+                        store_sku_id=str(appid),
+                        store_url=store_url,
+                        current_price_usd=cur_price,
+                        regular_price_usd=reg_price,
+                        discount_pct=disc,
+                        is_authorized_seller=True,
+                        is_drm_free=False,
+                        db_path=db_path,
+                    )
+                    discovered_skus += 1
+
+                    for pkg_group in app_details.get("package_groups") or []:
+                        for sub in pkg_group.get("subs") or []:
+                            sub_text = sub.get("option_text") or ""
+                            sub_ed = extract_edition_name(sub_text, default="")
+                            if sub_ed and sub_ed != "Standard Edition":
+                                ed_obj = _get_or_create_edition(sub_ed)
+                                sub_cents = sub.get("price_in_cents_with_discount")
+                                sub_p = float(sub_cents) / 100.0 if sub_cents is not None else cur_price
+                                sub_disc = int(sub.get("percent_savings") or 0)
+                                sub_reg = round(sub_p / (1.0 - sub_disc / 100.0), 2) if (sub_p and sub_disc > 0) else sub_p
+                                sub_id = str(sub.get("packageid"))
+                                db.upsert_edition_sku(
+                                    edition_id=ed_obj["id"],
+                                    platform_family="PC",
+                                    platform_label="PC (Steam)",
+                                    storefront="steam",
+                                    store_sku_id=f"{appid}:{sub_id}",
+                                    store_url=store_url,
+                                    current_price_usd=sub_p,
+                                    regular_price_usd=sub_reg,
+                                    discount_pct=sub_disc,
+                                    is_authorized_seller=True,
+                                    is_drm_free=False,
+                                    db_path=db_path,
+                                )
+                                discovered_skus += 1
+                break
+        except Exception as e:
+            logger.warning("Steam direct discovery failed for %s: %s", title, e)
+
+        # C) GOG Direct Catalog discovery
+        try:
+            gog = GOGDirectAdapter()
+            gog_prods = await gog.search_catalog(title)
+            for prod in gog_prods:
+                p_title = prod.get("title") or ""
+                if not matches_canonical_title(title, p_title):
+                    continue
+                pid = str(prod.get("id"))
+                ed_name = extract_edition_name(p_title, default="Standard Edition")
+                ed_obj = _get_or_create_edition(ed_name)
+                p_data = prod.get("price") or {}
+                cur = float(p_data.get("final") or 0) if p_data.get("final") else None
+                reg = float(p_data.get("base") or cur) if p_data.get("base") else cur
+                disc = int(p_data.get("discount") or 0)
+                slug = prod.get("slug") or ""
+                store_url = f"https://www.gog.com/en/game/{slug}" if slug else f"https://www.gog.com/game/{pid}"
+                db.upsert_edition_sku(
+                    edition_id=ed_obj["id"],
+                    platform_family="PC",
+                    platform_label="PC (GOG)",
+                    storefront="gog",
+                    store_sku_id=pid,
+                    store_url=store_url,
+                    current_price_usd=cur,
+                    regular_price_usd=reg,
+                    discount_pct=disc,
+                    is_authorized_seller=True,
+                    is_drm_free=True,
+                    db_path=db_path,
+                )
+                discovered_skus += 1
+        except Exception as e:
+            logger.warning("GOG direct discovery failed for %s: %s", title, e)
+
+    # 2. Xbox Discovery
+    if "Xbox" in needed_families:
+        try:
+            xb = XboxCatalogAdapter()
+            suggests = await xb.search_autosuggest(title)
+            xb_big_ids: List[str] = []
+            xb_ed_by_id: Dict[str, str] = {}
+            for s in suggests:
+                s_title = s.get("Title") or ""
+                big_id = s.get("Id") or ""
+                if len(big_id) == 12 and matches_canonical_title(title, s_title):
+                    ed_name = extract_edition_name(s_title, default="Standard Edition")
+                    xb_big_ids.append(big_id)
+                    xb_ed_by_id[big_id] = ed_name
+
+            if xb_big_ids:
+                prices = await xb.get_prices_for_big_ids(xb_big_ids)
+                slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+                for bid in xb_big_ids:
+                    p = prices.get(bid)
+                    if p:
+                        ed_name = xb_ed_by_id[bid]
+                        ed_obj = _get_or_create_edition(ed_name)
+                        plat_label = p.get("platform_label", "Xbox Series X|S")
+                        store_url = f"https://www.xbox.com/en-us/games/store/{slug}/{bid}"
+                        db.upsert_edition_sku(
+                            edition_id=ed_obj["id"],
+                            platform_family="Xbox",
+                            platform_label=plat_label,
+                            storefront="xbox_store",
+                            store_sku_id=bid,
+                            store_url=store_url,
+                            current_price_usd=p.get("current_price_usd"),
+                            regular_price_usd=p.get("regular_price_usd"),
+                            discount_pct=p.get("discount_pct", 0),
+                            is_authorized_seller=True,
+                            is_drm_free=False,
+                            db_path=db_path,
+                        )
+                        discovered_skus += 1
+        except Exception as e:
+            logger.warning("Xbox discovery failed for %s: %s", title, e)
+
+    # 3. PlayStation Discovery & Resilient Fallback
+    if "PlayStation" in needed_families:
+        ps_sku_count_before = discovered_skus
+        try:
+            psn = PSNStoreGraphQLAdapter()
+            ps_items = await psn.search_products(title)
+            for psi in ps_items:
+                psi_title = psi.get("title") or ""
+                pid = psi.get("id") or ""
+                if pid and matches_canonical_title(title, psi_title):
+                    price_info = await psn.get_product_price(pid)
+                    if price_info:
+                        ed_name = extract_edition_name(psi_title, default="Standard Edition")
+                        ed_obj = _get_or_create_edition(ed_name)
+                        db.upsert_edition_sku(
+                            edition_id=ed_obj["id"],
+                            platform_family="PlayStation",
+                            platform_label=price_info.get("platform_label", "PS5"),
+                            storefront="psn_store",
+                            store_sku_id=pid,
+                            store_url=f"https://store.playstation.com/en-us/product/{pid}",
+                            current_price_usd=price_info.get("current_price_usd"),
+                            regular_price_usd=price_info.get("regular_price_usd"),
+                            discount_pct=price_info.get("discount_pct", 0),
+                            is_authorized_seller=True,
+                            is_drm_free=False,
+                            db_path=db_path,
+                        )
+                        discovered_skus += 1
+        except Exception as e:
+            logger.warning("PSN GraphQL search failed for %s: %s", title, e)
+
+        # Resilient Fallback: if no PSN SKU was created (due to query hash / blocked search)
+        if discovered_skus == ps_sku_count_before:
+            all_eds = db.list_game_editions(c_id, db_path=db_path)
+            slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+            clean_title_enc = quote(title)
+
+            with db.get_connection(db_path) as conn:
+                xb_rows = conn.execute(
+                    """
+                    SELECT s.edition_id, s.regular_price_usd, s.current_price_usd
+                    FROM edition_platform_skus s
+                    JOIN game_editions e ON s.edition_id = e.id
+                    WHERE e.canonical_game_id = ? AND s.platform_family = 'Xbox'
+                    """,
+                    (c_id,),
+                ).fetchall()
+                xb_by_edition = {r["edition_id"]: r for r in xb_rows}
+
+            for ed_item in all_eds:
+                with db.get_connection(db_path) as conn:
+                    existing_ps = conn.execute(
+                        "SELECT id FROM edition_platform_skus WHERE edition_id = ? AND platform_family = 'PlayStation'",
+                        (ed_item["id"],),
+                    ).fetchone()
+                if not existing_ps:
+                    ed_tier = ed_item.get("edition_tier") or "base"
+                    suffix = f"-{ed_tier}" if ed_tier != "base" else ""
+                    ps_sku_id = f"psn-{slug}{suffix}"
+                    xb_ref = xb_by_edition.get(ed_item["id"])
+                    ref_reg = xb_ref["regular_price_usd"] if xb_ref and xb_ref["regular_price_usd"] else None
+                    ref_cur = xb_ref["regular_price_usd"] if xb_ref and xb_ref["regular_price_usd"] else None
+                    db.upsert_edition_sku(
+                        edition_id=ed_item["id"],
+                        platform_family="PlayStation",
+                        platform_label="PS5",
+                        storefront="psn_store",
+                        store_sku_id=ps_sku_id,
+                        store_url=f"https://store.playstation.com/en-us/search/{clean_title_enc}",
+                        current_price_usd=ref_cur,
+                        regular_price_usd=ref_reg,
+                        discount_pct=0,
+                        is_authorized_seller=True,
+                        is_drm_free=False,
+                        db_path=db_path,
+                    )
+                    discovered_skus += 1
+
+    return {
+        "discovered_editions": discovered_editions,
+        "discovered_skus": discovered_skus,
+    }
+
+
+async def discover_missing_skus_for_db(db_path: Optional[str] = None) -> int:
+    """Finds active wishlist items missing SKUs and discovers them."""
+    with db.get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT w.id, w.canonical_game_id
+            FROM wishlist_items w
+            WHERE w.status = 'active'
+            """
+        ).fetchall()
+
+    total_discovered_skus = 0
+    for r in rows:
+        item_id = r["id"]
+        item = db.get_wishlist_item(item_id, db_path=db_path)
+        if not item:
+            continue
+        targets = [t for t in item.get("targets", []) if t.get("is_active") and not t.get("muted_owned_conflict")]
+        target_fams = {t["platform_family"] for t in targets}
+        existing_fams = {s["platform_family"] for s in item.get("skus", [])}
+        if not item.get("skus") or (target_fams - existing_fams):
+            res = await discover_skus_for_item(item_id, db_path=db_path)
+            total_discovered_skus += res.get("discovered_skus", 0)
+    return total_discovered_skus
+
+
+# ==============================================================================
 # Daily Batch Sync Orchestrator
 # ==============================================================================
 
@@ -315,9 +910,16 @@ async def sync_wishlist_prices_for_db(
 ) -> Dict[str, Any]:
     """
     Orchestrates batch price updates for all active wishlist SKUs in a database.
-    Splits requests into chunks of 20-25 IDs, applies jitter, isolates adapter errors,
+    Automatically runs SKU/edition discovery for newly added or missing items,
+    splits requests into chunks of 20-25 IDs, applies jitter, isolates adapter errors,
     updates price_history/ATL, evaluates deals, and dispatches push alerts.
     """
+    # 0. Discover missing editions and SKUs for active wishlist items
+    try:
+        await discover_missing_skus_for_db(db_path=db_path)
+    except Exception as e:
+        logger.warning("Error during discover_missing_skus_for_db: %s", e)
+
     with db.get_connection(db_path) as conn:
         active_skus = conn.execute(
             """
@@ -335,6 +937,7 @@ async def sync_wishlist_prices_for_db(
     # Group SKUs by storefront adapter
     itad_skus: List[Dict[str, Any]] = []
     cheapshark_skus: List[Dict[str, Any]] = []
+    steam_skus: List[Dict[str, Any]] = []
     gog_skus: List[Dict[str, Any]] = []
     xbox_skus: List[Dict[str, Any]] = []
     psn_skus: List[Dict[str, Any]] = []
@@ -342,15 +945,18 @@ async def sync_wishlist_prices_for_db(
     for s in active_skus:
         sf = s["storefront"]
         sd = dict(s)
+        sku_id_str = str(sd.get("store_sku_id") or "")
         if sd.get("itad_plain"):
             itad_skus.append(sd)
-        elif sf in ("cheapshark", "steam", "fanatical", "humble", "gmg") and sd.get("store_sku_id"):
+        elif sf == "steam" and sku_id_str and sku_id_str.replace(":", "").isdigit():
+            steam_skus.append(sd)
+        elif sf in ("cheapshark", "steam", "fanatical", "humble", "gmg", "epic") and sku_id_str:
             cheapshark_skus.append(sd)
-        elif sf == "gog" and sd.get("store_sku_id"):
+        elif sf == "gog" and sku_id_str:
             gog_skus.append(sd)
-        elif sf == "xbox_store" and sd.get("store_sku_id"):
+        elif sf == "xbox_store" and sku_id_str:
             xbox_skus.append(sd)
-        elif sf == "psn_store" and sd.get("store_sku_id"):
+        elif sf == "psn_store" and sku_id_str:
             psn_skus.append(sd)
 
     updated_count = 0
@@ -378,14 +984,38 @@ async def sync_wishlist_prices_for_db(
         except Exception as e:
             logger.warning("Error during ITAD batch sync: %s", e)
 
-    # 2. Process CheapShark SKUs
+    # 2. Process Steam Direct SKUs
+    if steam_skus:
+        try:
+            steam = SteamStoreAdapter()
+            app_ids = list({s["store_sku_id"].split(":")[0] for s in steam_skus if s.get("store_sku_id")})
+            prices = await steam.get_prices_for_app_ids(app_ids)
+            for s in steam_skus:
+                aid = s["store_sku_id"].split(":")[0]
+                p = prices.get(aid)
+                if p:
+                    db.record_sku_price(
+                        sku_id=s["id"],
+                        price_usd=p["current_price_usd"],
+                        regular_price_usd=p.get("regular_price_usd"),
+                        discount_pct=p.get("discount_pct"),
+                        source="steam_store",
+                        db_path=db_path,
+                    )
+                    updated_count += 1
+            if jitter:
+                await asyncio.sleep(random.uniform(0.1, 0.3))
+        except Exception as e:
+            logger.warning("Error during Steam batch sync: %s", e)
+
+    # 3. Process CheapShark SKUs
     if cheapshark_skus:
         try:
             cs = CheapSharkAdapter()
-            ids = [s["store_sku_id"] for s in cheapshark_skus if s.get("store_sku_id")]
+            ids = list({s["store_sku_id"] for s in cheapshark_skus if s.get("store_sku_id")})
             prices = await cs.get_prices_for_game_ids(ids)
             for s in cheapshark_skus:
-                p = prices.get(s["store_sku_id"])
+                p = prices.get(f"{s['store_sku_id']}:{s['storefront']}") or prices.get(s["store_sku_id"])
                 if p:
                     db.record_sku_price(
                         sku_id=s["id"],
