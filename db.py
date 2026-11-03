@@ -2436,10 +2436,13 @@ EDITION_TIER_RANKS = {
     "base": 1,
     "standard": 1,
     "deluxe": 2,
+    "special": 2,
     "gold": 3,
     "complete": 3,
+    "definitive": 3,
     "ultimate": 4,
     "goty": 4,
+    "legendary": 4,
     "collector": 5,
 }
 
@@ -2467,11 +2470,19 @@ def infer_edition_tier(edition_name: str) -> Tuple[str, int]:
         return ("collector", 5)
     if "ultimate" in name:
         return ("ultimate", 4)
+    if "legendary" in name:
+        return ("ultimate", 4)
     if "premium" in name:
         return ("ultimate", 4)
     if "goty" in name or "game of the year" in name:
         return ("goty", 4)
     if "complete" in name:
+        return ("complete", 3)
+    if "definitive" in name:
+        return ("complete", 3)
+    if "voidheart" in name:
+        return ("complete", 3)
+    if "legacy" in name:
         return ("complete", 3)
     if "gold" in name:
         return ("gold", 3)
@@ -2482,6 +2493,8 @@ def infer_edition_tier(edition_name: str) -> Tuple[str, int]:
     if "director" in name:
         return ("deluxe", 2)
     if "enhanced" in name:
+        return ("deluxe", 2)
+    if "special" in name:
         return ("deluxe", 2)
     return ("base", 1)
 

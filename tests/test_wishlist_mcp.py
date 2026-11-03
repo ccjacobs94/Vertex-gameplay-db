@@ -18,9 +18,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import db
+import wishlist_sync
 
 try:
     import mcp_server
@@ -37,6 +38,14 @@ class TestWishlistMCP(unittest.IsolatedAsyncioTestCase):
         self.db_path = str(Path(self.temp_dir.name) / "mcp_test.db")
         db.init_db(self.db_path)
 
+        # Mock wishlist_sync auto-discovery to prevent external network calls during MCP unit tests
+        self._patcher_discover = patch(
+            "wishlist_sync.discover_skus_for_item",
+            new_callable=AsyncMock,
+            return_value={"discovered_editions": 0, "discovered_skus": 0},
+        )
+        self._patcher_discover.start()
+
         # Patch db calls in mcp_server to use self.db_path
         self._orig_add_wishlist = db.add_wishlist_item
         self._orig_get_wishlist = db.get_wishlist_item
@@ -48,6 +57,7 @@ class TestWishlistMCP(unittest.IsolatedAsyncioTestCase):
         self._orig_conflict = db.check_library_ownership_conflicts
 
     async def asyncTearDown(self):
+        self._patcher_discover.stop()
         self.temp_dir.cleanup()
 
     @patch("mcp_server.search_external_metadata")

@@ -337,20 +337,35 @@ class TestWishlistSyncAndPush(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(wishlist_sync.matches_canonical_title("Hades", "Hades II"))
         self.assertFalse(wishlist_sync.matches_canonical_title("Forza Horizon 5", "Forza Horizon 4"))
         self.assertFalse(wishlist_sync.matches_canonical_title("Portal", "Portal 2"))
+        self.assertFalse(wishlist_sync.matches_canonical_title("Portal", "Portal 2: Standard Edition"))
+        self.assertFalse(wishlist_sync.matches_canonical_title("Hollow Knight", "Hollow Knight: Silksong"))
 
         # Edition variations of the canonical game must match
         self.assertTrue(wishlist_sync.matches_canonical_title("Hades II", "Hades II - Deluxe Edition"))
         self.assertTrue(wishlist_sync.matches_canonical_title("Forza Horizon 5", "Forza Horizon 5 Premium Edition"))
         self.assertTrue(wishlist_sync.matches_canonical_title("Cyberpunk 2077", "Cyberpunk 2077: Ultimate Edition"))
         self.assertTrue(wishlist_sync.matches_canonical_title("The Witcher 3: Wild Hunt", "The Witcher 3: Wild Hunt - Complete Edition"))
+        self.assertTrue(wishlist_sync.matches_canonical_title("Hollow Knight", "Hollow Knight: Voidheart Edition"))
+        self.assertTrue(wishlist_sync.matches_canonical_title("Grand Theft Auto V", "Grand Theft Auto V: Premium Online Edition"))
+        self.assertTrue(wishlist_sync.matches_canonical_title("Dishonored", "Dishonored: Definitive Edition"))
+        self.assertTrue(wishlist_sync.matches_canonical_title("DOOM (2016)", "DOOM"))
+        self.assertTrue(wishlist_sync.matches_canonical_title("DOOM", "DOOM (2016)"))
 
         # Edition extraction
-        self.assertEqual(wishlist_sync.extract_edition_name("Hades II - Deluxe Edition"), "Deluxe Edition")
-        self.assertEqual(wishlist_sync.extract_edition_name("Forza Horizon 5 Premium Edition"), "Premium Edition")
-        self.assertEqual(wishlist_sync.extract_edition_name("Cyberpunk 2077: Ultimate Edition"), "Ultimate Edition")
-        self.assertEqual(wishlist_sync.extract_edition_name("Death Stranding Director's Cut"), "Director's Cut")
-        self.assertEqual(wishlist_sync.extract_edition_name("The Witcher 3 - Complete Edition"), "Complete Edition")
-        self.assertEqual(wishlist_sync.extract_edition_name("Persona 5 Royal - Standard Edition"), "Standard Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Hades II - Deluxe Edition", canonical_title="Hades II"), "Deluxe Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Forza Horizon 5 Premium Edition", canonical_title="Forza Horizon 5"), "Premium Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Cyberpunk 2077: Ultimate Edition", canonical_title="Cyberpunk 2077"), "Ultimate Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Death Stranding Director's Cut", canonical_title="Death Stranding"), "Director's Cut")
+        self.assertEqual(wishlist_sync.extract_edition_name("The Witcher 3 - Complete Edition", canonical_title="The Witcher 3"), "Complete Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Dishonored: Definitive Edition", canonical_title="Dishonored"), "Definitive Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Hollow Knight: Voidheart Edition", canonical_title="Hollow Knight"), "Complete Edition")
+
+        # Edge cases: titles containing words that resemble editions must NOT be treated as special editions
+        self.assertEqual(wishlist_sync.extract_edition_name("Golden Axe", canonical_title="Golden Axe"), "Standard Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("GoldenEye 007", canonical_title="GoldenEye 007"), "Standard Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("The Collector", canonical_title="The Collector"), "Standard Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Tomb Raider: Anniversary", canonical_title="Tomb Raider: Anniversary"), "Standard Edition")
+        self.assertEqual(wishlist_sync.extract_edition_name("Tomb Raider: Anniversary - Deluxe Edition", canonical_title="Tomb Raider: Anniversary"), "Deluxe Edition")
 
     @patch("httpx.AsyncClient.get")
     async def test_auto_discovery_newly_added_wishlist_item_zero_initial_skus(self, mock_get):
@@ -447,10 +462,11 @@ class TestWishlistSyncAndPush(unittest.IsolatedAsyncioTestCase):
 
             if "displaycatalog.mp.microsoft.com/v7.0/productFamilies/autosuggest" in url_str:
                 resp.json.return_value = {
-                    "ResultSets": [
+                    "Results": [
                         {
-                            "Suggests": [
-                                {"Title": "Hades II", "Id": "9NBLGGH4R6P9", "ProductFamilyName": "Games"}
+                            "ProductFamilyName": "Games",
+                            "Products": [
+                                {"Title": "Hades II", "ProductId": "9NBLGGH4R6P9", "Type": "Game"}
                             ]
                         }
                     ]
@@ -516,6 +532,11 @@ class TestWishlistSyncAndPush(unittest.IsolatedAsyncioTestCase):
         self.assertIn("PC", platforms)
         self.assertIn("Xbox", platforms)
         self.assertIn("PlayStation", platforms)
+
+        # Verify no duplicate Steam SKUs exist for Standard Edition
+        std_ed = [e for e in editions if e["edition_name"] == "Standard Edition"][0]
+        std_steam = [s for s in skus if s["edition_id"] == std_ed["id"] and s["storefront"] == "steam"]
+        self.assertEqual(len(std_steam), 1)
 
         # Verify historical low ATL was recorded from CheapShark ($19.99)
         cs_skus = [s for s in skus if s["storefront"] in ("cheapshark", "steam", "epic")]
@@ -624,6 +645,65 @@ class TestWishlistSyncAndPush(unittest.IsolatedAsyncioTestCase):
         ps_skus = [s for s in updated_item["skus"] if s["platform_family"] == "PlayStation"]
         self.assertGreaterEqual(len(ps_skus), 1)
         self.assertEqual(ps_skus[0]["storefront"], "psn_store")
+
+    @patch("httpx.AsyncClient.get")
+    async def test_playstation_resilient_fallback_cross_references_pc_msrp(self, mock_get):
+        # PC Steam returns $59.99 while PlayStation GraphQL search blocks or fails
+        def mock_router(url, *args, **kwargs):
+            url_str = str(url)
+            resp = MagicMock()
+            if "store.steampowered.com/api/storesearch" in url_str:
+                resp.status_code = 200
+                resp.json.return_value = {
+                    "total": 1,
+                    "items": [{"id": 1091500, "name": "Cyberpunk 2077"}],
+                }
+                return resp
+            if "store.steampowered.com/api/appdetails" in url_str:
+                resp.status_code = 200
+                resp.json.return_value = {
+                    "1091500": {
+                        "success": True,
+                        "data": {
+                            "name": "Cyberpunk 2077",
+                            "price_overview": {"final": 5999, "initial": 5999, "discount_percent": 0},
+                        },
+                    }
+                }
+                return resp
+            if "playstation.com" in url_str:
+                resp.status_code = 403
+                return resp
+            resp.status_code = 404
+            return resp
+
+        mock_get.side_effect = mock_router
+
+        # User watches ONLY PC and PlayStation (no Xbox)
+        item = db.add_wishlist_item(
+            title="Cyberpunk 2077",
+            platform_targets=[
+                {"platform": "PC", "target_price_usd": 30.00},
+                {"platform": "PlayStation", "target_price_usd": 30.00},
+            ],
+            db_path=self.db_path,
+        )
+
+        results = await wishlist_sync.sync_wishlist_prices_for_db(db_path=self.db_path)
+        self.assertGreater(results["updated_skus"], 0)
+
+        updated_item = db.get_wishlist_item(item["id"], db_path=self.db_path)
+        ps_skus = [s for s in updated_item["skus"] if s["platform_family"] == "PlayStation"]
+        self.assertGreaterEqual(len(ps_skus), 1)
+        ps_sku = ps_skus[0]
+        # PlayStation fallback MUST cross-reference PC price ($59.99) instead of remaining None
+        self.assertEqual(ps_sku["regular_price_usd"], 59.99)
+        self.assertEqual(ps_sku["current_price_usd"], 59.99)
+
+        # Price history row must exist for the cross-referenced price
+        history = db.get_sku_price_history(ps_sku["id"], db_path=self.db_path)
+        self.assertGreaterEqual(len(history), 1)
+        self.assertEqual(history[0]["price_usd"], 59.99)
 
 
 if __name__ == "__main__":

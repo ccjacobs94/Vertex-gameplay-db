@@ -337,9 +337,22 @@ class XboxCatalogAdapter:
                 resp = await client.get(url, params=params)
                 if resp.status_code == 200:
                     data = resp.json()
-                    result_sets = data.get("ResultSets") or []
-                    if result_sets:
-                        return result_sets[0].get("Suggests") or []
+                    results: List[Dict[str, Any]] = []
+                    # Format 1 (real Microsoft Display Catalog API): Results -> Products
+                    for res in data.get("Results") or []:
+                        for p in res.get("Products") or []:
+                            pid = p.get("ProductId") or p.get("Id") or ""
+                            title = p.get("Title") or ""
+                            if pid and len(pid) == 12:
+                                results.append({"Id": pid, "Title": title, "ProductFamilyName": "Games"})
+                    # Format 2 (mock/alternate response): ResultSets -> Suggests
+                    for rset in data.get("ResultSets") or []:
+                        for s in rset.get("Suggests") or []:
+                            pid = s.get("Id") or s.get("ProductId") or ""
+                            title = s.get("Title") or ""
+                            if pid and len(pid) == 12:
+                                results.append({"Id": pid, "Title": title, "ProductFamilyName": s.get("ProductFamilyName", "Games")})
+                    return results
             except Exception as e:
                 logger.warning("XboxCatalogAdapter search_autosuggest failed: %s", e)
         return []
@@ -482,7 +495,9 @@ EDITION_KEYWORDS = {
     "collector", "collectors", "standard", "special", "anniversary",
     "directors", "director", "cut", "bundle", "pack", "pass", "plus",
     "enhanced", "expanded", "remastered", "digital", "launch", "day", "one",
-    "season", "edition", "year",
+    "season", "edition", "year", "definitive", "voidheart", "super",
+    "collection", "legacy", "royal", "online", "original", "remaster",
+    "platinum", "silver", "classic", "legendary", "master",
 }
 
 
@@ -497,39 +512,76 @@ def matches_canonical_title(canonical_title: str, candidate_title: str) -> bool:
     c_words = c_norm.split()
     if t_words == c_words:
         return True
+
+    # Candidate has extra words (e.g. edition name or subtitle)
     if len(c_words) > len(t_words) and c_words[:len(t_words)] == t_words:
         extra = set(c_words[len(t_words):])
-        if extra.issubset(EDITION_KEYWORDS):
+        # Disallow sequel numbers (e.g. '2', '3', '4') unless they were already in canonical
+        sequel_numbers = {w for w in extra if w.isdigit() and len(w) < 4}
+        if sequel_numbers:
+            return False
+        if all(w in EDITION_KEYWORDS or (w.isdigit() and 1990 <= int(w) <= 2035) for w in extra):
             return True
+
+    # Canonical has extra edition words (user entered e.g. 'The Witcher 3: Wild Hunt - Complete Edition')
     if len(t_words) > len(c_words) and t_words[:len(c_words)] == c_words:
         extra = set(t_words[len(c_words):])
-        if extra.issubset(EDITION_KEYWORDS):
+        sequel_numbers = {w for w in extra if w.isdigit() and len(w) < 4}
+        if sequel_numbers:
+            return False
+        if all(w in EDITION_KEYWORDS or (w.isdigit() and 1990 <= int(w) <= 2035) for w in extra):
             return True
+
     return False
 
 
-def extract_edition_name(candidate_title: str, default: str = "Standard Edition") -> str:
-    lower = (candidate_title or "").lower()
-    if "collector" in lower:
+def extract_edition_name(
+    candidate_title: str,
+    canonical_title: str = "",
+    default: str = "Standard Edition",
+) -> str:
+    title_norm = (canonical_title or "").lower()
+    cand_lower = (candidate_title or "").lower()
+
+    # If canonical title is provided, isolate the extra edition subtitle/suffix
+    remainder = cand_lower
+    if title_norm:
+        for word in title_norm.split():
+            clean_w = re.sub(r"[^a-z0-9]", "", word)
+            if clean_w:
+                remainder = re.sub(r"\b" + re.escape(clean_w) + r"\b", " ", remainder)
+
+    # Inspect the extra edition terms with word boundary matching
+    if re.search(r"\bcollectors?\b", remainder):
         return "Collector's Edition"
-    if "ultimate" in lower:
+    if re.search(r"\bultimate\b", remainder):
         return "Ultimate Edition"
-    if "premium" in lower:
+    if re.search(r"\blegendary\b", remainder):
+        return "Legendary Edition"
+    if re.search(r"\bpremium\b", remainder):
         return "Premium Edition"
-    if "goty" in lower or "game of the year" in lower:
+    if re.search(r"\b(goty|game of the year)\b", remainder):
         return "Game of the Year Edition"
-    if "complete" in lower:
+    if re.search(r"\bcomplete\b", remainder):
         return "Complete Edition"
-    if "gold" in lower:
+    if re.search(r"\bvoidheart\b", remainder):
+        return "Complete Edition"
+    if re.search(r"\bdefinitive\b", remainder):
+        return "Definitive Edition"
+    if re.search(r"\blegacy\b", remainder):
+        return "Legacy Edition"
+    if re.search(r"\bgold\b", remainder):
         return "Gold Edition"
-    if "deluxe" in lower:
+    if re.search(r"\bdeluxe\b", remainder):
         return "Deluxe Edition"
-    if "director" in lower:
+    if re.search(r"\bdirector('?s)?(\s+cut)?\b", remainder):
         return "Director's Cut"
-    if "anniversary" in lower:
+    if re.search(r"\banniversary\b", remainder):
         return "Anniversary Edition"
-    if "enhanced" in lower:
+    if re.search(r"\benhanced\b", remainder):
         return "Enhanced Edition"
+    if re.search(r"\bspecial\b", remainder):
+        return "Special Edition"
     return default
 
 
@@ -607,7 +659,10 @@ async def discover_skus_for_item(
                 if not matches_canonical_title(title, cand_title):
                     continue
                 gid = str(cs_item.get("gameID"))
-                ed_name = extract_edition_name(cand_title, default="Standard Edition")
+                steam_app_id = str(cs_item.get("steamAppID") or "").strip()
+                if steam_app_id == "0":
+                    steam_app_id = ""
+                ed_name = extract_edition_name(cand_title, canonical_title=title, default="Standard Edition")
                 ed = _get_or_create_edition(ed_name)
 
                 details = await cs.get_game_details(gid)
@@ -615,6 +670,10 @@ async def discover_skus_for_item(
                     deals = details.get("deals") or []
                     cheapest_ever = details.get("cheapestPriceEver", {}).get("price")
                     atl = float(cheapest_ever) if cheapest_ever else None
+                    if not steam_app_id:
+                        steam_app_id = str(details.get("info", {}).get("steamAppID") or "").strip()
+                        if steam_app_id == "0":
+                            steam_app_id = ""
                     for d in deals:
                         sid = str(d.get("storeID"))
                         storefront = cs.STORE_MAP.get(sid)
@@ -626,12 +685,17 @@ async def discover_skus_for_item(
                         deal_id = d.get("dealID")
                         store_url = f"https://www.cheapshark.com/redirect?dealID={deal_id}" if deal_id else ""
                         plat_label = f"PC ({storefront.upper() if storefront != 'gmg' else 'Green Man Gaming'})"
+                        if storefront == "steam" and steam_app_id:
+                            sku_id_val = steam_app_id
+                        else:
+                            sku_id_val = gid
+
                         db.upsert_edition_sku(
                             edition_id=ed["id"],
                             platform_family="PC",
                             platform_label=plat_label,
                             storefront=storefront,
-                            store_sku_id=gid,
+                            store_sku_id=sku_id_val,
                             store_url=store_url,
                             current_price_usd=p,
                             regular_price_usd=retail,
@@ -683,7 +747,7 @@ async def discover_skus_for_item(
                     for pkg_group in app_details.get("package_groups") or []:
                         for sub in pkg_group.get("subs") or []:
                             sub_text = sub.get("option_text") or ""
-                            sub_ed = extract_edition_name(sub_text, default="")
+                            sub_ed = extract_edition_name(sub_text, canonical_title=title, default="")
                             if sub_ed and sub_ed != "Standard Edition":
                                 ed_obj = _get_or_create_edition(sub_ed)
                                 sub_cents = sub.get("price_in_cents_with_discount")
@@ -704,7 +768,7 @@ async def discover_skus_for_item(
                                     is_authorized_seller=True,
                                     is_drm_free=False,
                                     db_path=db_path,
-                                )
+                                    )
                                 discovered_skus += 1
                 break
         except Exception as e:
@@ -719,7 +783,7 @@ async def discover_skus_for_item(
                 if not matches_canonical_title(title, p_title):
                     continue
                 pid = str(prod.get("id"))
-                ed_name = extract_edition_name(p_title, default="Standard Edition")
+                ed_name = extract_edition_name(p_title, canonical_title=title, default="Standard Edition")
                 ed_obj = _get_or_create_edition(ed_name)
                 p_data = prod.get("price") or {}
                 cur = float(p_data.get("final") or 0) if p_data.get("final") else None
@@ -756,7 +820,7 @@ async def discover_skus_for_item(
                 s_title = s.get("Title") or ""
                 big_id = s.get("Id") or ""
                 if len(big_id) == 12 and matches_canonical_title(title, s_title):
-                    ed_name = extract_edition_name(s_title, default="Standard Edition")
+                    ed_name = extract_edition_name(s_title, canonical_title=title, default="Standard Edition")
                     xb_big_ids.append(big_id)
                     xb_ed_by_id[big_id] = ed_name
 
@@ -800,7 +864,7 @@ async def discover_skus_for_item(
                 if pid and matches_canonical_title(title, psi_title):
                     price_info = await psn.get_product_price(pid)
                     if price_info:
-                        ed_name = extract_edition_name(psi_title, default="Standard Edition")
+                        ed_name = extract_edition_name(psi_title, canonical_title=title, default="Standard Edition")
                         ed_obj = _get_or_create_edition(ed_name)
                         db.upsert_edition_sku(
                             edition_id=ed_obj["id"],
@@ -827,16 +891,23 @@ async def discover_skus_for_item(
             clean_title_enc = quote(title)
 
             with db.get_connection(db_path) as conn:
-                xb_rows = conn.execute(
+                ref_rows = conn.execute(
                     """
-                    SELECT s.edition_id, s.regular_price_usd, s.current_price_usd
+                    SELECT s.edition_id, s.regular_price_usd, s.current_price_usd, s.platform_family
                     FROM edition_platform_skus s
                     JOIN game_editions e ON s.edition_id = e.id
-                    WHERE e.canonical_game_id = ? AND s.platform_family = 'Xbox'
+                    WHERE e.canonical_game_id = ? AND (s.regular_price_usd IS NOT NULL OR s.current_price_usd IS NOT NULL)
+                    ORDER BY (CASE WHEN s.platform_family = 'Xbox' THEN 1 WHEN s.platform_family = 'PC' THEN 2 ELSE 3 END)
                     """,
                     (c_id,),
                 ).fetchall()
-                xb_by_edition = {r["edition_id"]: r for r in xb_rows}
+                ref_by_edition = {}
+                any_ref = None
+                for r in ref_rows:
+                    if r["edition_id"] not in ref_by_edition:
+                        ref_by_edition[r["edition_id"]] = r
+                    if any_ref is None:
+                        any_ref = r
 
             for ed_item in all_eds:
                 with db.get_connection(db_path) as conn:
@@ -845,12 +916,12 @@ async def discover_skus_for_item(
                         (ed_item["id"],),
                     ).fetchone()
                 if not existing_ps:
-                    ed_tier = ed_item.get("edition_tier") or "base"
-                    suffix = f"-{ed_tier}" if ed_tier != "base" else ""
-                    ps_sku_id = f"psn-{slug}{suffix}"
-                    xb_ref = xb_by_edition.get(ed_item["id"])
-                    ref_reg = xb_ref["regular_price_usd"] if xb_ref and xb_ref["regular_price_usd"] else None
-                    ref_cur = xb_ref["regular_price_usd"] if xb_ref and xb_ref["regular_price_usd"] else None
+                    ed_name = ed_item.get("edition_name") or "Standard Edition"
+                    ed_slug = re.sub(r"[^a-z0-9]+", "-", ed_name.lower()).strip("-")
+                    ps_sku_id = f"psn-{slug}" if ed_item.get("is_base_edition") else f"psn-{slug}-{ed_slug}"
+                    ref_data = ref_by_edition.get(ed_item["id"]) or any_ref
+                    ref_reg = ref_data["regular_price_usd"] if ref_data and ref_data["regular_price_usd"] else (ref_data["current_price_usd"] if ref_data else None)
+                    ref_cur = ref_data["current_price_usd"] if ref_data and ref_data["current_price_usd"] else ref_reg
                     db.upsert_edition_sku(
                         edition_id=ed_item["id"],
                         platform_family="PlayStation",
@@ -948,9 +1019,9 @@ async def sync_wishlist_prices_for_db(
         sku_id_str = str(sd.get("store_sku_id") or "")
         if sd.get("itad_plain"):
             itad_skus.append(sd)
-        elif sf == "steam" and sku_id_str and sku_id_str.replace(":", "").isdigit():
+        elif sf == "steam" and sku_id_str:
             steam_skus.append(sd)
-        elif sf in ("cheapshark", "steam", "fanatical", "humble", "gmg", "epic") and sku_id_str:
+        elif sf in ("cheapshark", "fanatical", "humble", "gmg", "epic") and sku_id_str:
             cheapshark_skus.append(sd)
         elif sf == "gog" and sku_id_str:
             gog_skus.append(sd)
