@@ -4100,6 +4100,40 @@ function updateWishlistKPIs(dealsData) {
   }
 }
 
+function formatWishlistStorefrontLabel(sf) {
+  const map = {
+    steam: "Steam",
+    gog: "GOG",
+    epic: "Epic Games",
+    fanatical: "Fanatical",
+    greenmangaming: "Green Man Gaming",
+    humblestore: "Humble Store",
+    gamersgate: "GamersGate",
+    xbox_store: "Xbox Store",
+    psn_store: "PlayStation Store",
+    manual: "Manual Report",
+  };
+  const key = String(sf || "").toLowerCase().trim();
+  return map[key] || (sf ? String(sf).replace(/_/g, " ") : "Storefront");
+}
+
+function formatWishlistLastScanTimestamp(isoStr) {
+  if (!isoStr) return "Not scanned yet";
+  try {
+    const normalized = isoStr.includes("T") ? (isoStr.endsWith("Z") || /[+-]\d\d:?\d\d$/.test(isoStr) ? isoStr : `${isoStr}Z`) : `${isoStr.replace(" ", "T")}Z`;
+    const d = new Date(normalized);
+    if (isNaN(d.getTime())) return isoStr;
+    return d.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch (_e) {
+    return isoStr;
+  }
+}
+
 function renderWishlistGrid() {
   const grid = document.getElementById("wishlist-grid");
   if (!grid) return;
@@ -4156,31 +4190,119 @@ function renderWishlistGrid() {
     const hasDeal = itemDeals.length > 0;
     const coverUrl = canonical.cover_url || "/static/vertex_logo.svg";
 
+    const editionsById = {};
+    for (const ed of item.editions || []) {
+      editionsById[ed.id] = ed;
+    }
+
+    const skusByFamily = {};
+    for (const sku of item.skus || []) {
+      const fam = sku.platform_family || "PC";
+      if (!skusByFamily[fam]) skusByFamily[fam] = [];
+      skusByFamily[fam].push(sku);
+    }
+
     const targetsHtml = (item.targets || []).map(target => {
       const fam = target.platform_family;
-      const targetDeal = itemDeals.find(d => d.platform_family === fam);
-      const isMet = Boolean(targetDeal);
-      let pillClass = "target-status-pill";
-      if (!target.is_active || target.muted_owned_conflict) {
-        pillClass += " muted";
-      } else if (isMet) {
-        pillClass += " met";
-      }
-
-      let priceText = `$${Number(target.target_price_usd).toFixed(2)}`;
-      let statusIndicator = `<span class="target-thresh">Target: ${priceText}</span>`;
-      if (targetDeal) {
-        statusIndicator = `<strong>$${targetDeal.current_price_usd.toFixed(2)}</strong> <span style="font-size: 0.75rem;">(Target ${priceText}) 🔥</span>`;
-      } else if (target.muted_owned_conflict) {
-        statusIndicator = `<span class="text-secondary" style="font-size: 0.75rem;">Muted (Owned)</span>`;
-      }
-
+      const targetPriceNum = Number(target.target_price_usd || 0);
+      const priceText = `$${targetPriceNum.toFixed(2)}`;
       const famIcon = fam === "Xbox" ? "🎮" : fam === "PlayStation" ? "🕹️" : "💻";
+      const familySkus = (skusByFamily[fam] || []).slice().sort((a, b) => {
+        const pa = a.current_price_usd !== null && a.current_price_usd !== undefined ? Number(a.current_price_usd) : 999999;
+        const pb = b.current_price_usd !== null && b.current_price_usd !== undefined ? Number(b.current_price_usd) : 999999;
+        return pa - pb;
+      });
+
+      const targetDeal = itemDeals.find(d => d.platform_family === fam);
+      const isMet = Boolean(targetDeal) || familySkus.some(
+        s => !target.muted_owned_conflict && target.is_active && s.current_price_usd !== null && s.current_price_usd !== undefined && Number(s.current_price_usd) <= targetPriceNum
+      );
+
+      let groupClass = "wishlist-platform-group";
+      if (!target.is_active || target.muted_owned_conflict) {
+        groupClass += " muted";
+      } else if (isMet) {
+        groupClass += " met";
+      }
+
+      let headerRight = `<span class="target-thresh">Target: <strong>${priceText}</strong></span>`;
+      if (target.muted_owned_conflict) {
+        headerRight = `<span class="text-secondary" style="font-size: 0.75rem;">Muted (Owned) &bull; Target: ${priceText}</span>`;
+      } else if (!target.is_active) {
+        headerRight = `<span class="text-secondary" style="font-size: 0.75rem;">Paused &bull; Target: ${priceText}</span>`;
+      } else if (isMet) {
+        headerRight = `<span class="target-thresh met-badge">Target: <strong>${priceText}</strong> 🔥</span>`;
+      }
+
+      let marketplaceRowsHtml = "";
+      if (familySkus.length === 0) {
+        marketplaceRowsHtml = `
+          <div class="marketplace-price-row empty">
+            <div class="marketplace-meta">
+              <span class="marketplace-name">No store listing found yet</span>
+              <span class="marketplace-scan-time">Last scan: Pending sync</span>
+            </div>
+            <div class="marketplace-price-compare">
+              <span class="marketplace-current-price unpriced">—</span>
+              <span class="marketplace-vs-sep">→</span>
+              <span class="marketplace-target-price">Target ${priceText}</span>
+            </div>
+          </div>
+        `;
+      } else {
+        marketplaceRowsHtml = familySkus.map(sku => {
+          const ed = editionsById[sku.edition_id] || {};
+          const isUpgradeEd = ed.edition_tier && ed.edition_tier !== "base";
+          const sfLabel = formatWishlistStorefrontLabel(sku.storefront);
+          const hasPrice = sku.current_price_usd !== null && sku.current_price_usd !== undefined;
+          const curPriceNum = hasPrice ? Number(sku.current_price_usd) : null;
+          const skuMet = hasPrice && !target.muted_owned_conflict && target.is_active && curPriceNum <= targetPriceNum;
+          const scanTimeStr = formatWishlistLastScanTimestamp(sku.last_checked_at);
+          const discountBadge = sku.discount_pct && Number(sku.discount_pct) > 0
+            ? `<span class="marketplace-discount-badge">-${Number(sku.discount_pct)}%</span>`
+            : "";
+          const editionBadge = isUpgradeEd && ed.edition_name
+            ? `<span class="marketplace-edition-tag">${escapeHtml(ed.edition_name)}</span>`
+            : "";
+          const storeNameNode = sku.store_url
+            ? `<a href="${escapeHtml(sku.store_url)}" target="_blank" rel="noopener noreferrer" class="marketplace-name-link" title="Open ${escapeHtml(sfLabel)} store page">${escapeHtml(sfLabel)} ↗</a>`
+            : `<span class="marketplace-name">${escapeHtml(sfLabel)}</span>`;
+
+          return `
+            <div class="marketplace-price-row ${skuMet ? 'deal-met' : ''}">
+              <div class="marketplace-meta">
+                <div class="marketplace-title-line">
+                  ${storeNameNode}
+                  ${editionBadge}
+                  ${discountBadge}
+                </div>
+                <div class="marketplace-scan-time" title="${escapeHtml(sku.last_checked_at || '')}">
+                  Last scan: ${escapeHtml(scanTimeStr)}
+                </div>
+              </div>
+              <div class="marketplace-price-compare">
+                <span class="marketplace-current-price ${skuMet ? 'met' : ''}">
+                  ${hasPrice ? `$${curPriceNum.toFixed(2)}` : '—'}
+                </span>
+                <span class="marketplace-vs-sep">/</span>
+                <span class="marketplace-target-price" title="Your ${escapeHtml(fam)} target price">
+                  Target ${priceText}
+                </span>
+              </div>
+            </div>
+          `;
+        }).join("");
+      }
 
       return `
-        <div class="${pillClass}">
-          <span>${famIcon} <strong>${escapeHtml(fam)}</strong></span>
-          <div>${statusIndicator}</div>
+        <div class="${groupClass}">
+          <div class="wishlist-platform-header">
+            <span>${famIcon} <strong>${escapeHtml(fam)}</strong></span>
+            <div>${headerRight}</div>
+          </div>
+          <div class="marketplace-rows-list">
+            ${marketplaceRowsHtml}
+          </div>
         </div>
       `;
     }).join("");
@@ -4449,15 +4571,32 @@ async function openWishlistHistoryModal(itemId) {
     if (skus.length === 0) {
       contentHtml += `<p style="color: var(--text-secondary); text-align: center;">No storefront SKUs recorded yet. Click "Sync Prices Now" on the dashboard to check stores.</p>`;
     } else {
+      const targetsByFamily = {};
+      for (const t of item.targets || []) {
+        targetsByFamily[t.platform_family] = t;
+      }
+
       contentHtml += skus.map(s => {
         const history = historyBySku[s.id] || [];
+        const target = targetsByFamily[s.platform_family];
+        const targetPriceStr = target && target.target_price_usd !== undefined
+          ? `$${Number(target.target_price_usd).toFixed(2)}`
+          : null;
+        const sfLabel = formatWishlistStorefrontLabel(s.storefront);
+        const scanStr = formatWishlistLastScanTimestamp(s.last_checked_at);
         return `
-          <div style="margin-bottom: 1.25rem; background: rgba(255,255,255,0.03); padding: 0.85rem; border-radius: var(--radius-md);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-              <strong>${escapeHtml(s.platform_label || s.platform_family)} (${escapeHtml(s.storefront)})</strong>
+          <div style="margin-bottom: 1.25rem; background: rgba(255,255,255,0.03); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
               <div>
-                Current: <strong>$${s.current_price_usd ? s.current_price_usd.toFixed(2) : '—'}</strong>
-                ${s.historical_low_usd ? `<span style="font-size: 0.8rem; color: #a78bfa; margin-left: 0.5rem;">ATL: $${s.historical_low_usd.toFixed(2)}</span>` : ''}
+                <strong>${escapeHtml(s.platform_label || s.platform_family)} &bull; ${escapeHtml(sfLabel)}</strong>
+                <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.15rem;">
+                  Last scan: ${escapeHtml(scanStr)}
+                </div>
+              </div>
+              <div style="text-align: right;">
+                <span>Current: <strong>${s.current_price_usd !== null && s.current_price_usd !== undefined ? `$${Number(s.current_price_usd).toFixed(2)}` : '—'}</strong></span>
+                ${targetPriceStr ? `<span style="font-size: 0.82rem; color: var(--text-secondary); margin-left: 0.45rem;">/ Target: <strong>${targetPriceStr}</strong></span>` : ''}
+                ${s.historical_low_usd ? `<span style="font-size: 0.78rem; color: #a78bfa; margin-left: 0.5rem;">ATL: $${Number(s.historical_low_usd).toFixed(2)}</span>` : ''}
               </div>
             </div>
             <div style="max-height: 140px; overflow-y: auto; font-size: 0.82rem;">
