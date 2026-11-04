@@ -4108,7 +4108,9 @@ function formatWishlistStorefrontLabel(sf) {
     gog: "GOG",
     epic: "Epic Games",
     fanatical: "Fanatical",
+    gmg: "Green Man Gaming",
     greenmangaming: "Green Man Gaming",
+    humble: "Humble Store",
     humblestore: "Humble Store",
     gamersgate: "GamersGate",
     xbox_store: "Xbox Store",
@@ -4117,6 +4119,34 @@ function formatWishlistStorefrontLabel(sf) {
   };
   const key = String(sf || "").toLowerCase().trim();
   return map[key] || (sf ? String(sf).replace(/_/g, " ") : "Storefront");
+}
+
+function getWishlistPlatformBrandIconHtml(platformFamily) {
+  const fam = String(platformFamily || "").toLowerCase();
+  if (fam.includes("xbox")) {
+    return `<span class="badge-brand-icon badge-brand-xbox">${BRAND_ICONS.xbox}</span>`;
+  }
+  if (fam.includes("playstation") || fam.includes("psn") || fam.includes("ps4") || fam.includes("ps5")) {
+    return `<span class="badge-brand-icon badge-brand-playstation">${BRAND_ICONS.playstation}</span>`;
+  }
+  if (fam.includes("switch") || fam.includes("nintendo")) {
+    return `<span class="badge-brand-icon badge-brand-switch">${BRAND_ICONS.switch}</span>`;
+  }
+  return `<span class="badge-brand-icon badge-brand-steam">${BRAND_ICONS.steam}</span>`;
+}
+
+function getWishlistStoreBrandIconHtml(storefront, platformFamily) {
+  const sf = String(storefront || "").toLowerCase().trim();
+  if (sf === "xbox_store") {
+    return `<span class="badge-brand-icon badge-brand-xbox">${BRAND_ICONS.xbox}</span>`;
+  }
+  if (sf === "psn_store") {
+    return `<span class="badge-brand-icon badge-brand-playstation">${BRAND_ICONS.playstation}</span>`;
+  }
+  if (sf === "steam") {
+    return `<span class="badge-brand-icon badge-brand-steam">${BRAND_ICONS.steam}</span>`;
+  }
+  return getWishlistPlatformBrandIconHtml(platformFamily || "PC");
 }
 
 function formatWishlistLastScanTimestamp(isoStr) {
@@ -4229,7 +4259,7 @@ function renderWishlistGrid() {
       const isExpanded = state.expandedWishlistPlatforms.has(expandKey);
       const targetPriceNum = Number(target.target_price_usd || 0);
       const priceText = `$${targetPriceNum.toFixed(2)}`;
-      const famIcon = fam === "Xbox" ? "🎮" : fam === "PlayStation" ? "🕹️" : "💻";
+      const famIcon = getWishlistPlatformBrandIconHtml(fam);
       const familySkus = (skusByFamily[fam] || []).slice().sort((a, b) => {
         const pa = a.current_price_usd !== null && a.current_price_usd !== undefined ? Number(a.current_price_usd) : 999999;
         const pb = b.current_price_usd !== null && b.current_price_usd !== undefined ? Number(b.current_price_usd) : 999999;
@@ -4294,6 +4324,7 @@ function renderWishlistGrid() {
           const ed = editionsById[sku.edition_id] || {};
           const isUpgradeEd = ed.edition_tier && ed.edition_tier !== "base";
           const sfLabel = formatWishlistStorefrontLabel(sku.storefront);
+          const sfBrandIcon = getWishlistStoreBrandIconHtml(sku.storefront, fam);
           const hasPrice = sku.current_price_usd !== null && sku.current_price_usd !== undefined;
           const curPriceNum = hasPrice ? Number(sku.current_price_usd) : null;
           const skuMet = hasPrice && !target.muted_owned_conflict && target.is_active && curPriceNum <= targetPriceNum;
@@ -4305,8 +4336,8 @@ function renderWishlistGrid() {
             ? `<span class="marketplace-edition-tag">${escapeHtml(ed.edition_name)}</span>`
             : `<span class="marketplace-edition-tag marketplace-edition-base">Standard</span>`;
           const storeNameNode = sku.store_url
-            ? `<a href="${escapeHtml(sku.store_url)}" target="_blank" rel="noopener noreferrer" class="marketplace-name-link" title="Open ${escapeHtml(sfLabel)} store listing">${escapeHtml(sfLabel)}</a>`
-            : `<span class="marketplace-name">${escapeHtml(sfLabel)}</span>`;
+            ? `<a href="${escapeHtml(sku.store_url)}" target="_blank" rel="noopener noreferrer" class="marketplace-name-link" title="Open ${escapeHtml(sfLabel)} store listing">${sfBrandIcon}<span>${escapeHtml(sfLabel)}</span></a>`
+            : `<span class="marketplace-name">${sfBrandIcon}<span>${escapeHtml(sfLabel)}</span></span>`;
           const storeVisitBtn = sku.store_url
             ? `<a href="${escapeHtml(sku.store_url)}" target="_blank" rel="noopener noreferrer" class="btn-store-link" title="1-click open ${escapeHtml(sfLabel)} listing" aria-label="Open ${escapeHtml(sfLabel)} store page">Store ↗</a>`
             : "";
@@ -4342,7 +4373,7 @@ function renderWishlistGrid() {
         <details class="${groupClass}" ${isExpanded ? "open" : ""} ontoggle="window.onToggleWishlistPlatformDetails && window.onToggleWishlistPlatformDetails(${item.id}, '${escapeHtml(fam)}', this.open)">
           <summary class="wishlist-platform-header wishlist-abridged-row" title="Click to toggle all ${familySkus.length} store prices for ${escapeHtml(fam)}">
             <div class="abridged-platform-left">
-              <span>${famIcon} <strong>${escapeHtml(fam)}</strong></span>
+              <span class="abridged-platform-brand">${famIcon} <strong>${escapeHtml(fam === "PC" ? "PC (Steam)" : fam)}</strong></span>
               ${storeCountLabel}
             </div>
             <div class="abridged-platform-right">
@@ -4357,10 +4388,17 @@ function renderWishlistGrid() {
       `;
     }).join("");
 
+    const cardPlatformIconsHtml = displayTargets.map(t => getWishlistPlatformBrandIconHtml(t.platform_family)).join("");
+    const cardPlatformLabels = displayTargets.map(t => t.platform_family === "PC" ? "PC (Steam)" : t.platform_family).join(" + ");
+
     return `
       <article class="wishlist-card ${hasDeal ? 'has-deal' : ''} ${smartUpgradeDeal ? 'has-smart-upgrade' : ''}">
         <div class="wishlist-card-media">
           <img src="${escapeHtml(coverUrl)}" alt="${escapeHtml(canonical.title || '')}" class="wishlist-card-cover" loading="lazy" onerror="if(!this.dataset.fallback){this.dataset.fallback='1';this.src='/static/vertex_logo.svg';}" />
+          <div class="platform-badge wishlist-cover-platform-badge">
+            <span class="platform-brand-icons">${cardPlatformIconsHtml}</span>
+            <span>${escapeHtml(cardPlatformLabels)}</span>
+          </div>
           <div class="wishlist-badges-strip">
             ${smartUpgradeDeal ? `<div class="smart-upgrade-callout">🌟 Smart Upgrade: ${escapeHtml(smartUpgradeDeal.edition_name)} $${smartUpgradeDeal.current_price_usd.toFixed(2)}</div>` : ''}
             ${itemDeals.some(d => d.is_all_time_low) ? `<div class="atl-badge">🔥 All-Time Low</div>` : ''}
@@ -4780,6 +4818,7 @@ async function openWishlistHistoryModal(itemId) {
           ? `$${Number(target.target_price_usd).toFixed(2)}`
           : null;
         const sfLabel = formatWishlistStorefrontLabel(s.storefront);
+        const sfBrandIcon = getWishlistStoreBrandIconHtml(s.storefront, s.platform_family);
         const scanStr = formatWishlistLastScanTimestamp(s.last_checked_at);
         const ed = editionsById[s.edition_id] || {};
         const edName = ed.edition_name || "Standard Edition";
@@ -4790,7 +4829,7 @@ async function openWishlistHistoryModal(itemId) {
           <div style="margin-bottom: 1.25rem; background: rgba(255,255,255,0.03); padding: 0.85rem; border-radius: var(--radius-md); border: 1px solid var(--border-subtle);">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; margin-bottom: 0.5rem; flex-wrap: wrap;">
               <div>
-                <strong>${escapeHtml(sfLabel)} &bull; ${escapeHtml(edName)}</strong>
+                <strong style="display: inline-flex; align-items: center; gap: 0.35rem;">${sfBrandIcon}<span>${escapeHtml(sfLabel)} &bull; ${escapeHtml(edName)}</span></strong>
                 ${storeBtn}
                 <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.15rem;">
                   ${escapeHtml(s.platform_label || s.platform_family)} &bull; Last scan: ${escapeHtml(scanStr)}
@@ -5080,9 +5119,25 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   const wPlatFilter = document.getElementById("wishlist-platform-filter");
+  const wPlatPills = document.querySelectorAll("#wishlist-platform-pills .pill");
+  const syncWishlistPlatPills = (val) => {
+    for (const p of wPlatPills) {
+      p.classList.toggle("active", (p.dataset.wishlistPlatform || "") === (val || ""));
+    }
+  };
   if (wPlatFilter) {
     wPlatFilter.addEventListener("change", (e) => {
       state.wishlistFilterPlatform = e.target.value;
+      syncWishlistPlatPills(state.wishlistFilterPlatform);
+      renderWishlistGrid();
+    });
+  }
+  for (const pill of wPlatPills) {
+    pill.addEventListener("click", () => {
+      const val = pill.dataset.wishlistPlatform || "";
+      state.wishlistFilterPlatform = val;
+      if (wPlatFilter) wPlatFilter.value = val;
+      syncWishlistPlatPills(val);
       renderWishlistGrid();
     });
   }
