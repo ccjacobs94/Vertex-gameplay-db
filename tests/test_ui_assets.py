@@ -282,6 +282,49 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("marketplace-price-compare", app_js)
         self.assertIn("marketplace-target-price", app_js)
 
+    def test_xbox_gamertag_ui_assets(self):
+        index_path = os.path.join(self.static_dir, "index.html")
+        styles_path = os.path.join(self.static_dir, "styles.css")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        sw_path = os.path.join(self.static_dir, "sw.js")
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+        with open(sw_path, "r", encoding="utf-8") as f:
+            sw_js = f.read()
+
+        # PWA cache name bumped to v33
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v33";', sw_js)
+
+        # Index HTML: Onboarding & Settings Xbox elements
+        self.assertIn('id="wizard-xbl-key"', index_html)
+        self.assertIn('id="wizard-xbox-status"', index_html)
+        self.assertIn('id="setting-xbox-input-row"', index_html)
+        self.assertIn('id="settings-xbox-connected-card"', index_html)
+        self.assertIn('id="settings-xbox-gamertag"', index_html)
+        self.assertIn('id="settings-xbox-gamerscore"', index_html)
+        self.assertIn('id="settings-xbox-avatar"', index_html)
+        self.assertIn('id="btn-disconnect-xbox"', index_html)
+
+        # Styles CSS: Player card and badge styling
+        self.assertIn(".xbox-connected-player-card", styles_css)
+        self.assertIn(".xbox-player-info", styles_css)
+        self.assertIn(".xbox-player-gamertag", styles_css)
+        self.assertIn(".xbox-player-gamerscore-badge", styles_css)
+        self.assertIn(".xbox-sync-status", styles_css)
+        self.assertIn(".btn-disconnect-action", styles_css)
+
+        # App JS: Live Gamertag resolution, auto-save, auto-sync, disconnect
+        self.assertIn("async function performLiveXboxLink(", app_js)
+        self.assertIn("async function disconnectXboxAccount(", app_js)
+        self.assertIn("window.performLiveXboxLink = performLiveXboxLink;", app_js)
+        self.assertIn("window.disconnectXboxAccount = disconnectXboxAccount;", app_js)
+        self.assertIn('fetch("/api/sync?platform=xbox"', app_js)
+
 
 if __name__ == "__main__":
     unittest.main()

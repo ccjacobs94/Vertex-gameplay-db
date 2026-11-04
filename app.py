@@ -79,6 +79,7 @@ from sync_engine import (
     search_external_metadata,
     sync_all_platforms,
     sync_game_achievements_on_demand,
+    sync_xbox,
 )
 
 load_dotenv()
@@ -925,13 +926,16 @@ async def api_sync_game_achievements(game_id: int) -> Dict[str, Any]:
 
 
 @app.post("/api/sync")
-async def api_trigger_sync() -> Dict[str, Any]:
+async def api_trigger_sync(platform: Optional[str] = None) -> Dict[str, Any]:
     lock = _get_user_sync_lock()
     if lock.locked():
         return {"status": "running", "message": "A sync is already in progress."}
     async with lock:
         async with _sync_semaphore:
-            results = await sync_all_platforms()
+            if isinstance(platform, str) and platform.strip().lower() in ("xbox", "xbl"):
+                results = [await sync_xbox()]
+            else:
+                results = await sync_all_platforms()
     return {"status": "completed", "results": results, "stats": get_library_stats()}
 
 
