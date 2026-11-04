@@ -381,6 +381,18 @@ class XboxCatalogAdapter:
                             gen_opt = props.get("XboxConsoleGenOptimized") or []
                             plat_label = "Xbox Series X|S" if ("XboxSeriesX" in gen_opt or "XboxSeriesS" in gen_opt) else "Xbox One"
 
+                            # Extract poster / box art from LocalizedProperties
+                            image_url = None
+                            for lp in prod.get("LocalizedProperties") or []:
+                                imgs = lp.get("Images") or []
+                                poster = next((i["Uri"] for i in imgs if i.get("ImagePurpose") == "Poster"), None)
+                                boxart = next((i["Uri"] for i in imgs if i.get("ImagePurpose") == "BoxArt"), None)
+                                branded = next((i["Uri"] for i in imgs if i.get("ImagePurpose") == "BrandedKeyArt"), None)
+                                candidate_img = poster or boxart or branded
+                                if candidate_img:
+                                    image_url = f"https:{candidate_img}" if candidate_img.startswith("//") else candidate_img
+                                    break
+
                             availabilities = (
                                 prod.get("DisplaySkuAvailabilities", [{}])[0]
                                 .get("Availabilities", [{}])
@@ -400,6 +412,7 @@ class XboxCatalogAdapter:
                                         "platform_family": "Xbox",
                                         "platform_label": plat_label,
                                         "storefront": "xbox_store",
+                                        "image_url": image_url,
                                     }
                     else:
                         resp.raise_for_status()
@@ -677,6 +690,7 @@ async def discover_skus_for_item(
 
     # 1. PC Discovery (CheapShark, Steam Store Direct, GOG Direct)
     if "PC" in needed_families:
+        discovered_steam_appid: Optional[str] = None
         # A) CheapShark discovery (covers Steam, GOG, Epic, Humble, GMG, Fanatical deals + ATL)
         try:
             cs = CheapSharkAdapter()
@@ -689,6 +703,8 @@ async def discover_skus_for_item(
                 steam_app_id = str(cs_item.get("steamAppID") or "").strip()
                 if steam_app_id == "0":
                     steam_app_id = ""
+                if steam_app_id:
+                    discovered_steam_appid = steam_app_id
                 ed_name = extract_edition_name(cand_title, canonical_title=title, default="Standard Edition")
                 ed = _get_or_create_edition(ed_name)
 
@@ -701,6 +717,8 @@ async def discover_skus_for_item(
                         steam_app_id = str(details.get("info", {}).get("steamAppID") or "").strip()
                         if steam_app_id == "0":
                             steam_app_id = ""
+                        if steam_app_id:
+                            discovered_steam_appid = steam_app_id
                     for d in deals:
                         sid = str(d.get("storeID"))
                         storefront = cs.STORE_MAP.get(sid)
@@ -807,6 +825,24 @@ async def discover_skus_for_item(
                                     )
                                 discovered_skus += 1
                 break
+            else:
+                # If direct Steam search didn't match, but CheapShark found a Steam appid
+                if discovered_steam_appid:
+                    try:
+                        app_details = await steam.get_app_details(discovered_steam_appid)
+                        if app_details:
+                            header_img = app_details.get("header_image")
+                            cur_cover = canonical.get("cover_url") or ""
+                            if header_img and (not cur_cover or (cur_cover.endswith("/library_600x900.jpg") and re.search(r"/[0-9a-f]{40}/", header_img))):
+                                with db.get_connection(db_path) as conn:
+                                    conn.execute(
+                                        "UPDATE canonical_games SET cover_url = ? WHERE id = ?",
+                                        (header_img, c_id),
+                                    )
+                                    conn.commit()
+                                canonical["cover_url"] = header_img
+                    except Exception as e:
+                        logger.debug("CheapShark steam_app_id artwork lookup error: %s", e)
         except Exception as e:
             logger.warning("Steam direct discovery failed for %s: %s", title, e)
 
@@ -871,6 +907,17 @@ async def discover_skus_for_item(
                 for bid in xb_big_ids:
                     p = prices.get(bid)
                     if p:
+                        # Backfill canonical cover_url from Xbox artwork if currently missing
+                        cur_cover = canonical.get("cover_url") or ""
+                        if not cur_cover and p.get("image_url"):
+                            with db.get_connection(db_path) as conn:
+                                conn.execute(
+                                    "UPDATE canonical_games SET cover_url = ? WHERE id = ?",
+                                    (p["image_url"], c_id),
+                                )
+                                conn.commit()
+                            canonical["cover_url"] = p["image_url"]
+
                         ed_name = xb_ed_by_id[bid]
                         ed_obj = _get_or_create_edition(ed_name)
                         plat_label = p.get("platform_label", "Xbox Series X|S")
@@ -979,6 +1026,56 @@ async def discover_skus_for_item(
                     )
                     discovered_skus += 1
 
+    # 4. Final Cover Art Fallback: Check local owned library or Xbox Store Catalog if still missing
+    try:
+        cur_cover = canonical.get("cover_url")
+        if not cur_cover:
+            found_cover = None
+            with db.get_connection(db_path) as conn:
+                # A) Owned games library match
+                lib_row = conn.execute(
+                    """
+                    SELECT cover_url FROM games 
+                    WHERE cover_url IS NOT NULL AND cover_url != ''
+                      AND (LOWER(title) = LOWER(?) OR LOWER(title) LIKE LOWER(?) || '%')
+                    ORDER BY id ASC LIMIT 1
+                    """,
+                    (title, title),
+                ).fetchone()
+                if lib_row and lib_row["cover_url"]:
+                    found_cover = lib_row["cover_url"]
+
+            # B) If still missing, check any discovered Xbox SKUs for product image
+            if not found_cover:
+                with db.get_connection(db_path) as conn:
+                    xb_skus = conn.execute(
+                        """
+                        SELECT s.store_sku_id FROM edition_platform_skus s
+                        JOIN game_editions e ON s.edition_id = e.id
+                        WHERE e.canonical_game_id = ? AND s.platform_family = 'Xbox' AND length(s.store_sku_id) = 12
+                        """,
+                        (c_id,),
+                    ).fetchall()
+                if xb_skus:
+                    bids = [r["store_sku_id"] for r in xb_skus]
+                    xb = XboxCatalogAdapter()
+                    xb_prices = await xb.get_prices_for_big_ids(bids)
+                    for bid in bids:
+                        if xb_prices.get(bid, {}).get("image_url"):
+                            found_cover = xb_prices[bid]["image_url"]
+                            break
+
+            if found_cover:
+                with db.get_connection(db_path) as conn:
+                    conn.execute(
+                        "UPDATE canonical_games SET cover_url = ? WHERE id = ?",
+                        (found_cover, c_id),
+                    )
+                    conn.commit()
+                canonical["cover_url"] = found_cover
+    except Exception as e:
+        logger.debug("Final cover art fallback error for %s: %s", title, e)
+
     return {
         "discovered_editions": discovered_editions,
         "discovered_skus": discovered_skus,
@@ -1007,7 +1104,8 @@ async def discover_missing_skus_for_db(db_path: Optional[str] = None) -> int:
         existing_fams = {s["platform_family"] for s in item.get("skus", [])}
         existing_pc_sfs = {s["storefront"] for s in item.get("skus", []) if s.get("platform_family") == "PC"}
         needs_pc_stores = ("PC" in target_fams and len(existing_pc_sfs) < 2)
-        if not item.get("skus") or (target_fams - existing_fams) or needs_pc_stores:
+        missing_cover = not item.get("canonical_game", {}).get("cover_url")
+        if not item.get("skus") or (target_fams - existing_fams) or needs_pc_stores or missing_cover:
             res = await discover_skus_for_item(item_id, db_path=db_path)
             total_discovered_skus += res.get("discovered_skus", 0)
     return total_discovered_skus
