@@ -2806,9 +2806,7 @@ async function loadSettingsConnections() {
       if (card) card.hidden = true;
       if (xblInput) {
         xblInput.value = "";
-        xblInput.placeholder = data.has_xbl_api_key
-          ? (data.xbl_api_key_masked || "Configured (API key)")
-          : "Enter Xbox Gamertag (e.g. Chief117)";
+        xblInput.placeholder = "Enter Xbox Gamertag (e.g. Chief117)";
       }
     }
 
@@ -3754,8 +3752,9 @@ async function loadWizardExistingData() {
       if (data.xbox_gamertag) {
         xblInp.value = data.xbox_gamertag;
         performLiveXboxLink(data.xbox_gamertag, "wizard-xbox-status", true);
-      } else if (data.has_xbl_api_key) {
-        xblInp.placeholder = data.xbl_api_key_masked || "Configured";
+      } else {
+        xblInp.value = "";
+        xblInp.placeholder = "Enter Gamertag (e.g. Chief117 or Major Nelson)";
       }
     }
     if (psnInp && data.has_psn_npsso) psnInp.placeholder = data.psn_npsso_masked || "Configured";
@@ -3805,7 +3804,7 @@ async function updateWizardSummary() {
     const res = await fetch("/api/user/connections");
     const data = res.ok ? await res.json() : {};
     const steamVal = document.getElementById("wizard-steam-id")?.value.trim() || data.steam_id;
-    const xblVal = document.getElementById("wizard-xbl-key")?.value.trim() || data.xbox_gamertag || data.has_xbl_api_key;
+    const xblVal = document.getElementById("wizard-xbl-key")?.value.trim() || data.xbox_gamertag;
     const psnVal = document.getElementById("wizard-psn-token")?.value.trim() || data.has_psn_npsso;
 
     list.innerHTML = "";
