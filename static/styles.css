@@ -5070,15 +5070,20 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   object-position: center 20%;
 }
 
+.wishlist-cover-platform-badge {
+  z-index: 2;
+}
+
 .wishlist-badges-strip {
   position: absolute;
-  top: 0.5rem;
+  bottom: 0.5rem;
   left: 0.5rem;
   right: 0.5rem;
   display: flex;
   flex-wrap: wrap;
   gap: 0.35rem;
   pointer-events: none;
+  z-index: 2;
 }
 
 .smart-upgrade-callout {
@@ -5205,6 +5210,17 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   flex-wrap: wrap;
 }
 
+.abridged-platform-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.abridged-platform-brand .brand-icon {
+  inline-size: 0.92rem;
+  block-size: 0.92rem;
+}
+
 .abridged-store-hint {
   font-size: 0.7rem;
   font-weight: 500;
@@ -5298,10 +5314,19 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 
 .marketplace-name,
 .marketplace-name-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
   font-weight: 600;
   color: var(--text-primary);
   font-size: 0.82rem;
   text-decoration: none;
+}
+
+.marketplace-name .brand-icon,
+.marketplace-name-link .brand-icon {
+  inline-size: 0.85rem;
+  block-size: 0.85rem;
 }
 
 .marketplace-name-link:hover {
@@ -5530,8 +5555,19 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   font-weight: 600;
 }
 
+.target-toggle-col .platform-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.wishlist-platform-pills {
+  margin-bottom: 0.25rem;
+}
+
 @media (max-width: 768px) {
-  .wishlist-kpis {
+  .wishlist-kpis,
+  .wishlist-pulse-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.6rem;
   }

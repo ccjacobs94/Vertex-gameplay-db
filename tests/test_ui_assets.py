@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=34 and sw to v30
-        self.assertIn('href="/static/styles.css?v=34"', index_html)
-        self.assertIn('src="/static/app.js?v=34"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v30";', sw_js)
+        # Cache buster must be bumped to v=35 and sw to v31
+        self.assertIn('href="/static/styles.css?v=35"', index_html)
+        self.assertIn('src="/static/app.js?v=35"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v31";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -263,14 +263,16 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.deleteWishlistItem = deleteWishlistItem;", app_js)
         self.assertIn("window.selectCandidateForConfig = selectCandidateForConfig;", app_js)
 
-        # 5. Cache buster must be bumped to v=34 and sw to v30
-        self.assertIn('href="/static/styles.css?v=34"', index_html)
-        self.assertIn('src="/static/app.js?v=34"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v30";', sw_js)
+        # 5. Cache buster must be bumped to v=35 and sw to v31
+        self.assertIn('href="/static/styles.css?v=35"', index_html)
+        self.assertIn('src="/static/app.js?v=35"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v31";', sw_js)
 
-        # 6. Abridged platform summary (lowest price per platform) with 1-click expandable detailed store view
+        # 6. Abridged platform summary (lowest price per platform) with 1-click expandable detailed store view & brand SVG logos
         self.assertIn("function formatWishlistStorefrontLabel(", app_js)
         self.assertIn("function formatWishlistLastScanTimestamp(", app_js)
+        self.assertIn("function getWishlistPlatformBrandIconHtml(", app_js)
+        self.assertIn("function getWishlistStoreBrandIconHtml(", app_js)
         self.assertIn("<details class=\"", app_js)
         self.assertIn("<summary class=\"wishlist-platform-header wishlist-abridged-row\"", app_js)
         self.assertIn("abridged-lowest-price", app_js)
