@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=28 and sw to v24
-        self.assertIn('href="/static/styles.css?v=28"', index_html)
-        self.assertIn('src="/static/app.js?v=28"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v24";', sw_js)
+        # Cache buster must be bumped to v=35 and sw to v31
+        self.assertIn('href="/static/styles.css?v=35"', index_html)
+        self.assertIn('src="/static/app.js?v=35"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v31";', sw_js)
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -145,9 +145,10 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn('document.getElementById("btn-mobile-logout")', app_js)
         self.assertIn('document.getElementById("btn-settings-logout")', app_js)
 
-        # CSS styles mobile header actions and 6-column bottom navigation
+        # CSS styles mobile header actions and 7-column bottom navigation + 3-column view-tabs-bar
         self.assertIn(".mobile-header-actions", styles_css)
-        self.assertIn("grid-template-columns: repeat(6, 1fr)", styles_css)
+        self.assertIn("grid-template-columns: repeat(7, minmax(0, 1fr))", styles_css)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", styles_css)
 
     def test_admin_delete_user_modal_integration(self):
         index_path = os.path.join(self.static_dir, "index.html")
@@ -210,6 +211,76 @@ class TestUIBrandAssets(unittest.TestCase):
 
         # 8. Compositor layer promotion for sticky/fixed elements
         self.assertIn("transform: translateZ(0);", styles_css)
+
+    def test_wishlist_modal_dialogs_structure_and_exports(self):
+        index_path = os.path.join(self.static_dir, "index.html")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        sw_path = os.path.join(self.static_dir, "sw.js")
+
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+        with open(sw_path, "r", encoding="utf-8") as f:
+            sw_js = f.read()
+
+        # 1. Dialog opening and closing tags must be balanced (no unclosed dialog nesting)
+        dialog_opens = index_html.count("<dialog")
+        dialog_closes = index_html.count("</dialog>")
+        self.assertEqual(
+            dialog_opens,
+            dialog_closes,
+            f"Mismatched <dialog> tags: {dialog_opens} opening vs {dialog_closes} closing",
+        )
+
+        # 2. triage-dialog must be properly closed before wishlist-add-dialog
+        triage_idx = index_html.find('id="triage-dialog"')
+        wishlist_add_idx = index_html.find('id="wishlist-add-dialog"')
+        self.assertNotEqual(triage_idx, -1)
+        self.assertNotEqual(wishlist_add_idx, -1)
+        triage_slice = index_html[triage_idx:wishlist_add_idx]
+        self.assertIn(
+            "</dialog>",
+            triage_slice,
+            "triage-dialog must have a closing </dialog> before wishlist-add-dialog",
+        )
+
+        # 3. + Watch Game button must have inline window fallback handler
+        self.assertIn(
+            'id="btn-open-wishlist-add"',
+            index_html,
+        )
+        self.assertIn(
+            'onclick="window.openWishlistAddModal && window.openWishlistAddModal()"',
+            index_html,
+        )
+
+        # 4. app.js must export wishlist modal functions to window
+        self.assertIn("window.openWishlistAddModal = openWishlistAddModal;", app_js)
+        self.assertIn("window.openWishlistEditPlatformsModal = openWishlistEditPlatformsModal;", app_js)
+        self.assertIn("window.openWishlistHistoryModal = openWishlistHistoryModal;", app_js)
+        self.assertIn("window.openWishlistPurchaseModal = openWishlistPurchaseModal;", app_js)
+        self.assertIn("window.deleteWishlistItem = deleteWishlistItem;", app_js)
+        self.assertIn("window.selectCandidateForConfig = selectCandidateForConfig;", app_js)
+
+        # 5. Cache buster must be bumped to v=35 and sw to v31
+        self.assertIn('href="/static/styles.css?v=35"', index_html)
+        self.assertIn('src="/static/app.js?v=35"', index_html)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v31";', sw_js)
+
+        # 6. Abridged platform summary (lowest price per platform) with 1-click expandable detailed store view & brand SVG logos
+        self.assertIn("function formatWishlistStorefrontLabel(", app_js)
+        self.assertIn("function formatWishlistLastScanTimestamp(", app_js)
+        self.assertIn("function getWishlistPlatformBrandIconHtml(", app_js)
+        self.assertIn("function getWishlistStoreBrandIconHtml(", app_js)
+        self.assertIn("<details class=\"", app_js)
+        self.assertIn("<summary class=\"wishlist-platform-header wishlist-abridged-row\"", app_js)
+        self.assertIn("abridged-lowest-price", app_js)
+        self.assertIn("marketplace-price-row", app_js)
+        self.assertIn("btn-store-link", app_js)
+        self.assertIn("Last scan:", app_js)
+        self.assertIn("marketplace-price-compare", app_js)
+        self.assertIn("marketplace-target-price", app_js)
 
 
 if __name__ == "__main__":

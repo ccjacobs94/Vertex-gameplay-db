@@ -6,3 +6,4 @@ pydantic>=2.8.0
 python-multipart>=0.0.9
 psnawp>=2.0.0
 mcp>=1.2.0
+pywebpush>=2.0.0
