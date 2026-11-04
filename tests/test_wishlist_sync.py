@@ -840,6 +840,86 @@ class TestWishlistSyncAndPush(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(history), 1)
         self.assertEqual(history[0]["price_usd"], 59.99)
 
+    @patch("wishlist_sync._make_client")
+    async def test_xbox_and_steam_cover_art_backfill_and_discovery(self, mock_client_factory):
+        mock_client = AsyncMock()
+        mock_client_factory.return_value.__aenter__.return_value = mock_client
+
+        async def mock_router(url, *args, **kwargs):
+            resp = MagicMock()
+            url_str = str(url)
+            params = kwargs.get("params") or {}
+
+            # Xbox autosuggest
+            if "displaycatalog.mp.microsoft.com" in url_str and "autosuggest" in url_str:
+                resp.status_code = 200
+                resp.json.return_value = {
+                    "Results": [
+                        {"Products": [{"ProductId": "9NN3HCKW5TPC", "Title": "Gears Tactics"}]}
+                    ]
+                }
+                return resp
+
+            # Xbox display catalog product lookup
+            if "displaycatalog.mp.microsoft.com" in url_str and "products" in url_str:
+                resp.status_code = 200
+                resp.json.return_value = {
+                    "Products": [
+                        {
+                            "ProductId": "9NN3HCKW5TPC",
+                            "Properties": {"XboxConsoleGenOptimized": ["XboxSeriesX"]},
+                            "DisplaySkuAvailabilities": [
+                                {
+                                    "Availabilities": [
+                                        {
+                                            "OrderManagementData": {
+                                                "Price": {"ListPrice": 39.99, "MSRP": 39.99}
+                                            }
+                                        }
+                                    ]
+                                }
+                            ],
+                            "LocalizedProperties": [
+                                {
+                                    "Images": [
+                                        {
+                                            "ImagePurpose": "Poster",
+                                            "Uri": "//store-images.s-microsoft.com/image/poster_gt.jpg",
+                                        },
+                                        {
+                                            "ImagePurpose": "BoxArt",
+                                            "Uri": "//store-images.s-microsoft.com/image/boxart_gt.jpg",
+                                        },
+                                    ]
+                                }
+                            ],
+                        }
+                    ]
+                }
+                return resp
+
+            resp.status_code = 404
+            return resp
+
+        mock_client.get.side_effect = mock_router
+
+        # Add game with Xbox only, no initial cover_url
+        item = db.add_wishlist_item(
+            title="Gears Tactics",
+            platform_targets=[{"platform": "Xbox", "target_price_usd": 20.00}],
+            db_path=self.db_path,
+        )
+        self.assertIsNone(item["canonical_game"].get("cover_url"))
+
+        # Run discovery
+        res = await wishlist_sync.discover_skus_for_item(item["id"], db_path=self.db_path)
+        self.assertGreater(res["discovered_skus"], 0)
+
+        # Canonical game must now have Xbox Poster cover art
+        refreshed = db.get_wishlist_item(item["id"], db_path=self.db_path)
+        canonical = refreshed["canonical_game"]
+        self.assertEqual(canonical.get("cover_url"), "https://store-images.s-microsoft.com/image/poster_gt.jpg")
+
 
 if __name__ == "__main__":
     unittest.main()
