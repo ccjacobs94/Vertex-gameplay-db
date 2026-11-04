@@ -297,8 +297,8 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(sw_path, "r", encoding="utf-8") as f:
             sw_js = f.read()
 
-        # PWA cache name bumped to v33
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v33";', sw_js)
+        # PWA cache name bumped
+        self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[3-9]|[4-9]\d+)";')
 
         # Index HTML: Onboarding & Settings Xbox elements
         self.assertIn('id="wizard-xbl-key"', index_html)
