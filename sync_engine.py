@@ -43,6 +43,8 @@ class UserCredentials:
     steam_id: Optional[str] = None
     steam_api_key: Optional[str] = None
     xbl_api_key: Optional[str] = None
+    xbox_gamertag: Optional[str] = None
+    xbox_xuid: Optional[str] = None
     psn_npsso: Optional[str] = None
 
 
@@ -69,6 +71,8 @@ def _resolve_credentials(
 
     db_steam_id = (user_conn.get("steam_id") or "").strip()
     db_xbl_key = (user_conn.get("xbl_api_key") or "").strip()
+    db_xbox_gt = (user_conn.get("xbox_gamertag") or "").strip()
+    db_xbox_xuid = (user_conn.get("xbox_xuid") or "").strip()
     db_psn_npsso = (user_conn.get("psn_npsso") or "").strip()
 
     from web_auth import get_auth_username
@@ -78,10 +82,16 @@ def _resolve_credentials(
     if is_owner_or_legacy:
         def_steam_id = db_steam_id or env_steam_id
         def_xbl_key = db_xbl_key or env_xbl_key
+        def_xbox_gt = db_xbox_gt
+        def_xbox_xuid = db_xbox_xuid
         def_psn_npsso = db_psn_npsso or env_psn_npsso
     else:
         def_steam_id = db_steam_id
-        def_xbl_key = db_xbl_key
+        # Subaccounts can use the server-wide developer XBL_API_KEY if they configured an xbox_gamertag or xbox_xuid
+        has_xbox_identity = bool(db_xbox_gt or db_xbox_xuid or db_xbl_key)
+        def_xbl_key = db_xbl_key or (env_xbl_key if has_xbox_identity else "")
+        def_xbox_gt = db_xbox_gt
+        def_xbox_xuid = db_xbox_xuid
         def_psn_npsso = db_psn_npsso
 
     if credentials is None:
@@ -89,6 +99,8 @@ def _resolve_credentials(
             steam_id=def_steam_id,
             steam_api_key=env_steam_key,
             xbl_api_key=def_xbl_key,
+            xbox_gamertag=def_xbox_gt,
+            xbox_xuid=def_xbox_xuid,
             psn_npsso=def_psn_npsso,
         )
 
@@ -96,17 +108,31 @@ def _resolve_credentials(
         raw_steam_id = credentials.get("steam_id")
         raw_steam_key = credentials.get("steam_api_key")
         raw_xbl_key = credentials.get("xbl_api_key")
+        raw_xbox_gt = credentials.get("xbox_gamertag")
+        raw_xbox_xuid = credentials.get("xbox_xuid")
         raw_psn_npsso = credentials.get("psn_npsso")
     else:
         raw_steam_id = getattr(credentials, "steam_id", None)
         raw_steam_key = getattr(credentials, "steam_api_key", None)
         raw_xbl_key = getattr(credentials, "xbl_api_key", None)
+        raw_xbox_gt = getattr(credentials, "xbox_gamertag", None)
+        raw_xbox_xuid = getattr(credentials, "xbox_xuid", None)
         raw_psn_npsso = getattr(credentials, "psn_npsso", None)
+
+    final_xbl_key = raw_xbl_key.strip() if raw_xbl_key is not None else def_xbl_key
+    final_xbox_gt = raw_xbox_gt.strip() if raw_xbox_gt is not None else def_xbox_gt
+    final_xbox_xuid = raw_xbox_xuid.strip() if raw_xbox_xuid is not None else def_xbox_xuid
+
+    # If explicit credentials provide a gamertag or xuid, but no xbl_key, fall back to server env_xbl_key
+    if not final_xbl_key and (final_xbox_gt or final_xbox_xuid) and env_xbl_key:
+        final_xbl_key = env_xbl_key
 
     return UserCredentials(
         steam_id=raw_steam_id.strip() if raw_steam_id is not None else def_steam_id,
         steam_api_key=(raw_steam_key.strip() if raw_steam_key and raw_steam_key.strip() else env_steam_key),
-        xbl_api_key=raw_xbl_key.strip() if raw_xbl_key is not None else def_xbl_key,
+        xbl_api_key=final_xbl_key,
+        xbox_gamertag=final_xbox_gt,
+        xbox_xuid=final_xbox_xuid,
         psn_npsso=raw_psn_npsso.strip() if raw_psn_npsso is not None else def_psn_npsso,
     )
 
@@ -237,6 +263,71 @@ async def sync_steam_achievements_for_game(
     return None
 
 
+async def resolve_xbox_gamertag(
+    client: httpx.AsyncClient,
+    api_key: str,
+    gamertag: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Search OpenXBL for a player by Gamertag or XUID.
+    Calls GET https://api.xbl.io/v2/friends/search?gt=TheirGamertag using the developer's API key.
+    Falls back to https://xbl.io/api/v2/friends/search and https://api.xbl.io/v2/player/gamertag/{gt}.
+    Returns a dict with {"xuid", "gamertag", "gamerscore", "avatar_url"} or None if not found.
+    """
+    clean_gt = (gamertag or "").strip()
+    if not clean_gt or not api_key:
+        return None
+
+    from urllib.parse import quote
+    encoded_gt = quote(clean_gt)
+    headers = {
+        "X-Authorization": api_key,
+        "Accept": "application/json",
+        "Accept-Language": "en-US",
+    }
+
+    endpoints = [
+        f"https://api.xbl.io/v2/friends/search?gt={encoded_gt}",
+        f"https://xbl.io/api/v2/friends/search?gt={encoded_gt}",
+        f"https://api.xbl.io/v2/player/gamertag/{encoded_gt}",
+        f"https://xbl.io/api/v2/player/gamertag/{encoded_gt}",
+    ]
+
+    for ep in endpoints:
+        try:
+            resp = await client.get(ep, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                profile_users = []
+                if isinstance(data, dict):
+                    profile_users = data.get("profileUsers") or (data.get("content") or {}).get("profileUsers") or []
+                    if not profile_users and ("id" in data or "xuid" in data):
+                        profile_users = [data]
+                elif isinstance(data, list):
+                    profile_users = data
+
+                if profile_users and isinstance(profile_users[0], dict):
+                    u = profile_users[0]
+                    xuid = str(u.get("id") or u.get("hostId") or u.get("xuid") or "").strip()
+                    if not xuid:
+                        continue
+                    settings = {s.get("id"): str(s.get("value") or "") for s in u.get("settings", []) if isinstance(s, dict)}
+                    resolved_gt = settings.get("Gamertag") or settings.get("ModernGamertag") or u.get("gamertag") or clean_gt
+                    gamerscore = settings.get("Gamerscore") or str(u.get("gamerscore") or "0")
+                    avatar_url = settings.get("GameDisplayPicRaw") or u.get("displayPicRaw") or ""
+
+                    return {
+                        "xuid": xuid,
+                        "gamertag": resolved_gt,
+                        "gamerscore": gamerscore,
+                        "avatar_url": avatar_url,
+                    }
+        except Exception as exc:
+            logger.debug("Failed OpenXBL gamertag lookup at %s: %s", ep, exc)
+
+    return None
+
+
 async def sync_xbox_achievements_for_game(
     client: httpx.AsyncClient,
     xbl_key: str,
@@ -244,16 +335,27 @@ async def sync_xbox_achievements_for_game(
     title_id: str,
     platform: str = "Xbox",
     db_path: Optional[str] = None,
+    xuid: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     try:
-        r = await client.get(
-            f"https://xbl.io/api/v2/achievements/title/{title_id}",
-            headers={"X-Authorization": xbl_key, "Accept": "application/json"},
-            timeout=20.0,
-        )
-        if r.status_code != 200:
+        endpoints = []
+        if xuid:
+            endpoints.append(f"https://api.xbl.io/v2/achievements/player/{xuid}/{title_id}")
+            endpoints.append(f"https://xbl.io/api/v2/achievements/player/{xuid}/{title_id}")
+        endpoints.append(f"https://xbl.io/api/v2/achievements/title/{title_id}")
+
+        data = None
+        for ep in endpoints:
+            r = await client.get(
+                ep,
+                headers={"X-Authorization": xbl_key, "Accept": "application/json"},
+                timeout=20.0,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                break
+        if not data:
             return None
-        data = r.json()
         raw_achs = (data.get("content") or {}).get("achievements") or data.get("achievements", [])
         if not raw_achs:
             return None
@@ -414,6 +516,26 @@ async def sync_xbox(
 ) -> Dict[str, Any]:
     creds = _resolve_credentials(credentials)
     xbl_key = (creds.xbl_api_key or "").strip()
+    xbox_gt = (getattr(creds, "xbox_gamertag", None) or "").strip()
+    xbox_xuid = (getattr(creds, "xbox_xuid", None) or "").strip()
+
+    from web_auth import get_auth_username
+    uid = None
+    try:
+        uid = current_user_id.get()
+    except Exception:
+        pass
+    default_user = get_auth_username()
+    is_owner_or_legacy = (uid is None or uid == default_user)
+
+    if not is_owner_or_legacy and not xbox_gt and not xbox_xuid:
+        return {
+            "source": "Xbox",
+            "status": "skipped",
+            "games_synced": 0,
+            "message": "Xbox Gamertag or XBL_API_KEY not configured for this account",
+        }
+
     if not xbl_key:
         return {"source": "Xbox", "status": "skipped", "games_synced": 0, "message": "XBL_API_KEY not set"}
 
@@ -425,48 +547,80 @@ async def sync_xbox(
         }
         async with _make_async_client(timeout=40.0, extra_headers=headers) as client:
             titles: List[Dict[str, Any]] = []
-            xuid = None
+            xuid = xbox_xuid or None
             gamepass_map: Dict[str, bool] = {}
 
+            # If Gamertag is specified but XUID is not known yet, resolve it via friends search
+            if not xuid and xbox_gt:
+                gt_info = await resolve_xbox_gamertag(client, xbl_key, xbox_gt)
+                if gt_info:
+                    xuid = gt_info.get("xuid")
+                    if uid and xuid:
+                        try:
+                            system_db.set_user_connections(uid, xbox_xuid=xuid)
+                        except Exception:
+                            pass
+                else:
+                    logger.warning("Could not resolve Xbox Gamertag '%s' via OpenXBL", xbox_gt)
+
             # OpenXBL v2 /api/v2/achievements provides rich 'images' arrays containing official 2:3 'Poster' box art
-            try:
-                ach_resp = await client.get("https://xbl.io/api/v2/achievements")
-                if ach_resp.status_code == 200:
-                    ach_data = ach_resp.json()
-                    if isinstance(ach_data, dict):
-                        xuid = (ach_data.get("content") or {}).get("xuid") or ach_data.get("xuid")
-                        titles = (ach_data.get("content") or {}).get("titles") or ach_data.get("titles", [])
-                    elif isinstance(ach_data, list):
-                        titles = ach_data
-            except Exception as exc:
-                logger.warning("Could not fetch Xbox achievements endpoint for posters: %s", exc)
+            # If querying a specific player by XUID, query player achievements first
+            ach_endpoints = []
+            if xuid:
+                ach_endpoints.append(f"https://api.xbl.io/v2/achievements/player/{xuid}")
+                ach_endpoints.append(f"https://xbl.io/api/v2/achievements/player/{xuid}")
+            ach_endpoints.append("https://xbl.io/api/v2/achievements")
 
-            # Fetch /api/v2/titles to populate gamePass.isGamePass metadata (and serve as fallback for titles/xuid)
-            try:
-                resp = await client.get("https://xbl.io/api/v2/titles")
-                if resp.status_code == 200:
-                    payload = resp.json()
-                    titles_from_ep: List[Dict[str, Any]] = []
-                    if isinstance(payload, dict):
-                        if "content" in payload and isinstance(payload["content"], dict):
-                            xuid = xuid or payload["content"].get("xuid")
-                            titles_from_ep = payload["content"].get("titles", [])
-                        else:
-                            xuid = xuid or payload.get("xuid")
-                            titles_from_ep = payload.get("titles", [])
-                    elif isinstance(payload, list):
-                        titles_from_ep = payload
+            for ep in ach_endpoints:
+                try:
+                    ach_resp = await client.get(ep)
+                    if ach_resp.status_code == 200:
+                        ach_data = ach_resp.json()
+                        if isinstance(ach_data, dict):
+                            xuid = xuid or (ach_data.get("content") or {}).get("xuid") or ach_data.get("xuid")
+                            titles = (ach_data.get("content") or {}).get("titles") or ach_data.get("titles", [])
+                        elif isinstance(ach_data, list):
+                            titles = ach_data
+                        if titles:
+                            break
+                except Exception as exc:
+                    logger.warning("Could not fetch Xbox achievements endpoint %s: %s", ep, exc)
 
-                    for qt in titles_from_ep:
-                        q_tid = qt.get("titleId")
-                        gp_info = qt.get("gamePass")
-                        if q_tid and isinstance(gp_info, dict) and gp_info.get("isGamePass") is not None:
-                            gamepass_map[str(q_tid)] = bool(gp_info.get("isGamePass"))
+            # Fetch player titles or /api/v2/titles to populate gamePass.isGamePass metadata (and serve as fallback for titles/xuid)
+            title_endpoints = []
+            if xuid:
+                title_endpoints.append(f"https://api.xbl.io/v2/player/{xuid}/titles")
+                title_endpoints.append(f"https://xbl.io/api/v2/player/{xuid}/titles")
+            title_endpoints.append("https://xbl.io/api/v2/titles")
 
-                    if not titles:
-                        titles = titles_from_ep
-            except Exception as exc:
-                logger.warning("Could not fetch Xbox /api/v2/titles for Game Pass status: %s", exc)
+            for ep in title_endpoints:
+                try:
+                    resp = await client.get(ep)
+                    if resp.status_code == 200:
+                        payload = resp.json()
+                        titles_from_ep: List[Dict[str, Any]] = []
+                        if isinstance(payload, dict):
+                            if "content" in payload and isinstance(payload["content"], dict):
+                                xuid = xuid or payload["content"].get("xuid")
+                                titles_from_ep = payload["content"].get("titles", [])
+                            else:
+                                xuid = xuid or payload.get("xuid")
+                                titles_from_ep = payload.get("titles", [])
+                        elif isinstance(payload, list):
+                            titles_from_ep = payload
+
+                        for qt in titles_from_ep:
+                            q_tid = qt.get("titleId")
+                            gp_info = qt.get("gamePass")
+                            if q_tid and isinstance(gp_info, dict) and gp_info.get("isGamePass") is not None:
+                                gamepass_map[str(q_tid)] = bool(gp_info.get("isGamePass"))
+
+                        if not titles:
+                            titles = titles_from_ep
+                        if titles_from_ep:
+                            break
+                except Exception as exc:
+                    logger.warning("Could not fetch Xbox titles endpoint %s: %s", ep, exc)
 
             if not xuid:
                 try:
@@ -592,7 +746,7 @@ async def sync_xbox(
                 async def _fetch_x_ach(g_id: int, t_id: str, p_form: str):
                     async with sem_x:
                         await sync_xbox_achievements_for_game(
-                            client, xbl_key, g_id, t_id, platform=p_form, db_path=db_path
+                            client, xbl_key, g_id, t_id, platform=p_form, db_path=db_path, xuid=xuid
                         )
                 await asyncio.gather(
                     *[_fetch_x_ach(g[0], g[1], g[2]) for g in xbox_needing_ach],

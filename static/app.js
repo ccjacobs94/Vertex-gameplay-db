@@ -2762,10 +2762,15 @@ async function loadSettingsConnections() {
     const psnInput = document.getElementById("setting-psn-npsso");
     if (steamInput) steamInput.value = data.steam_id || "";
     if (xblInput) {
-      xblInput.value = "";
-      xblInput.placeholder = data.has_xbl_api_key
-        ? (data.xbl_api_key_masked || "Configured (enter new to change)")
-        : "Enter key (leave blank to keep current)";
+      if (data.xbox_gamertag) {
+        xblInput.value = data.xbox_gamertag;
+        xblInput.placeholder = "Enter Gamertag";
+      } else {
+        xblInput.value = "";
+        xblInput.placeholder = data.has_xbl_api_key
+          ? (data.xbl_api_key_masked || "Configured (enter new to change)")
+          : "e.g. Major Nelson (leave blank to keep current)";
+      }
     }
     if (psnInput) {
       psnInput.value = "";
@@ -2788,6 +2793,7 @@ async function saveSettingsConnections() {
     steam_id: steamInput ? steamInput.value.trim() : "",
   };
   if (xblInput && xblInput.value.trim()) {
+    payload.xbox_gamertag = xblInput.value.trim();
     payload.xbl_api_key = xblInput.value.trim();
   }
   if (psnInput && psnInput.value.trim()) {
@@ -3540,7 +3546,13 @@ async function loadWizardExistingData() {
     const xblInp = document.getElementById("wizard-xbl-key");
     const psnInp = document.getElementById("wizard-psn-token");
     if (steamInp && data.steam_id) steamInp.value = data.steam_id;
-    if (xblInp && data.has_xbl_api_key) xblInp.placeholder = data.xbl_api_key_masked || "Configured";
+    if (xblInp) {
+      if (data.xbox_gamertag) {
+        xblInp.value = data.xbox_gamertag;
+      } else if (data.has_xbl_api_key) {
+        xblInp.placeholder = data.xbl_api_key_masked || "Configured";
+      }
+    }
     if (psnInp && data.has_psn_npsso) psnInp.placeholder = data.psn_npsso_masked || "Configured";
   } catch (e) {}
 }
@@ -3588,7 +3600,7 @@ async function updateWizardSummary() {
     const res = await fetch("/api/user/connections");
     const data = res.ok ? await res.json() : {};
     const steamVal = document.getElementById("wizard-steam-id")?.value.trim() || data.steam_id;
-    const xblVal = document.getElementById("wizard-xbl-key")?.value.trim() || data.has_xbl_api_key;
+    const xblVal = document.getElementById("wizard-xbl-key")?.value.trim() || data.xbox_gamertag || data.has_xbl_api_key;
     const psnVal = document.getElementById("wizard-psn-token")?.value.trim() || data.has_psn_npsso;
 
     list.innerHTML = "";
@@ -3616,7 +3628,10 @@ async function finishWizardAndSync() {
 
   const payload = {};
   if (steamInp && steamInp.value.trim()) payload.steam_id = steamInp.value.trim();
-  if (xblInp && xblInp.value.trim()) payload.xbl_api_key = xblInp.value.trim();
+  if (xblInp && xblInp.value.trim()) {
+    payload.xbox_gamertag = xblInp.value.trim();
+    payload.xbl_api_key = xblInp.value.trim();
+  }
   if (psnInp && psnInp.value.trim()) payload.psn_npsso = psnInp.value.trim();
 
   try {

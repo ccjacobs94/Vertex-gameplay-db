@@ -1083,24 +1083,19 @@
           </div>
 
           <div class="guidance-box">
-            <h4>How to get your OpenXBL API Key:</h4>
-            <ol>
-              <li>Go to <a href="https://xbl.io" target="_blank" rel="noopener">xbl.io</a> and click <strong>Sign In with Microsoft</strong>.</li>
-              <li>Authorize OpenXBL with your personal Xbox profile.</li>
-              <li>Copy your free personal API key and paste it below:</li>
-            </ol>
-            <a href="https://xbl.io" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
-              Open xbl.io in New Tab ↗
-            </a>
+            <h4>Sync with your Xbox Gamertag:</h4>
+            <p style="margin: 0.35rem 0; font-size: 0.88rem; color: var(--color-text-secondary, #a1a1aa);">
+              No OpenXBL account or Microsoft login required! Enter your Xbox Gamertag and Vertex will query your stats, gamerscore, and achievement history automatically using the server's OpenXBL connection.
+            </p>
           </div>
 
           <div class="form-group">
-            <label for="wizard-xbl-key">OpenXBL API Key</label>
+            <label for="wizard-xbl-key">Xbox Gamertag</label>
             <div class="input-with-button">
-              <input type="password" id="wizard-xbl-key" placeholder="Enter OpenXBL key" autocomplete="off" />
-              <button type="button" id="btn-toggle-wizard-xbl" class="btn btn-sm btn-secondary">Show</button>
+              <input type="text" id="wizard-xbl-key" placeholder="e.g. Major Nelson" autocomplete="off" />
               <button type="button" id="btn-verify-xbox" class="btn btn-secondary">Test &amp; Verify</button>
             </div>
+            <span class="form-hint">Enter your Xbox Gamertag (or personal OpenXBL API key if preferred).</span>
           </div>
 
           <div id="wizard-xbox-status" class="verification-badge-card" hidden></div>
@@ -1232,13 +1227,12 @@
           </div>
 
           <div class="form-group">
-            <label for="setting-xbl-key">OpenXBL API Key</label>
+            <label for="setting-xbl-key">Xbox Gamertag</label>
             <div class="input-with-button">
-              <input type="password" id="setting-xbl-key" placeholder="Enter key (leave blank to keep current)" autocomplete="off" />
-              <button type="button" id="btn-toggle-xbl" class="btn btn-sm btn-secondary" aria-label="Toggle Xbox key visibility">Show</button>
+              <input type="text" id="setting-xbl-key" placeholder="e.g. Major Nelson (leave blank to keep current)" autocomplete="off" />
               <button type="button" id="btn-test-settings-xbox" class="btn btn-sm btn-secondary">Test &amp; Verify</button>
             </div>
-            <span class="form-hint">Obtain a free API key at <a href="https://xbl.io" target="_blank" rel="noopener">xbl.io</a> to sync your Xbox and PC Game Pass games.</span>
+            <span class="form-hint">Enter your Xbox Gamertag to sync games and achievements using the server's OpenXBL connection (or enter your personal OpenXBL API key).</span>
             <div id="settings-xbox-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
           </div>
 
