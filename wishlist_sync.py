@@ -651,7 +651,8 @@ async def discover_skus_for_item(
     if "PC" in target_families and len(existing_pc_storefronts) < 2:
         needed_families.add("PC")
 
-    if not needed_families:
+    missing_cover = not canonical.get("cover_url")
+    if not needed_families and not missing_cover:
         return {"discovered_editions": 0, "discovered_skus": 0}
 
     discovered_editions = 0
