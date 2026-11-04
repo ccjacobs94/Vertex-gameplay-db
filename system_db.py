@@ -121,6 +121,10 @@ def init_system_db(db_path: Optional[str] = None) -> None:
         conn_cols = {r["name"] for r in conn.execute("PRAGMA table_info(user_connections)")}
         if "onboarding_completed" not in conn_cols:
             conn.execute("ALTER TABLE user_connections ADD COLUMN onboarding_completed INTEGER NOT NULL DEFAULT 0")
+        if "xbox_gamertag" not in conn_cols:
+            conn.execute("ALTER TABLE user_connections ADD COLUMN xbox_gamertag TEXT")
+        if "xbox_xuid" not in conn_cols:
+            conn.execute("ALTER TABLE user_connections ADD COLUMN xbox_xuid TEXT")
 
         # New tables for account auditing and instance settings
         conn.executescript(
@@ -688,19 +692,22 @@ def upsert_catalog_cache_entry(
 
 def get_user_connections(user_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
     if not user_id:
-        return {"steam_id": "", "xbl_api_key": "", "psn_npsso": "", "onboarding_completed": False}
+        return {"steam_id": "", "xbl_api_key": "", "xbox_gamertag": "", "xbox_xuid": "", "psn_npsso": "", "onboarding_completed": False}
     target_path = db_path or DEFAULT_SYSTEM_DB_PATH
     init_system_db(target_path)
     with get_system_connection(target_path) as conn:
         row = conn.execute(
-            "SELECT steam_id, xbl_api_key_encrypted, psn_npsso_encrypted, onboarding_completed FROM user_connections WHERE user_id = ?",
+            "SELECT * FROM user_connections WHERE user_id = ?",
             (user_id,),
         ).fetchone()
         if not row:
-            return {"steam_id": "", "xbl_api_key": "", "psn_npsso": "", "onboarding_completed": False}
+            return {"steam_id": "", "xbl_api_key": "", "xbox_gamertag": "", "xbox_xuid": "", "psn_npsso": "", "onboarding_completed": False}
+        keys = row.keys()
         return {
             "steam_id": str(row["steam_id"] or ""),
             "xbl_api_key": str(row["xbl_api_key_encrypted"] or ""),
+            "xbox_gamertag": str(row["xbox_gamertag"] or "") if "xbox_gamertag" in keys else "",
+            "xbox_xuid": str(row["xbox_xuid"] or "") if "xbox_xuid" in keys else "",
             "psn_npsso": str(row["psn_npsso_encrypted"] or ""),
             "onboarding_completed": bool(row["onboarding_completed"]),
         }
@@ -710,6 +717,8 @@ def set_user_connections(
     user_id: str,
     steam_id: Optional[str] = None,
     xbl_api_key: Optional[str] = None,
+    xbox_gamertag: Optional[str] = None,
+    xbox_xuid: Optional[str] = None,
     psn_npsso: Optional[str] = None,
     onboarding_completed: Optional[bool] = None,
     db_path: Optional[str] = None,
@@ -723,31 +732,38 @@ def set_user_connections(
     now = datetime.now(timezone.utc).isoformat()
     with get_system_connection(target_path) as conn:
         existing = conn.execute(
-            "SELECT steam_id, xbl_api_key_encrypted, psn_npsso_encrypted, onboarding_completed FROM user_connections WHERE user_id = ?",
+            "SELECT * FROM user_connections WHERE user_id = ?",
             (user_id,),
         ).fetchone()
 
+        e_keys = existing.keys() if existing else []
         final_steam = steam_id.strip() if steam_id is not None else (existing["steam_id"] if existing else "")
         final_xbl = xbl_api_key.strip() if xbl_api_key is not None else (existing["xbl_api_key_encrypted"] if existing else "")
+        final_gt = xbox_gamertag.strip() if xbox_gamertag is not None else (existing["xbox_gamertag"] if existing and "xbox_gamertag" in e_keys else "")
+        final_xuid = xbox_xuid.strip() if xbox_xuid is not None else (existing["xbox_xuid"] if existing and "xbox_xuid" in e_keys else "")
         final_psn = psn_npsso.strip() if psn_npsso is not None else (existing["psn_npsso_encrypted"] if existing else "")
         final_onboarding = int(onboarding_completed) if onboarding_completed is not None else (existing["onboarding_completed"] if existing else 0)
 
         conn.execute(
             """
-            INSERT INTO user_connections (user_id, steam_id, xbl_api_key_encrypted, psn_npsso_encrypted, updated_at, onboarding_completed)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO user_connections (user_id, steam_id, xbl_api_key_encrypted, xbox_gamertag, xbox_xuid, psn_npsso_encrypted, updated_at, onboarding_completed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 steam_id = excluded.steam_id,
                 xbl_api_key_encrypted = excluded.xbl_api_key_encrypted,
+                xbox_gamertag = excluded.xbox_gamertag,
+                xbox_xuid = excluded.xbox_xuid,
                 psn_npsso_encrypted = excluded.psn_npsso_encrypted,
                 updated_at = excluded.updated_at,
                 onboarding_completed = excluded.onboarding_completed
             """,
-            (user_id, final_steam, final_xbl, final_psn, now, final_onboarding),
+            (user_id, final_steam, final_xbl, final_gt, final_xuid, final_psn, now, final_onboarding),
         )
     return {
         "steam_id": final_steam,
         "xbl_api_key": final_xbl,
+        "xbox_gamertag": final_gt,
+        "xbox_xuid": final_xuid,
         "psn_npsso": final_psn,
         "onboarding_completed": bool(final_onboarding),
     }

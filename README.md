@@ -8,7 +8,7 @@
 
 - **Automated Multi-Platform Sync**:
   - **Steam (PC)**: Syncs owned games, playtime, last-played timestamps, and achievements via the Steam Web API.
-  - **Xbox & PC Game Pass**: Syncs title history, gamerscore/achievements, and playtime via [OpenXBL](https://xbl.io/).
+  - **Xbox & PC Game Pass**: Syncs title history, gamerscore/achievements, and playtime via [OpenXBL](https://xbl.io/). The server administrator maintains the OpenXBL developer API key so friends and family can sync simply by providing their Xbox Gamertag without needing personal OpenXBL accounts or Microsoft logins.
   - **PlayStation 4 & 5**: Syncs PSN titles, playtime, and trophy progress via `psnawp`.
   - **Nintendo Switch & Manual Titles**: Add physical or digital console titles with keyless high-res cover art & release year lookup (Steam Store Search + Wikipedia API, with optional RAWG enrichment).
 - **Smart Cross-Platform Reconciliation**:
@@ -36,7 +36,7 @@ Edit `.env` and fill in whichever platform credentials you use (all platforms ar
 | :--- | :--- |
 | `STEAM_API_KEY` | Get from [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) |
 | `STEAM_ID` | Your 17-digit SteamID64 or custom profile vanity name |
-| `XBL_API_KEY` | Free API key from [xbl.io](https://xbl.io/) |
+| `XBL_API_KEY` | Developer API key from [xbl.io](https://xbl.io/) (used by server backend to lookup Gamertags) |
 | `PSN_NPSSO` | 64-character `npsso` token from [ca.account.sony.com/api/v1/ssocookie](https://ca.account.sony.com/api/v1/ssocookie) |
 | `RAWG_API_KEY` | *(Optional)* Extra genre/critic metadata from [rawg.io/apidocs](https://rawg.io/apidocs) |
 | `SYNC_INTERVAL_HOURS` | Background auto-sync interval in hours (default: `6`) |

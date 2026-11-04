@@ -75,6 +75,7 @@ from db import (
 )
 from sync_engine import (
     enrich_missing_metadata,
+    resolve_xbox_gamertag,
     search_external_metadata,
     sync_all_platforms,
     sync_game_achievements_on_demand,
@@ -320,7 +321,7 @@ def clean_unconfigured_subaccount_libraries(default_user: str, db_path: Optional
             continue
         try:
             uconns = system_db.get_user_connections(uid, db_path=db_path)
-            has_own_creds = bool(uconns.get("steam_id") or uconns.get("xbl_api_key") or uconns.get("psn_npsso"))
+            has_own_creds = bool(uconns.get("steam_id") or uconns.get("xbl_api_key") or uconns.get("xbox_gamertag") or uconns.get("psn_npsso"))
             if not has_own_creds:
                 user_db_file = Path(db.USERS_DB_DIR) / uid / "games.db"
                 if user_db_file.exists():
@@ -498,6 +499,7 @@ class PlaytimePromptResolveRequest(BaseModel):
 class UserConnectionsUpdateRequest(BaseModel):
     steam_id: Optional[str] = None
     xbl_api_key: Optional[str] = None
+    xbox_gamertag: Optional[str] = None
     psn_npsso: Optional[str] = None
 
 
@@ -1363,14 +1365,35 @@ def _verify_steam_connection(credential: str) -> Dict[str, Any]:
     }
 
 
-def _verify_xbox_connection(credential: str) -> Dict[str, Any]:
+async def _verify_xbox_connection(credential: str) -> Dict[str, Any]:
     cleaned = clean_xbl_key(credential)
     if not cleaned:
-        return {"status": "error", "platform": "xbox", "message": "OpenXBL API key cannot be empty"}
+        return {"status": "error", "platform": "xbox", "message": "Xbox Gamertag or OpenXBL API key cannot be empty"}
 
+    server_xbl_key = os.environ.get("XBL_API_KEY", "").strip() or (system_db.get_setting("xbl_api_key") or "").strip()
+
+    # 1. If server has XBL_API_KEY, try resolving credential as an Xbox Gamertag via friends search
+    if server_xbl_key:
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as aclient:
+                gt_res = await resolve_xbox_gamertag(aclient, server_xbl_key, cleaned)
+                if gt_res and gt_res.get("xuid"):
+                    return {
+                        "status": "ok",
+                        "platform": "xbox",
+                        "gamertag": gt_res["gamertag"],
+                        "xuid": gt_res["xuid"],
+                        "gamerscore": gt_res["gamerscore"],
+                        "avatar_url": gt_res.get("avatar_url", ""),
+                        "message": f"Xbox account verified successfully as {gt_res['gamertag']} ({gt_res['gamerscore']} G)",
+                    }
+        except Exception as exc:
+            logger.debug("Server OpenXBL gamertag resolution error for %s: %s", cleaned, exc)
+
+    # 2. Alternatively, verify credential directly as a personal OpenXBL API key
     try:
-        with httpx.Client(timeout=15.0) as client:
-            resp = client.get(
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
                 "https://xbl.io/api/v2/account",
                 headers={"X-Authorization": cleaned, "Accept": "application/json"},
             )
@@ -1380,8 +1403,10 @@ def _verify_xbox_connection(credential: str) -> Dict[str, Any]:
                 gamertag = "Xbox Gamer"
                 gamerscore = "0"
                 avatar_url = ""
+                xuid = ""
                 if profile_users:
                     u = profile_users[0]
+                    xuid = str(u.get("id") or u.get("hostId") or "")
                     settings = {s.get("id"): s.get("value", "") for s in u.get("settings", [])}
                     gamertag = settings.get("Gamertag") or u.get("hostId") or gamertag
                     gamerscore = settings.get("Gamerscore", "0")
@@ -1390,19 +1415,34 @@ def _verify_xbox_connection(credential: str) -> Dict[str, Any]:
                     "status": "ok",
                     "platform": "xbox",
                     "gamertag": gamertag,
+                    "xuid": xuid,
                     "gamerscore": gamerscore,
                     "avatar_url": avatar_url,
                     "message": f"Xbox account verified successfully as {gamertag} ({gamerscore} G)",
                 }
             elif resp.status_code in (401, 403):
+                if server_xbl_key:
+                    return {
+                        "status": "error",
+                        "platform": "xbox",
+                        "message": f"Could not find Xbox Gamertag '{cleaned}'. Please check the spelling or Xbox privacy settings.",
+                    }
                 return {"status": "error", "platform": "xbox", "message": "Invalid OpenXBL API key (unauthorized)"}
             else:
+                if server_xbl_key:
+                    return {
+                        "status": "error",
+                        "platform": "xbox",
+                        "message": f"Could not verify Xbox Gamertag '{cleaned}' via OpenXBL (HTTP {resp.status_code})",
+                    }
                 return {
                     "status": "error",
                     "platform": "xbox",
                     "message": f"OpenXBL returned status {resp.status_code}",
                 }
     except Exception as exc:
+        if server_xbl_key:
+            return {"status": "error", "platform": "xbox", "message": f"Xbox Gamertag lookup failed: {exc}"}
         return {"status": "error", "platform": "xbox", "message": f"Xbox verification check failed: {exc}"}
 
 
@@ -1473,13 +1513,15 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
         "username": username,
         "steam_id": conns.get("steam_id", ""),
         "has_xbl_api_key": bool(xbl_key),
+        "xbox_gamertag": conns.get("xbox_gamertag", ""),
+        "xbox_xuid": conns.get("xbox_xuid", ""),
         "has_psn_npsso": bool(psn_token),
         "onboarding_completed": onboarding_completed,
         "xbl_api_key_masked": (f"••••••••{xbl_key[-4:]}" if len(xbl_key) >= 4 else ("••••" if xbl_key else "")),
         "psn_npsso_masked": (f"••••••••{psn_token[-4:]}" if len(psn_token) >= 4 else ("••••" if psn_token else "")),
         "server_defaults": {
             "steam": bool(os.environ.get("STEAM_API_KEY") and (os.environ.get("STEAM_ID") if is_primary else False)),
-            "xbox": bool(os.environ.get("XBL_API_KEY") if is_primary else False),
+            "xbox": bool(os.environ.get("XBL_API_KEY")),
             "psn": bool(os.environ.get("PSN_NPSSO") if is_primary else False),
         },
     }
@@ -1494,14 +1536,50 @@ async def api_update_user_connections(
         raise HTTPException(status_code=401, detail="Authentication required")
 
     steam = clean_steam_input(payload.steam_id) if payload.steam_id is not None else None
-    # If key is "__CLEAR__", clear it; if empty string/None, preserve existing
-    xbl = "" if payload.xbl_api_key == "__CLEAR__" else (clean_xbl_key(payload.xbl_api_key) if payload.xbl_api_key else None)
+
+    # Handle xbox_gamertag and xbl_api_key
+    raw_gt = payload.xbox_gamertag
+    raw_xbl = payload.xbl_api_key
+
+    xbox_gt = None
+    if raw_gt is not None:
+        xbox_gt = "" if raw_gt == "__CLEAR__" else raw_gt.strip()
+
+    xbl = None
+    if raw_xbl is not None:
+        if raw_xbl == "__CLEAR__":
+            xbl = ""
+            if raw_gt is None:
+                xbox_gt = ""
+        else:
+            cleaned_xbl = clean_xbl_key(raw_xbl)
+            # If user entered a gamertag into the key field without separate xbox_gamertag
+            if raw_gt is None and cleaned_xbl and (len(cleaned_xbl) <= 15 or " " in cleaned_xbl):
+                xbox_gt = cleaned_xbl
+                xbl = ""
+            else:
+                xbl = cleaned_xbl
+
     psn = "" if payload.psn_npsso == "__CLEAR__" else (clean_psn_token(payload.psn_npsso) if payload.psn_npsso else None)
+
+    # Attempt to resolve xuid immediately if gamertag is configured and server has key
+    resolved_xuid = None
+    server_key = os.environ.get("XBL_API_KEY", "").strip() or xbl
+    if xbox_gt and server_key:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                gt_data = await resolve_xbox_gamertag(client, server_key, xbox_gt)
+                if gt_data and gt_data.get("xuid"):
+                    resolved_xuid = gt_data["xuid"]
+        except Exception:
+            pass
 
     updated = system_db.set_user_connections(
         user_id=user_id,
         steam_id=steam,
         xbl_api_key=xbl,
+        xbox_gamertag=xbox_gt,
+        xbox_xuid=resolved_xuid,
         psn_npsso=psn,
     )
     return {
@@ -1510,6 +1588,8 @@ async def api_update_user_connections(
         "connections": {
             "steam_id": updated.get("steam_id", ""),
             "has_xbl_api_key": bool(updated.get("xbl_api_key")),
+            "xbox_gamertag": updated.get("xbox_gamertag", ""),
+            "xbox_xuid": updated.get("xbox_xuid", ""),
             "has_psn_npsso": bool(updated.get("psn_npsso")),
             "onboarding_completed": bool(updated.get("onboarding_completed", False)),
         },

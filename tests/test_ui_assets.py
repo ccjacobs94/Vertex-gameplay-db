@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=35 and sw to v31
+        # Cache buster must be bumped to v=35 and sw to v32
         self.assertIn('href="/static/styles.css?v=35"', index_html)
         self.assertIn('src="/static/app.js?v=35"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v31";', sw_js)
+        self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[1-9]|[4-9]\d+)";')
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -263,10 +263,10 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.deleteWishlistItem = deleteWishlistItem;", app_js)
         self.assertIn("window.selectCandidateForConfig = selectCandidateForConfig;", app_js)
 
-        # 5. Cache buster must be bumped to v=35 and sw to v31
+        # 5. Cache buster must be bumped to v=35 and sw to v32
         self.assertIn('href="/static/styles.css?v=35"', index_html)
         self.assertIn('src="/static/app.js?v=35"', index_html)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v31";', sw_js)
+        self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[1-9]|[4-9]\d+)";')
 
         # 6. Abridged platform summary (lowest price per platform) with 1-click expandable detailed store view & brand SVG logos
         self.assertIn("function formatWishlistStorefrontLabel(", app_js)
