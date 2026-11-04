@@ -1046,7 +1046,25 @@ async def discover_skus_for_item(
                 if lib_row and lib_row["cover_url"]:
                     found_cover = lib_row["cover_url"]
 
-            # B) If still missing, check any discovered Xbox SKUs for product image
+            # B) If still missing, check any discovered Steam or Xbox SKUs for product image
+            if not found_cover:
+                with db.get_connection(db_path) as conn:
+                    steam_sku = conn.execute(
+                        """
+                        SELECT s.store_sku_id FROM edition_platform_skus s
+                        JOIN game_editions e ON s.edition_id = e.id
+                        WHERE e.canonical_game_id = ? AND s.storefront = 'steam' AND s.store_sku_id GLOB '[0-9]*'
+                        LIMIT 1
+                        """,
+                        (c_id,),
+                    ).fetchone()
+                if steam_sku:
+                    s_appid = steam_sku["store_sku_id"].split(":")[0]
+                    steam_client = SteamStoreAdapter()
+                    s_details = await steam_client.get_app_details(s_appid)
+                    if s_details and s_details.get("header_image"):
+                        found_cover = s_details["header_image"]
+
             if not found_cover:
                 with db.get_connection(db_path) as conn:
                     xb_skus = conn.execute(
