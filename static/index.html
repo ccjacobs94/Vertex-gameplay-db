@@ -1078,29 +1078,17 @@
             <span class="platform-icon" aria-hidden="true">🟢</span>
             <div>
               <h3>Xbox &amp; PC Game Pass</h3>
-              <p class="card-desc">Sync Xbox console titles, Windows Xbox app, and cloud playtime.</p>
+              <p class="card-desc">Sync your Xbox consoles, Windows Xbox app, and Game Pass library.</p>
             </div>
           </div>
 
-          <div class="guidance-box">
-            <h4>How to get your OpenXBL API Key:</h4>
-            <ol>
-              <li>Go to <a href="https://xbl.io" target="_blank" rel="noopener">xbl.io</a> and click <strong>Sign In with Microsoft</strong>.</li>
-              <li>Authorize OpenXBL with your personal Xbox profile.</li>
-              <li>Copy your free personal API key and paste it below:</li>
-            </ol>
-            <a href="https://xbl.io" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
-              Open xbl.io in New Tab ↗
-            </a>
-          </div>
-
-          <div class="form-group">
-            <label for="wizard-xbl-key">OpenXBL API Key</label>
+          <div class="form-group" style="margin-top: 1rem;">
+            <label for="wizard-xbl-key" style="font-weight: 600;">Xbox Gamertag</label>
             <div class="input-with-button">
-              <input type="password" id="wizard-xbl-key" placeholder="Enter OpenXBL key" autocomplete="off" />
-              <button type="button" id="btn-toggle-wizard-xbl" class="btn btn-sm btn-secondary">Show</button>
-              <button type="button" id="btn-verify-xbox" class="btn btn-secondary">Test &amp; Verify</button>
+              <input type="text" id="wizard-xbl-key" placeholder="Enter Gamertag (e.g. Chief117 or Major Nelson)" autocomplete="off" />
+              <button type="button" id="btn-verify-xbox" class="btn btn-secondary">Connect</button>
             </div>
+            <span class="form-hint">Type your Gamertag. Vertex will automatically find your profile, gamerscore, and avatar.</span>
           </div>
 
           <div id="wizard-xbox-status" class="verification-badge-card" hidden></div>
@@ -1231,14 +1219,26 @@
             <div id="settings-steam-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
           </div>
 
-          <div class="form-group">
-            <label for="setting-xbl-key">OpenXBL API Key</label>
-            <div class="input-with-button">
-              <input type="password" id="setting-xbl-key" placeholder="Enter key (leave blank to keep current)" autocomplete="off" />
-              <button type="button" id="btn-toggle-xbl" class="btn btn-sm btn-secondary" aria-label="Toggle Xbox key visibility">Show</button>
-              <button type="button" id="btn-test-settings-xbox" class="btn btn-sm btn-secondary">Test &amp; Verify</button>
+          <div class="form-group" id="settings-xbox-group">
+            <label for="setting-xbl-key">Xbox &amp; PC Game Pass</label>
+            <div id="setting-xbox-input-row" class="input-with-button">
+              <input type="text" id="setting-xbl-key" placeholder="Enter Xbox Gamertag (e.g. Chief117)" autocomplete="off" />
+              <button type="button" id="btn-test-settings-xbox" class="btn btn-sm btn-secondary">Connect</button>
             </div>
-            <span class="form-hint">Obtain a free API key at <a href="https://xbl.io" target="_blank" rel="noopener">xbl.io</a> to sync your Xbox and PC Game Pass games.</span>
+            <div id="settings-xbox-connected-card" class="xbox-connected-player-card" hidden>
+              <div class="xbox-player-info">
+                <img id="settings-xbox-avatar" class="verification-avatar" src="" alt="Gamerpic" />
+                <div class="xbox-player-text">
+                  <div class="xbox-gamertag-row">
+                    <span id="settings-xbox-gamertag" class="xbox-player-gamertag"></span>
+                    <span id="settings-xbox-gamerscore" class="xbox-player-gamerscore-badge"></span>
+                  </div>
+                  <span class="xbox-sync-status">Connected &amp; Auto-Syncing ✓</span>
+                </div>
+              </div>
+              <button type="button" id="btn-disconnect-xbox" class="btn btn-sm btn-ghost btn-disconnect-action" title="Change or disconnect Xbox account">Change</button>
+            </div>
+            <span id="setting-xbox-hint" class="form-hint">Type your Xbox Gamertag to automatically sync games, playtime, and gamerscore.</span>
             <div id="settings-xbox-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
           </div>
 
