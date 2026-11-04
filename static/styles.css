@@ -4914,6 +4914,70 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   border: 2px solid var(--border-subtle);
 }
 
+.xbox-connected-player-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  background: rgba(16, 124, 65, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: var(--radius-md);
+  margin-top: 0.25rem;
+  transition: all 0.2s ease;
+}
+
+.xbox-player-info {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.xbox-player-gamertag {
+  font-weight: 600;
+  font-size: 0.98rem;
+  color: var(--text-primary);
+}
+
+.xbox-gamertag-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.xbox-player-gamerscore-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  padding: 0.15rem 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.xbox-sync-status {
+  display: block;
+  font-size: 0.78rem;
+  color: #10b981;
+  margin-top: 0.15rem;
+}
+
+.btn-disconnect-action {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  cursor: pointer;
+}
+
+.btn-disconnect-action:hover {
+  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
 .ready-sync-card {
   text-align: center;
   align-items: center;

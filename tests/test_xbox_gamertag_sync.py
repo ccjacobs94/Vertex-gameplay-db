@@ -238,6 +238,48 @@ class TestXboxGamertagSync(unittest.TestCase):
             self.assertEqual(get_res.status_code, 200)
             self.assertEqual(get_res.json().get("xbox_gamertag"), "HaloPlayer42")
 
+    @patch("app.sync_xbox", new_callable=AsyncMock)
+    @patch("app.sync_all_platforms", new_callable=AsyncMock)
+    def test_api_trigger_sync_platform_xbox_filter(self, mock_sync_all, mock_sync_xbox):
+        uid = system_db.create_user(
+            username="xbox_sync_user",
+            password="Password123!",
+            status="active",
+            db_path=self.system_db_path,
+        )
+        self.client.post("/login", data={"username": "xbox_sync_user", "password": "Password123!"})
+
+        mock_sync_xbox.return_value = {"source": "Xbox", "status": "success", "games_synced": 4}
+        res = self.client.post("/api/sync?platform=xbox")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data.get("status"), "completed")
+        mock_sync_xbox.assert_called_once()
+        mock_sync_all.assert_not_called()
+
+    def test_user_connections_disconnect_xbox(self):
+        uid = system_db.create_user(
+            username="xbox_disconnect_user",
+            password="Password123!",
+            status="active",
+            db_path=self.system_db_path,
+        )
+        self.client.post("/login", data={"username": "xbox_disconnect_user", "password": "Password123!"})
+
+        # Save gamertag
+        self.client.post("/api/user/connections", json={"xbox_gamertag": "TestGamer"})
+        res = self.client.get("/api/user/connections")
+        self.assertEqual(res.json().get("xbox_gamertag"), "TestGamer")
+
+        # Disconnect by sending __CLEAR__
+        disc_res = self.client.post("/api/user/connections", json={"xbox_gamertag": "__CLEAR__"})
+        self.assertEqual(disc_res.status_code, 200)
+        self.assertEqual(disc_res.json().get("connections", {}).get("xbox_gamertag"), "")
+
+        # Verify it is cleared
+        res_after = self.client.get("/api/user/connections")
+        self.assertEqual(res_after.json().get("xbox_gamertag"), "")
+
 
 if __name__ == "__main__":
     unittest.main()

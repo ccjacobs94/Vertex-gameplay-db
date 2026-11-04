@@ -2760,18 +2760,58 @@ async function loadSettingsConnections() {
     const steamInput = document.getElementById("setting-steam-id");
     const xblInput = document.getElementById("setting-xbl-key");
     const psnInput = document.getElementById("setting-psn-npsso");
+    const inputRow = document.getElementById("setting-xbox-input-row");
+    const card = document.getElementById("settings-xbox-connected-card");
+    const gtEl = document.getElementById("settings-xbox-gamertag");
+    const scoreEl = document.getElementById("settings-xbox-gamerscore");
+    const avatarEl = document.getElementById("settings-xbox-avatar");
+
     if (steamInput) steamInput.value = data.steam_id || "";
-    if (xblInput) {
-      if (data.xbox_gamertag) {
-        xblInput.value = data.xbox_gamertag;
-        xblInput.placeholder = "Enter Gamertag";
-      } else {
+
+    if (data.xbox_gamertag) {
+      if (inputRow) inputRow.hidden = true;
+      if (card) card.hidden = false;
+      if (gtEl) gtEl.textContent = data.xbox_gamertag;
+      if (xblInput) xblInput.value = data.xbox_gamertag;
+
+      fetch("/api/user/connections/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: "xbox", credential: data.xbox_gamertag }),
+      })
+        .then((r) => r.json())
+        .then((lookup) => {
+          if (lookup.status === "ok") {
+            if (avatarEl) {
+              if (lookup.avatar_url) {
+                avatarEl.src = lookup.avatar_url;
+                avatarEl.style.display = "";
+              } else {
+                avatarEl.style.display = "none";
+              }
+            }
+            if (scoreEl) {
+              if (lookup.gamerscore !== undefined && lookup.gamerscore !== null) {
+                scoreEl.textContent = "⭐ " + Number(lookup.gamerscore).toLocaleString() + " G";
+                scoreEl.style.display = "";
+              } else {
+                scoreEl.style.display = "none";
+              }
+            }
+          }
+        })
+        .catch(() => {});
+    } else {
+      if (inputRow) inputRow.hidden = false;
+      if (card) card.hidden = true;
+      if (xblInput) {
         xblInput.value = "";
         xblInput.placeholder = data.has_xbl_api_key
-          ? (data.xbl_api_key_masked || "Configured (enter new to change)")
-          : "e.g. Major Nelson (leave blank to keep current)";
+          ? (data.xbl_api_key_masked || "Configured (API key)")
+          : "Enter Xbox Gamertag (e.g. Chief117)";
       }
     }
+
     if (psnInput) {
       psnInput.value = "";
       psnInput.placeholder = data.has_psn_npsso
@@ -2788,13 +2828,13 @@ async function saveSettingsConnections() {
   const steamInput = document.getElementById("setting-steam-id");
   const xblInput = document.getElementById("setting-xbl-key");
   const psnInput = document.getElementById("setting-psn-npsso");
+  const xboxCard = document.getElementById("settings-xbox-connected-card");
 
   const payload = {
     steam_id: steamInput ? steamInput.value.trim() : "",
   };
-  if (xblInput && xblInput.value.trim()) {
+  if (xblInput && (!xboxCard || xboxCard.hidden) && xblInput.value.trim()) {
     payload.xbox_gamertag = xblInput.value.trim();
-    payload.xbl_api_key = xblInput.value.trim();
   }
   if (psnInput && psnInput.value.trim()) {
     payload.psn_npsso = psnInput.value.trim();
@@ -3451,6 +3491,170 @@ window.loadAccountInfo = loadAccountInfo;
 window.loadAdminUsers = loadAdminUsers;
 
 let currentWizardStep = 1;
+let xboxLookupTimer = null;
+
+async function performLiveXboxLink(gamertag, statusContainerId, isWizard = false) {
+  const container = document.getElementById(statusContainerId);
+  const cleanGt = (gamertag || "").trim();
+
+  if (!cleanGt) {
+    if (container) {
+      container.hidden = true;
+      container.innerHTML = "";
+    }
+    return false;
+  }
+
+  if (container) {
+    container.hidden = false;
+    container.className = "verification-badge-card loading";
+    container.innerHTML = `<span>⏳ Finding Gamertag "${escapeHtml(cleanGt)}"...</span>`;
+  }
+
+  try {
+    const res = await fetch("/api/user/connections/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: "xbox", credential: cleanGt }),
+    });
+    const data = await res.json();
+
+    if (res.ok && data.status === "ok") {
+      const resolvedGt = data.gamertag || cleanGt;
+
+      // 1. Automatically auto-save connection for this user
+      try {
+        await fetch("/api/user/connections", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ xbox_gamertag: resolvedGt }),
+        });
+      } catch (saveErr) {
+        console.warn("Failed to auto-save Xbox connection:", saveErr);
+      }
+
+      // 2. Automatically trigger background sync for Xbox
+      try {
+        fetch("/api/sync?platform=xbox", { method: "POST" }).catch((e) =>
+          console.warn("Auto-sync Xbox trigger warning:", e)
+        );
+      } catch (syncErr) {
+        console.warn("Failed to trigger background sync:", syncErr);
+      }
+
+      // 3. Update UI
+      if (isWizard) {
+        if (container) {
+          container.hidden = false;
+          container.className = "verification-badge-card success";
+          const avatarHtml = data.avatar_url
+            ? `<img src="${escapeHtml(data.avatar_url)}" class="verification-avatar" alt="Gamerpic" />`
+            : "";
+          const scoreHtml =
+            data.gamerscore !== undefined && data.gamerscore !== null
+              ? `<span class="xbox-player-gamerscore-badge">⭐ ${Number(data.gamerscore).toLocaleString()} G</span>`
+              : "";
+          container.innerHTML = `
+            ${avatarHtml}
+            <div class="xbox-player-text">
+              <div class="xbox-gamertag-row">
+                <span class="xbox-player-gamertag">${escapeHtml(resolvedGt)}</span>
+                ${scoreHtml}
+              </div>
+              <span class="xbox-sync-status">Connected &amp; Auto-Syncing ✓</span>
+            </div>
+          `;
+        }
+        const wizInput = document.getElementById("wizard-xbl-key");
+        if (wizInput) wizInput.value = resolvedGt;
+      } else {
+        const inputRow = document.getElementById("setting-xbox-input-row");
+        const card = document.getElementById("settings-xbox-connected-card");
+        const gtEl = document.getElementById("settings-xbox-gamertag");
+        const scoreEl = document.getElementById("settings-xbox-gamerscore");
+        const avatarEl = document.getElementById("settings-xbox-avatar");
+        const xblInput = document.getElementById("setting-xbl-key");
+
+        if (gtEl) gtEl.textContent = resolvedGt;
+        if (scoreEl) {
+          if (data.gamerscore !== undefined && data.gamerscore !== null) {
+            scoreEl.textContent = "⭐ " + Number(data.gamerscore).toLocaleString() + " G";
+            scoreEl.style.display = "";
+          } else {
+            scoreEl.style.display = "none";
+          }
+        }
+        if (avatarEl) {
+          if (data.avatar_url) {
+            avatarEl.src = data.avatar_url;
+            avatarEl.style.display = "";
+          } else {
+            avatarEl.style.display = "none";
+          }
+        }
+        if (xblInput) xblInput.value = resolvedGt;
+        if (inputRow) inputRow.hidden = true;
+        if (card) card.hidden = false;
+        if (container) {
+          container.hidden = true;
+          container.innerHTML = "";
+        }
+      }
+      return true;
+    } else {
+      if (container) {
+        container.hidden = false;
+        container.className = "verification-badge-card error";
+        const errMsg = data.message || data.detail || "Gamertag not found — check spelling";
+        container.innerHTML = `<span>✕ ${escapeHtml(errMsg)}</span>`;
+      }
+      return false;
+    }
+  } catch (err) {
+    if (container) {
+      container.hidden = false;
+      container.className = "verification-badge-card error";
+      container.innerHTML = `<span>✕ Connection error: ${escapeHtml(err.message)}</span>`;
+    }
+    return false;
+  }
+}
+
+async function disconnectXboxAccount() {
+  try {
+    const res = await fetch("/api/user/connections", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ xbox_gamertag: "__CLEAR__", xbl_api_key: "__CLEAR__" }),
+    });
+    if (res.ok) {
+      const inputRow = document.getElementById("setting-xbox-input-row");
+      const card = document.getElementById("settings-xbox-connected-card");
+      const xblInput = document.getElementById("setting-xbl-key");
+      const statusEl = document.getElementById("settings-xbox-status");
+      if (card) card.hidden = true;
+      if (inputRow) inputRow.hidden = false;
+      if (xblInput) {
+        xblInput.value = "";
+        xblInput.placeholder = "Enter Xbox Gamertag (e.g. Chief117)";
+        xblInput.focus();
+      }
+      if (statusEl) {
+        statusEl.hidden = false;
+        statusEl.className = "verification-badge-card";
+        statusEl.innerHTML = "<span>Xbox disconnected. You can connect a new Gamertag anytime.</span>";
+        setTimeout(() => {
+          if (statusEl) statusEl.hidden = true;
+        }, 3500);
+      }
+    }
+  } catch (err) {
+    console.error("Failed to disconnect Xbox account:", err);
+  }
+}
+
+window.performLiveXboxLink = performLiveXboxLink;
+window.disconnectXboxAccount = disconnectXboxAccount;
 
 async function testPlatformConnection(platform, credential, statusContainerId) {
   const container = document.getElementById(statusContainerId);
@@ -3549,6 +3753,7 @@ async function loadWizardExistingData() {
     if (xblInp) {
       if (data.xbox_gamertag) {
         xblInp.value = data.xbox_gamertag;
+        performLiveXboxLink(data.xbox_gamertag, "wizard-xbox-status", true);
       } else if (data.has_xbl_api_key) {
         xblInp.placeholder = data.xbl_api_key_masked || "Configured";
       }
@@ -3630,7 +3835,6 @@ async function finishWizardAndSync() {
   if (steamInp && steamInp.value.trim()) payload.steam_id = steamInp.value.trim();
   if (xblInp && xblInp.value.trim()) {
     payload.xbox_gamertag = xblInp.value.trim();
-    payload.xbl_api_key = xblInp.value.trim();
   }
   if (psnInp && psnInp.value.trim()) payload.psn_npsso = psnInp.value.trim();
 
@@ -6163,8 +6367,44 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnVerifyXbox = document.getElementById("btn-verify-xbox");
   if (btnVerifyXbox) {
     btnVerifyXbox.addEventListener("click", () => {
+      clearTimeout(xboxLookupTimer);
       const val = document.getElementById("wizard-xbl-key")?.value || "";
-      testPlatformConnection("xbox", val, "wizard-xbox-status");
+      performLiveXboxLink(val, "wizard-xbox-status", true);
+    });
+  }
+
+  const wizXblInp = document.getElementById("wizard-xbl-key");
+  if (wizXblInp) {
+    wizXblInp.addEventListener("input", () => {
+      clearTimeout(xboxLookupTimer);
+      const val = wizXblInp.value.trim();
+      if (val.length < 2) {
+        const container = document.getElementById("wizard-xbox-status");
+        if (container) {
+          container.hidden = true;
+          container.innerHTML = "";
+        }
+        return;
+      }
+      xboxLookupTimer = setTimeout(() => {
+        performLiveXboxLink(val, "wizard-xbox-status", true);
+      }, 500);
+    });
+
+    wizXblInp.addEventListener("keydown", async (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        clearTimeout(xboxLookupTimer);
+        const val = wizXblInp.value.trim();
+        if (val) {
+          const ok = await performLiveXboxLink(val, "wizard-xbox-status", true);
+          if (ok) {
+            setTimeout(() => switchWizardStep(3), 600);
+          }
+        } else {
+          switchWizardStep(3);
+        }
+      }
     });
   }
 
@@ -6187,8 +6427,46 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnTestSetXbox = document.getElementById("btn-test-settings-xbox");
   if (btnTestSetXbox) {
     btnTestSetXbox.addEventListener("click", () => {
+      clearTimeout(xboxLookupTimer);
       const val = document.getElementById("setting-xbl-key")?.value || "";
-      testPlatformConnection("xbox", val, "settings-xbox-status");
+      performLiveXboxLink(val, "settings-xbox-status", false);
+    });
+  }
+
+  const settingXblInp = document.getElementById("setting-xbl-key");
+  if (settingXblInp) {
+    settingXblInp.addEventListener("input", () => {
+      clearTimeout(xboxLookupTimer);
+      const val = settingXblInp.value.trim();
+      if (val.length < 2) {
+        const container = document.getElementById("settings-xbox-status");
+        if (container) {
+          container.hidden = true;
+          container.innerHTML = "";
+        }
+        return;
+      }
+      xboxLookupTimer = setTimeout(() => {
+        performLiveXboxLink(val, "settings-xbox-status", false);
+      }, 500);
+    });
+
+    settingXblInp.addEventListener("keydown", async (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        clearTimeout(xboxLookupTimer);
+        const val = settingXblInp.value.trim();
+        if (val) {
+          await performLiveXboxLink(val, "settings-xbox-status", false);
+        }
+      }
+    });
+  }
+
+  const btnDisconnectXbox = document.getElementById("btn-disconnect-xbox");
+  if (btnDisconnectXbox) {
+    btnDisconnectXbox.addEventListener("click", () => {
+      disconnectXboxAccount();
     });
   }
 
