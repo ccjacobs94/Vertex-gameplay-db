@@ -484,6 +484,13 @@ class TestSecurityCriticalAndHigh(unittest.TestCase):
         with self.assertRaises(ValueError):
             web_auth.create_web_session("nonexistent_ghost_user")
 
+    def test_mcp_allowed_hosts_includes_public_domains(self):
+        import app
+        with mock.patch.dict(os.environ, {"MCP_PUBLIC_DOMAIN": "https://gaming-mcp.crjacobs.cc"}, clear=False):
+            hosts = app.get_allowed_mcp_hosts()
+            self.assertIn("gaming-mcp.crjacobs.cc", hosts)
+            self.assertIn("gaming-mcp.crjacobs.cc:*", hosts)
+
 
 if __name__ == "__main__":
     unittest.main()
