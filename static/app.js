@@ -879,9 +879,9 @@ function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc, linkedC
   const handleRatio = () => {
     if (img.naturalWidth && img.naturalHeight) {
       const ratio = img.naturalWidth / img.naturalHeight;
-      // Wide landscape artwork (ratio > 1.25, e.g. 16:9 or Steam 460x215 banner)
-      // Switch to seamless full-width landscape presentation so the full title and artwork remain visible
-      if (ratio > 1.25 && wrapper) {
+      // Anything wider than a 2:3 poster (square boxart, 16:9 or Steam 460x215 banners)
+      // would be cropped by object-fit: cover, so show it whole over a blurred backdrop
+      if (ratio > 0.72 && wrapper) {
         wrapper.classList.add("cover-landscape");
         wrapper.style.setProperty("--cover-bg", `url("${img.currentSrc || img.src}")`);
       } else if (wrapper) {

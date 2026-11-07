@@ -123,6 +123,56 @@ class TestUserCredentialsAndSyncs(unittest.TestCase):
             extra_headers = mock_make_client.call_args.kwargs.get("extra_headers", {})
             self.assertEqual(extra_headers.get("X-Authorization"), "user_custom_xbl_key")
 
+    def _run_xbox_sync_with_images(self, images):
+        """Run a mocked Xbox sync for one title that exposes the given image list."""
+        ach_resp = MagicMock()
+        ach_resp.status_code = 200
+        ach_resp.json.return_value = {
+            "xuid": "xuid_123",
+            "titles": [
+                {
+                    "titleId": "555",
+                    "name": "Gears 5",
+                    "type": "Game",
+                    "devices": ["XboxSeries"],
+                    "achievement": {"currentAchievements": 1, "totalAchievements": 10},
+                    "images": images,
+                }
+            ],
+        }
+        titles_resp = MagicMock()
+        titles_resp.status_code = 200
+        titles_resp.json.return_value = {"xuid": "xuid_123", "titles": []}
+        stats_resp = MagicMock()
+        stats_resp.status_code = 200
+        stats_resp.json.return_value = {"content": {"statlistscollection": []}}
+
+        client = AsyncMock()
+        client.get.side_effect = [ach_resp, titles_resp]
+        client.post.return_value = stats_resp
+        client.__aenter__.return_value = client
+        client.__aexit__.return_value = None
+        with patch.dict(os.environ, {"XBL_API_KEY": ""}, clear=False), patch(
+            "sync_engine._make_async_client", return_value=client
+        ):
+            return asyncio.run(sync_xbox(db_path=self.db_path, credentials={"xbl_api_key": "k"}))
+
+    def test_sync_xbox_does_not_downgrade_poster_to_square_boxart(self):
+        # 2026-11-06: a later sync that only exposed square BoxArt overwrote the
+        # 2:3 Poster cover, which then rendered cropped in the poster grid.
+        poster = "http://store-images.example/poster-2x3"
+        boxart = "http://store-images.example/boxart-1x1"
+        self._run_xbox_sync_with_images([{"type": "Poster", "url": poster}])
+        self.assertEqual(db.get_game_by_id(1, db_path=self.db_path)["cover_url"], poster)
+
+        self._run_xbox_sync_with_images([{"type": "BoxArt", "url": boxart}])
+        self.assertEqual(db.get_game_by_id(1, db_path=self.db_path)["cover_url"], poster)
+
+    def test_sync_xbox_uses_boxart_when_no_cover_exists_yet(self):
+        boxart = "http://store-images.example/boxart-1x1"
+        self._run_xbox_sync_with_images([{"type": "BoxArt", "url": boxart}])
+        self.assertEqual(db.get_game_by_id(1, db_path=self.db_path)["cover_url"], boxart)
+
     def test_sync_psn_uses_user_credentials(self):
         with patch.dict(os.environ, {"PSN_NPSSO": ""}, clear=False), patch(
             "sync_engine._sync_psn_blocking", return_value=3
