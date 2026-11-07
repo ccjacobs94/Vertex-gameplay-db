@@ -146,6 +146,7 @@ class TestWishlistMCP(unittest.IsolatedAsyncioTestCase):
                 storefront="steam",
             )
             self.assertTrue(price_res["is_all_time_low"])
+            self.assertEqual(price_res["sku"]["current_price_usd"], 25.00)
 
             # Query deals
             deals = mcp_server.get_wishlist_deals(platform="PC")
@@ -155,6 +156,51 @@ class TestWishlistMCP(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(deal["is_smart_upgrade"])
             self.assertEqual(deal["edition_name"], "Deluxe Edition")
             self.assertEqual(deal["current_price_usd"], 25.00)
+
+    async def test_update_item_price_above_target_and_include_above_target(self):
+        with patch("mcp_server.get_default_db_path", return_value=self.db_path):
+            item = await mcp_server.add_to_wishlist(
+                title="This War of Mine",
+                platform_targets=[{"platform": "Xbox", "target_price_usd": 4.99}],
+            )
+            w_id = item["wishlist_item"]["id"]
+
+            price_res = mcp_server.update_item_price(
+                wishlist_item_id=w_id,
+                platform="Xbox",
+                price_usd=19.99,
+                storefront="xbox_store",
+            )
+            self.assertEqual(price_res["sku"]["current_price_usd"], 19.99)
+
+            # By default (include_above_target=False), $19.99 > $4.99 target, so no deal
+            deals = mcp_server.get_wishlist_deals(platform="Xbox", include_above_target=False)
+            self.assertEqual(len(deals["deals"]), 0)
+
+            # With include_above_target=True, the tracked Xbox price is returned
+            above_deals = mcp_server.get_wishlist_deals(platform="Xbox", include_above_target=True)
+            self.assertEqual(len(above_deals["deals"]), 1)
+            self.assertEqual(above_deals["deals"][0]["current_price_usd"], 19.99)
+
+    async def test_unpriced_zero_dollar_skus_never_surface_as_deals(self):
+        with patch("mcp_server.get_default_db_path", return_value=self.db_path):
+            item = await mcp_server.add_to_wishlist(
+                title="Grand Theft Auto VI",
+                platform_targets=[{"platform": "Xbox", "target_price_usd": 40.00}],
+            )
+            w_id = item["wishlist_item"]["id"]
+
+            # Record a placeholder 0.0 price for unreleased/unpriced game
+            mcp_server.update_item_price(
+                wishlist_item_id=w_id,
+                platform="Xbox",
+                price_usd=0.0,
+                storefront="xbox_store",
+            )
+
+            # 0.0 must never surface as a valid deal under $40 target
+            deals = mcp_server.get_wishlist_deals(platform="Xbox")
+            self.assertEqual(len(deals["deals"]), 0)
 
     async def test_mark_as_purchased(self):
         with patch("mcp_server.get_default_db_path", return_value=self.db_path):
