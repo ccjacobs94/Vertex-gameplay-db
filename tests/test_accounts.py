@@ -402,6 +402,12 @@ class TestAccountApiEndpoints(unittest.TestCase):
         (victim_dir / "games.db").touch()
         self.assertTrue(victim_dir.exists())
 
+        system_db.create_user(
+            username="gamer_dan",
+            password="Password123!",
+            role="user",
+            db_path=self.system_db_path,
+        )
         # Non-admin gets 403
         with patch("web_auth.verify_web_session", return_value="gamer_dan"), \
              patch("app.verify_web_session", return_value="gamer_dan"):

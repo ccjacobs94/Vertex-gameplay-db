@@ -99,17 +99,43 @@ wait_for_health() {
 if [[ "$TARGET" == "main" ]]; then
   echo "🚀 Deploying PRIMARY PRODUCTION container ('game-hub') from 'main'..."
 
-  # 1. Back up production database and system database if present
+  # 1. Back up production databases (system, default, and all per-user databases)
+  umask 077
   mkdir -p "$BACKUP_DIR" 2>/dev/null || BACKUP_DIR="$DATA_DIR"
+  chmod 700 "$BACKUP_DIR" 2>/dev/null || true
+
+  backup_sqlite() {
+    local src="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "$dst")"
+    if command -v sqlite3 >/dev/null 2>&1; then
+      sqlite3 "$src" ".backup '$dst'"
+    else
+      python3 -c "import sqlite3, sys; s = sqlite3.connect(sys.argv[1]); d = sqlite3.connect(sys.argv[2]); s.backup(d); d.close(); s.close()" "$src" "$dst"
+    fi
+    chmod 600 "$dst" 2>/dev/null || true
+  }
+
   if [[ -f "$DATA_DIR/games.db" ]]; then
     BACKUP_FILE="$BACKUP_DIR/games.db.bak-$(date +%Y%m%d-%H%M%S)"
     echo "📦 Backing up production database to $BACKUP_FILE"
-    cp "$DATA_DIR/games.db" "$BACKUP_FILE"
+    backup_sqlite "$DATA_DIR/games.db" "$BACKUP_FILE"
   fi
   if [[ -f "$DATA_DIR/system.db" ]]; then
     SYS_BACKUP_FILE="$BACKUP_DIR/system.db.bak-$(date +%Y%m%d-%H%M%S)"
     echo "📦 Backing up system database to $SYS_BACKUP_FILE"
-    cp "$DATA_DIR/system.db" "$SYS_BACKUP_FILE"
+    backup_sqlite "$DATA_DIR/system.db" "$SYS_BACKUP_FILE"
+  fi
+  if [[ -d "$DATA_DIR/users" ]]; then
+    for udir in "$DATA_DIR/users"/*; do
+      if [[ -d "$udir" ]] && [[ -f "$udir/games.db" ]]; then
+        uname="$(basename "$udir")"
+        ubackup="$BACKUP_DIR/users/$uname/games.db.bak-$(date +%Y%m%d-%H%M%S)"
+        echo "📦 Backing up user database for '$uname' to $ubackup"
+        backup_sqlite "$udir/games.db" "$ubackup"
+        prune_backups "$BACKUP_DIR/users/$uname" "$BACKUP_KEEP"
+      fi
+    done
   fi
   prune_backups "$BACKUP_DIR" "$BACKUP_KEEP"
 
@@ -118,7 +144,7 @@ if [[ "$TARGET" == "main" ]]; then
   docker compose up -d --build game-hub
 
   # 3. Verify healthcheck on port 8095
-  wait_for_health "http://localhost:8095/api/stats" "Primary Game Hub (Port 8095)" || true
+  wait_for_health "http://localhost:8095/healthz" "Primary Game Hub (Port 8095)" || true
 
   echo ""
   echo "=================================================================="
@@ -155,7 +181,7 @@ elif [[ "$TARGET" == "develop" ]]; then
   docker compose --profile qa up -d --build game-hub-qa
 
   # 4. Verify healthcheck on port 8098
-  wait_for_health "http://localhost:8098/api/stats" "QA Game Hub (Port 8098)" || true
+  wait_for_health "http://localhost:8098/healthz" "QA Game Hub (Port 8098)" || true
 
   echo ""
   echo "=================================================================="

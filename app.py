@@ -7,6 +7,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import inspect
+import ipaddress
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import socket
 import sqlite3
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
@@ -88,6 +90,8 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger("gamehub.web")
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -189,8 +193,17 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
     from starlette.routing import Route
     from mcp.server.transport_security import TransportSecuritySettings
 
-    # Disable local DNS rebinding protection since Cloudflare Tunnel terminates domain traffic
-    sec = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+    allowed_mcp_hosts = ["localhost", "127.0.0.1", "::1"]
+    custom_hosts = os.environ.get("MCP_ALLOWED_HOSTS") or os.environ.get("VERTEX_ALLOWED_HOSTS") or ""
+    if custom_hosts:
+        for ch in custom_hosts.split(","):
+            if ch.strip() and ch.strip() not in allowed_mcp_hosts:
+                allowed_mcp_hosts.append(ch.strip())
+
+    sec = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_mcp_hosts,
+    )
     # Stateless: each request runs in its own context so current_user_id (set per bearer token)
     # can never leak across tenants through a long-lived shared MCP session.
     mcp_app = mcp_server.mcp.streamable_http_app(
@@ -267,7 +280,7 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
     mcp_app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -378,8 +391,46 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+def is_allowed_host(host_header: str) -> bool:
+    if not host_header:
+        return False
+    h = host_header.split(":")[0].strip().lower()
+    if not h:
+        return False
+    if h in ("localhost", "127.0.0.1", "::1", "testserver"):
+        return True
+    if h.endswith(".local"):
+        return True
+    try:
+        ipaddress.ip_address(h)
+        return True
+    except ValueError:
+        pass
+    allowed_env = os.environ.get("VERTEX_ALLOWED_HOSTS", "").strip()
+    if allowed_env:
+        for pattern in allowed_env.split(","):
+            p = pattern.strip().lower()
+            if p == "*" or p == h:
+                return True
+            if p.startswith("*.") and h.endswith(p[1:]):
+                return True
+    pub_url = os.environ.get("PUBLIC_BASE_URL", "").strip()
+    if pub_url:
+        try:
+            pub_host = urlparse(pub_url).hostname
+            if pub_host and h == pub_host.lower():
+                return True
+        except Exception:
+            pass
+    return False
+
+
 class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        host = request.headers.get("host", "")
+        if host and not is_allowed_host(host):
+            return Response("Invalid Host header", status_code=400)
+
         path = request.url.path
         if request.method != "OPTIONS" and not is_public_path(path):
             if not is_request_authenticated(request):
@@ -554,12 +605,9 @@ def _get_active_user(request: Request) -> Tuple[Optional[str], Optional[str]]:
     user_id = get_current_user_id()
     if not user_id and username:
         user = system_db.get_user_by_username(username)
-        if user:
-            if user.get("status") != "active":
-                return None, None
-            user_id = user["id"]
-        else:
-            user_id = system_db.ensure_user(username)
+        if not user or user.get("status") != "active":
+            return None, None
+        user_id = user["id"]
     return user_id, username
 
 
@@ -620,9 +668,6 @@ def _get_session_user(request: Request) -> Optional[Dict[str, Any]]:
             uid = verify_bearer_token(token)
             if uid:
                 return system_db.get_user(uid)
-            expected = get_auth_password()
-            if expected and secrets.compare_digest(token, expected):
-                username = get_auth_username()
     if not username:
         return None
     return system_db.get_user_by_username(username)
@@ -801,6 +846,11 @@ async def api_list_games(
         include_unconsolidated=include_unconsolidated,
     )
     return {"count": len(games), "games": games}
+
+
+@app.get("/healthz")
+async def api_healthz() -> Dict[str, bool]:
+    return {"ok": True}
 
 
 @app.get("/api/stats")
@@ -2353,6 +2403,65 @@ async def api_get_vapid_public_key() -> Dict[str, str]:
     return {"publicKey": keys["public_key"]}
 
 
+_ALLOWED_PUSH_HOST_SUFFIXES = (
+    "fcm.googleapis.com",
+    ".push.apple.com",
+    "web.push.apple.com",
+    ".notify.windows.com",
+    "updates.push.services.mozilla.com",
+    ".push.services.mozilla.com",
+)
+
+
+def is_valid_push_endpoint(endpoint: str) -> bool:
+    if not endpoint:
+        return False
+    try:
+        parsed = urlparse(endpoint)
+    except Exception:
+        return False
+
+    if parsed.scheme.lower() != "https":
+        return False
+
+    host = (parsed.hostname or "").lower().strip()
+    if not host:
+        return False
+
+    allowed = False
+    for suffix in _ALLOWED_PUSH_HOST_SUFFIXES:
+        if suffix.startswith("."):
+            if host.endswith(suffix):
+                allowed = True
+                break
+        elif host == suffix:
+            allowed = True
+            break
+
+    custom_hosts = os.environ.get("VERTEX_ALLOWED_PUSH_HOSTS", "").strip()
+    if custom_hosts:
+        for ch in custom_hosts.split(","):
+            ch = ch.strip().lower()
+            if ch and (host == ch or host.endswith("." + ch)):
+                allowed = True
+                break
+
+    if not allowed:
+        return False
+
+    try:
+        addr_info = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+        for _, _, _, _, sockaddr in addr_info:
+            ip_str = sockaddr[0]
+            ip = ipaddress.ip_address(ip_str)
+            if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local or ip.is_multicast:
+                return False
+    except Exception:
+        pass
+
+    return True
+
+
 @app.post("/api/push/subscribe")
 async def api_push_subscribe(
     payload: Dict[str, Any],
@@ -2367,6 +2476,12 @@ async def api_push_subscribe(
     auth = keys.get("auth")
     if not endpoint or not p256dh or not auth:
         raise HTTPException(status_code=400, detail="endpoint, keys.p256dh, and keys.auth are required")
+
+    if not is_valid_push_endpoint(endpoint):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid push service endpoint: must be a trusted public HTTPS push service",
+        )
 
     sub = db.upsert_push_subscription(
         endpoint=endpoint,

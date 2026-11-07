@@ -110,10 +110,9 @@ def _resolve_session_user_id(request: Request, db_path: Optional[str] = None) ->
     if not username:
         return None
     user = system_db.get_user_by_username(username, db_path=db_path)
-    if user and user.get("status") != "active":
+    if not user or user.get("status") != "active":
         return None
-    user_id = user["id"] if user else system_db.ensure_user(username, db_path=db_path)
-    return user_id
+    return user["id"]
 
 
 def extract_bearer_token(request: Request) -> str:
@@ -138,20 +137,16 @@ def is_valid_redirect_uri(redirect_uri: str) -> bool:
 
 
 def verify_code_challenge(verifier: str, challenge: str, method: str = "S256") -> bool:
-    if not challenge:
-        return True
-    if not verifier:
+    if not challenge or not verifier:
         return False
-    if method == "plain":
-        return secrets.compare_digest(verifier, challenge)
-    if method == "S256":
-        calculated = (
-            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
-            .decode("ascii")
-            .rstrip("=")
-        )
-        return secrets.compare_digest(calculated, challenge.rstrip("="))
-    return False
+    if method != "S256":
+        return False
+    calculated = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
+        .decode("ascii")
+        .rstrip("=")
+    )
+    return secrets.compare_digest(calculated, challenge.rstrip("="))
 
 
 async def protected_resource_metadata(request: Request) -> JSONResponse:
@@ -192,7 +187,7 @@ async def authorization_server_metadata(request: Request) -> JSONResponse:
                 "client_secret_basic",
                 "none",
             ],
-            "code_challenge_methods_supported": ["S256", "plain"],
+            "code_challenge_methods_supported": ["S256"],
             "scopes_supported": ["gamehub:read", "gamehub:write", "openid", "profile", "email"],
         },
         headers={
@@ -321,6 +316,12 @@ async def authorize_endpoint(request: Request):
             status_code=400,
         )
 
+    if not code_challenge or code_challenge_method != "S256":
+        return HTMLResponse(
+            "<p style='font-family:sans-serif;color:#ef4444;padding:24px;'>OAuth 2.1 requires PKCE: code_challenge is required and code_challenge_method must be S256.</p>",
+            status_code=400,
+        )
+
     user_id = _resolve_session_user_id(request)
     if not user_id:
         # Not signed in: prompt for a Vertex login, then return to this authorization request.
@@ -440,20 +441,44 @@ async def token_endpoint(request: Request) -> JSONResponse:
                 },
             )
 
+        # Enforce redirect_uri binding
+        req_redirect_uri = str(data.get("redirect_uri") or "")
+        if record.get("redirect_uri") and req_redirect_uri != record.get("redirect_uri"):
+            logger.warning("Token exchange rejected: redirect_uri mismatch")
+            return JSONResponse(
+                {"error": "invalid_grant", "error_description": "redirect_uri mismatch"},
+                status_code=400,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Content-Type": "application/json;charset=UTF-8",
+                },
+            )
+
+        # Enforce client_id binding
+        if client_id and record.get("client_id") and client_id != record.get("client_id"):
+            logger.warning("Token exchange rejected: client_id mismatch")
+            return JSONResponse(
+                {"error": "invalid_grant", "error_description": "client_id mismatch"},
+                status_code=400,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Content-Type": "application/json;charset=UTF-8",
+                },
+            )
+
         code_verifier = str(data.get("code_verifier") or "")
-        if record.get("code_challenge"):
-            if not code_verifier or not verify_code_challenge(
-                code_verifier, record["code_challenge"], record.get("code_challenge_method", "S256")
-            ):
-                logger.warning("Token exchange rejected: PKCE verification failed")
-                return JSONResponse(
-                    {"error": "invalid_grant", "error_description": "PKCE code_verifier check failed"},
-                    status_code=400,
-                    headers={
-                        "Access-Control-Allow-Origin": "*",
-                        "Content-Type": "application/json;charset=UTF-8",
-                    },
-                )
+        if not code_verifier or not verify_code_challenge(
+            code_verifier, record["code_challenge"], record.get("code_challenge_method", "S256")
+        ):
+            logger.warning("Token exchange rejected: PKCE verification failed")
+            return JSONResponse(
+                {"error": "invalid_grant", "error_description": "PKCE code_verifier check failed"},
+                status_code=400,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Content-Type": "application/json;charset=UTF-8",
+                },
+            )
 
         access_token = "gh_mcp_" + secrets.token_urlsafe(32)
         refresh_token = "gh_ref_" + secrets.token_urlsafe(32)
