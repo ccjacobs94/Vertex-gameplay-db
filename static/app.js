@@ -110,6 +110,28 @@ const state = {
   pushSubscribed: false,
 };
 
+const LUCIDE_ICONS = {
+  library: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>`,
+  wishlist: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>`,
+  insights: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`,
+  settings: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+  sync: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>`,
+  reconcile: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>`,
+  triage: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m13 2-2 10h6L7 22l2-10H3z"/></svg>`,
+  clock: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>`,
+  trophy: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>`,
+  star: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
+  starFilled: `<svg class="lucide-icon lucide-star-filled" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
+  plus: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+  more: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>`,
+  close: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+  check: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+  trash: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>`,
+  bell: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>`,
+  bellOff: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"/><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/><line x1="2" y1="2" x2="22" y2="22"/></svg>`,
+  lock: `<svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`,
+};
+
 const BRAND_ICONS = {
   steam: `<svg class="brand-icon brand-icon-steam" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.911c0 .052.004.105.004.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 15.27C1.862 20.307 6.486 24 11.979 24c6.627 0 11.999-5.373 11.999-12S18.605 0 11.979 0zM7.54 18.21l-1.473-.61c.262.543.714.999 1.314 1.25 1.297.539 2.793-.076 3.332-1.375.263-.63.264-1.319.005-1.949s-.75-1.121-1.377-1.383c-.624-.26-1.29-.249-1.878-.03l1.523.63c.956.4 1.409 1.5 1.009 2.455-.397.957-1.497 1.41-2.454 1.012H7.54zm11.415-9.303c0-1.662-1.353-3.015-3.015-3.015-1.665 0-3.015 1.353-3.015 3.015 0 1.665 1.35 3.015 3.015 3.015 1.663 0 3.015-1.35 3.015-3.015zm-5.273-.005c0-1.252 1.013-2.266 2.265-2.266 1.249 0 2.266 1.014 2.266 2.266 0 1.251-1.017 2.265-2.266 2.265-1.253 0-2.265-1.014-2.265-2.265z"/></svg>`,
   xbox: `<svg class="brand-icon brand-icon-xbox" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4.102 21.033C6.211 22.881 8.977 24 12 24c3.026 0 5.789-1.119 7.902-2.967 1.877-1.912-4.316-8.709-7.902-11.417-3.582 2.708-9.779 9.505-7.898 11.417zm11.16-14.406c2.5 2.961 7.484 10.313 6.076 12.912C23.002 17.48 24 14.861 24 12.004c0-3.34-1.365-6.362-3.57-8.536 0 0-.027-.022-.082-.042-.063-.022-.152-.045-.281-.045-.592 0-1.985.434-4.805 3.246zM3.654 3.426c-.057.02-.082.041-.086.042C1.365 5.642 0 8.664 0 12.004c0 2.854.998 5.473 2.661 7.533-1.401-2.605 3.579-9.951 6.08-12.91-2.82-2.813-4.216-3.245-4.806-3.245-.131 0-.223.021-.281.046v-.002zM12 3.551S9.055 1.828 6.755 1.746c-.903-.033-1.454.295-1.521.339C7.379.646 9.659 0 11.984 0H12c2.334 0 4.605.646 6.766 2.085-.068-.046-.615-.372-1.52-.339C14.946 1.828 12 3.545 12 3.545v.006z"/></svg>`,
@@ -166,7 +188,7 @@ function createPlatformBrandIconsSpan(gameOrPlatform, extraClass = "") {
 }
 
 function makeFallbackAchIcon(name) {
-  const char = (name || "A").trim().charAt(0).toUpperCase() || "🏆";
+  const char = (name || "A").trim().charAt(0).toUpperCase() || "A";
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44">
     <rect width="44" height="44" rx="6" fill="#1e293b"/>
     <text x="22" y="27" fill="#94a3b8" font-family="sans-serif" font-size="16" font-weight="bold" text-anchor="middle">${char}</text>
@@ -174,12 +196,19 @@ function makeFallbackAchIcon(name) {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
+function updateLibraryActionsDot() {
+  const dot = document.getElementById("library-actions-badge");
+  if (!dot) return;
+  const untriagedCount = state.games.filter((g) => !g.status_locked).length;
+  const hasPending = untriagedCount > 0 || (state.reconcileCandidatesCount || 0) > 0;
+  dot.hidden = !hasPending;
+}
+
 function updateTriageButtonBadge() {
   const untriagedCount = state.games.filter((g) => !g.status_locked).length;
   const btn = document.getElementById("btn-open-triage");
   if (btn) {
-    btn.innerHTML = "";
-    btn.appendChild(document.createTextNode("⚡ Quick Triage "));
+    btn.innerHTML = `${LUCIDE_ICONS.triage} <span>Quick Triage</span> `;
     if (untriagedCount > 0) {
       const badge = document.createElement("span");
       badge.className = "triage-badge-pill";
@@ -192,6 +221,12 @@ function updateTriageButtonBadge() {
     mBadge.textContent = untriagedCount;
     mBadge.hidden = untriagedCount <= 0;
   }
+  const sheetBadge = document.getElementById("sheet-triage-badge");
+  if (sheetBadge) {
+    sheetBadge.textContent = untriagedCount;
+    sheetBadge.hidden = untriagedCount <= 0;
+  }
+  updateLibraryActionsDot();
 }
 
 function updateReconcileButtonBadge(count) {
@@ -200,8 +235,7 @@ function updateReconcileButtonBadge(count) {
   }
   const btn = document.getElementById("btn-open-reconcile");
   if (btn) {
-    btn.innerHTML = "";
-    btn.appendChild(document.createTextNode("🔗 Reconcile "));
+    btn.innerHTML = `${LUCIDE_ICONS.reconcile} <span>Reconcile</span> `;
     if (state.reconcileCandidatesCount > 0) {
       const badge = document.createElement("span");
       badge.className = "triage-badge-pill";
@@ -214,6 +248,12 @@ function updateReconcileButtonBadge(count) {
     mBadge.textContent = state.reconcileCandidatesCount;
     mBadge.hidden = state.reconcileCandidatesCount <= 0;
   }
+  const sheetBadge = document.getElementById("sheet-reconcile-badge");
+  if (sheetBadge) {
+    sheetBadge.textContent = state.reconcileCandidatesCount;
+    sheetBadge.hidden = state.reconcileCandidatesCount <= 0;
+  }
+  updateLibraryActionsDot();
 }
 
 function updateActiveFiltersUI() {
@@ -733,7 +773,7 @@ function renderHabitsDashboard(data) {
 
         card.innerHTML = `
           <div class="hof-poster-wrap">
-            <span class="hof-rank-badge">👑 #${idx + 1}</span>
+            <span class="hof-rank-badge">#${idx + 1}</span>
             <img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(g.title)}" class="hof-poster-img" loading="lazy" onerror="this.src='${fallback}'">
           </div>
           <div class="hof-card-body">
@@ -822,30 +862,30 @@ function makeFallbackCover(title, platform) {
   const safeTitle = (title || "Game").replace(/[<>&"]/g, "");
   const safePlat = (platform || "").replace(/[<>&"]/g, "");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">
-    <rect width="300" height="450" fill="#131b2e"/>
-    <rect x="16" y="16" width="268" height="418" rx="8" fill="none" stroke="#26334d" stroke-width="2"/>
-    <text x="150" y="200" fill="#94a3b8" font-family="sans-serif" font-size="14" text-anchor="middle">${safePlat}</text>
-    <text x="150" y="235" fill="#f1f5f9" font-family="sans-serif" font-weight="bold" font-size="18" text-anchor="middle">${safeTitle.slice(0, 24)}</text>
+    <rect width="300" height="450" fill="#172036"/>
+    <rect x="16" y="16" width="268" height="418" rx="8" fill="none" stroke="#26334d" stroke-width="1.5"/>
+    <text x="150" y="200" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="500" letter-spacing="0.05em" text-anchor="middle">${safePlat.toUpperCase()}</text>
+    <text x="150" y="235" fill="#f1f5f9" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-weight="600" font-size="16" text-anchor="middle">${safeTitle.slice(0, 24)}</text>
   </svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc) {
-  if (!wrapper || !img) return;
+function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc, linkedCovers = []) {
+  if (!img) return;
 
   let attemptedFallbackHeader = false;
+  let linkedCoverIndex = 0;
 
   const handleRatio = () => {
     if (img.naturalWidth && img.naturalHeight) {
       const ratio = img.naturalWidth / img.naturalHeight;
-      // 2:3 aspect ratio is ~0.667. If > 0.72 (e.g. 1.0 square or wide landscape),
-      // standard object-fit: cover would crop the left and right sides.
-      // Switch to ambient blurred contain mode so the entire logo and artwork remain visible.
-      if (ratio > 0.72) {
-        wrapper.classList.add("cover-ambient");
+      // Anything wider than a 2:3 poster (square boxart, 16:9 or Steam 460x215 banners)
+      // would be cropped by object-fit: cover, so show it whole over a blurred backdrop
+      if (ratio > 0.72 && wrapper) {
+        wrapper.classList.add("cover-landscape");
         wrapper.style.setProperty("--cover-bg", `url("${img.currentSrc || img.src}")`);
-      } else {
-        wrapper.classList.remove("cover-ambient");
+      } else if (wrapper) {
+        wrapper.classList.remove("cover-landscape");
         wrapper.style.removeProperty("--cover-bg");
       }
     }
@@ -854,23 +894,36 @@ function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc) {
   img.addEventListener("load", handleRatio);
 
   img.addEventListener("error", () => {
-    // If a Steam library_600x900.jpg 404s, attempt Steam header.jpg before falling back to SVG
-    if (!attemptedFallbackHeader && img.src && img.src.includes("steamstatic.com") && img.src.includes("library_600x900.jpg")) {
+    // 1. Try alternative covers from linked cross-platform copies (e.g. Xbox 720x1080 vertical poster)
+    while (linkedCoverIndex < linkedCovers.length) {
+      const altUrl = linkedCovers[linkedCoverIndex++];
+      if (altUrl && altUrl !== img.src) {
+        img.src = altUrl;
+        return;
+      }
+    }
+
+    // 2. If a Steam library_600x900.jpg 404s, attempt Steam header.jpg before falling back to SVG
+    if (
+      !attemptedFallbackHeader &&
+      img.src &&
+      (img.src.includes("steamstatic.com") || img.src.includes("akamai.steamstatic.com")) &&
+      img.src.includes("library_600x900.jpg")
+    ) {
       attemptedFallbackHeader = true;
       img.src = img.src.replace("library_600x900.jpg", "header.jpg");
       return;
     }
-    wrapper.classList.remove("cover-ambient");
-    wrapper.style.removeProperty("--cover-bg");
+
+    if (wrapper) {
+      wrapper.classList.remove("cover-landscape");
+      wrapper.style.removeProperty("--cover-bg");
+    }
     img.src = fallbackSrc;
   });
 
   if (targetSrc) {
     img.src = targetSrc;
-  }
-
-  if (img.complete && img.naturalWidth) {
-    handleRatio();
   }
 }
 
@@ -929,7 +982,7 @@ function renderPlaytimePrompts(prompts) {
     info.className = "playtime-prompt-info";
 
     const isReplay = p.current_status === "Beaten" || p.current_status === "Completed";
-    const kickerText = isReplay ? "🔄 Replay Activity Detected" : "🎮 Recent Playtime Detected";
+    const kickerText = isReplay ? "Replay Activity Detected" : "Recent Playtime Detected";
 
     info.innerHTML = `
       <div class="playtime-prompt-kicker">
@@ -1007,11 +1060,20 @@ async function fetchStats() {
     }
 
 
-    document.getElementById("stat-total-games").textContent = stats.total_games || 0;
-    document.getElementById("stat-total-hours").textContent = `${stats.total_playtime_hours || 0} hrs`;
-    document.getElementById("stat-playing").textContent = stats.playing_count || 0;
-    document.getElementById("stat-backlog").textContent = stats.backlog_count || 0;
-    document.getElementById("stat-completed").textContent = stats.completed_count || 0;
+    const totalGames = (stats.total_games || 0).toLocaleString();
+    const totalHours = (stats.total_playtime_hours || 0).toLocaleString();
+    const totalGamesEl = document.getElementById("stat-total-games");
+    if (totalGamesEl) totalGamesEl.textContent = totalGames;
+    const totalHoursEl = document.getElementById("stat-total-hours");
+    if (totalHoursEl) totalHoursEl.textContent = totalHours;
+
+    const statPlaying = document.getElementById("stat-playing");
+    if (statPlaying) statPlaying.textContent = stats.playing_count || 0;
+    const statBacklog = document.getElementById("stat-backlog");
+    if (statBacklog) statBacklog.textContent = stats.backlog_count || 0;
+    const statCompleted = document.getElementById("stat-completed");
+    if (statCompleted) statCompleted.textContent = stats.completed_count || 0;
+
     updateReconcileButtonBadge(stats.reconcile_candidates_count || 0);
     renderPlaytimePrompts(stats.playtime_prompts || []);
 
@@ -1057,18 +1119,25 @@ async function fetchStats() {
     }
 
     const srcEl = document.getElementById("source-indicators");
-    srcEl.innerHTML = "";
+    if (srcEl) {
+      srcEl.innerHTML = "";
+    }
     const cfg = stats.configured_sources || {};
-    const labels = [
-      { key: "steam", name: "Steam Auto-Sync" },
-      { key: "xbox", name: "Xbox Auto-Sync" },
-      { key: "psn", name: "PSN Auto-Sync" },
-    ];
-    for (const item of labels) {
-      const span = document.createElement("span");
-      span.className = `source-tag ${cfg[item.key] ? "active" : ""}`;
-      span.textContent = `${item.name}: ${cfg[item.key] ? "Active" : "Not Set"}`;
-      srcEl.appendChild(span);
+    const activeKeys = Object.entries(cfg)
+      .filter(([_, v]) => Boolean(v))
+      .map(([k]) => k.toUpperCase());
+    const syncBtn = document.getElementById("btn-sync");
+    const syncDot = document.getElementById("sync-health-dot");
+    if (syncBtn) {
+      if (activeKeys.length > 0) {
+        syncBtn.classList.add("sync-healthy");
+        syncBtn.title = `Sync Health: Active (${activeKeys.join(", ")}) · Click to sync libraries`;
+        if (syncDot) syncDot.classList.add("dot-active");
+      } else {
+        syncBtn.classList.remove("sync-healthy");
+        syncBtn.title = "Sync Health: No platforms configured · Click to sync";
+        if (syncDot) syncDot.classList.remove("dot-active");
+      }
     }
   } catch (err) {
     console.error("Failed to fetch stats:", err);
@@ -1161,7 +1230,10 @@ function renderGames() {
     card.tabIndex = 0;
 
     const fallbackSrc = makeFallbackCover(game.title, game.platform);
-    const imgSrc = game.cover_url || fallbackSrc;
+    const linkedCovers = (game.linked_games || [])
+      .map((lg) => lg.cover_url)
+      .filter((url) => Boolean(url) && url !== game.cover_url);
+    const imgSrc = game.cover_url || (linkedCovers[0] || fallbackSrc);
 
     const wrapper = document.createElement("div");
     wrapper.className = "cover-wrapper";
@@ -1172,73 +1244,11 @@ function renderGames() {
     img.height = 450;
     img.loading = i < 6 ? "eager" : "lazy";
     img.decoding = "async";
-    attachCoverAspectObserver(wrapper, img, fallbackSrc, imgSrc);
+    attachCoverAspectObserver(wrapper, img, fallbackSrc, imgSrc, linkedCovers);
     wrapper.appendChild(img);
 
-    const platBadge = document.createElement("span");
-    platBadge.className = "platform-badge";
-    const brandIcons = createPlatformBrandIconsSpan(game);
-    if (brandIcons) platBadge.appendChild(brandIcons);
-    const platText = document.createElement("span");
-    platText.className = "platform-label-text";
-    platText.textContent = game.platform;
-    platBadge.appendChild(platText);
-    wrapper.appendChild(platBadge);
-
-    if (game.is_game_pass) {
-      const gpBadge = document.createElement("span");
-      gpBadge.className = "gamepass-badge";
-      gpBadge.title = "Currently available on Xbox Game Pass";
-      gpBadge.innerHTML = `${BRAND_ICONS.gamepass_logo}<span class="sr-only">Game Pass</span>`;
-      wrapper.appendChild(gpBadge);
-    }
-
-    const ownStatus = game.ownership_status || "Owned";
-    if (ownStatus !== "Owned") {
-      const ownBadge = document.createElement("span");
-      const ownSlug = ownStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-      ownBadge.className = `ownership-badge ${ownSlug}`;
-      ownBadge.textContent = ownStatus;
-      ownBadge.title = `Ownership: ${ownStatus}`;
-      wrapper.appendChild(ownBadge);
-    }
-
-    if (game.favorite) {
-      const fav = document.createElement("span");
-      fav.className = "fav-star";
-      fav.textContent = "★";
-      fav.setAttribute("aria-label", "Favorite");
-      wrapper.appendChild(fav);
-    }
-
-    if (game.user_rating) {
-      const ratingBadge = document.createElement("span");
-      ratingBadge.className = "rating-badge";
-      ratingBadge.textContent = `★ ${game.user_rating}/10`;
-      ratingBadge.setAttribute("aria-label", `User Rating: ${game.user_rating} out of 10`);
-      wrapper.appendChild(ratingBadge);
-    }
-
-    const achTot = game.achievements_total || 0;
-    const achUnl = game.achievements_unlocked || 0;
-    if (achTot > 0 || achUnl > 0) {
-      const achBadge = document.createElement("span");
-      achBadge.className = "card-ach-badge";
-      if (achTot > 0 && achUnl >= achTot) {
-        achBadge.classList.add("ach-complete");
-      }
-      achBadge.textContent = achTot > 0 ? `🏆 ${achUnl}/${achTot}` : `🏆 ${achUnl}`;
-      if (game.is_reconciled && Array.isArray(game.linked_games) && game.linked_games.length > 1) {
-        const platDetails = game.linked_games
-          .map((lg) => `${lg.platform}: ${lg.achievements_unlocked || 0}/${lg.achievements_total || 0}`)
-          .join(" • ");
-        achBadge.title = `Unique non-overlapping: ${achUnl}/${achTot} (${platDetails})`;
-      } else {
-        achBadge.title = `Achievements: ${achUnl}/${achTot}`;
-      }
-      wrapper.appendChild(achBadge);
-    }
-
+    // Ultra-clean media catalog: Zero stacked badges across the face of the art!
+    // Title, platform indicator, and completion state cleanly beneath each poster in high-contrast typography.
     const body = document.createElement("div");
     body.className = "card-body";
 
@@ -1247,78 +1257,43 @@ function renderGames() {
     h3.textContent = game.title;
     body.appendChild(h3);
 
-    const subrow = document.createElement("div");
-    subrow.className = "card-list-subrow";
+    const ownStatus = game.ownership_status || "Owned";
+    const metaRow = document.createElement("div");
+    metaRow.className = "card-meta-row";
 
-    const listPlat = document.createElement("span");
-    listPlat.className = "card-list-plat";
-    const listBrandIcons = createPlatformBrandIconsSpan(game);
-    if (listBrandIcons) listPlat.appendChild(listBrandIcons);
-    const listPlatText = document.createElement("span");
-    listPlatText.textContent = game.platform;
-    listPlat.appendChild(listPlatText);
-    subrow.appendChild(listPlat);
+    const platSpan = document.createElement("span");
+    platSpan.className = "card-plat-indicator";
+    const brandIcons = createPlatformBrandIconsSpan(game);
+    if (brandIcons) platSpan.appendChild(brandIcons);
+    const platText = document.createElement("span");
+    platText.className = "card-plat-text";
+    platText.textContent = game.platform;
+    platSpan.appendChild(platText);
+    metaRow.appendChild(platSpan);
 
     if (game.is_game_pass) {
-      const listGp = document.createElement("span");
-      listGp.className = "card-list-gp";
-      listGp.title = "Currently on Game Pass";
-      listGp.innerHTML = `${BRAND_ICONS.gamepass} <span>GP</span>`;
-      subrow.appendChild(listGp);
-    }
-
-    if (ownStatus !== "Owned") {
-      const listOwn = document.createElement("span");
+      const gpSpan = document.createElement("span");
+      gpSpan.className = "card-gp-indicator";
+      gpSpan.textContent = "Game Pass";
+      metaRow.appendChild(gpSpan);
+    } else if (ownStatus !== "Owned") {
+      const ownSpan = document.createElement("span");
       const ownSlug = ownStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-      listOwn.className = `card-list-ownership ${ownSlug}`;
-      listOwn.textContent = ownStatus;
-      subrow.appendChild(listOwn);
+      ownSpan.className = `card-ownership-indicator ${ownSlug}`;
+      ownSpan.textContent = ownStatus;
+      metaRow.appendChild(ownSpan);
     }
 
-    if (achTot > 0 || achUnl > 0) {
-      const listAch = document.createElement("span");
-      listAch.className = "card-list-ach";
-      if (achTot > 0 && achUnl >= achTot) listAch.classList.add("ach-complete");
-      listAch.textContent = achTot > 0 ? `🏆 ${achUnl}/${achTot}` : `🏆 ${achUnl}`;
-      subrow.appendChild(listAch);
+    if (game.playtime_hours > 0) {
+      const hoursSpan = document.createElement("span");
+      hoursSpan.className = "card-time-indicator";
+      hoursSpan.innerHTML = `${LUCIDE_ICONS.clock} <span>${game.playtime_hours}h</span>`;
+      metaRow.appendChild(hoursSpan);
     }
+    body.appendChild(metaRow);
 
-    const genres = document.createElement("div");
-    genres.className = "card-genres";
-    const genreText = (game.genres || []).join(", ");
-    const tagText = (game.tags || []).slice(0, 3).map((t) => `#${t}`).join(" ");
-    if (genreText && tagText) {
-      genres.textContent = `${genreText} • ${tagText}`;
-    } else if (genreText) {
-      genres.textContent = genreText;
-    } else if (tagText) {
-      genres.textContent = tagText;
-    } else {
-      genres.textContent = game.release_year ? `Released ${game.release_year}` : game.source;
-    }
-    genres.title = [
-      ...(game.genres || []),
-      ...(game.tags || []).map((t) => `#${t}`),
-    ].join(", ");
-    subrow.appendChild(genres);
-
-    body.appendChild(subrow);
-
-    const footer = document.createElement("div");
-    footer.className = "card-footer";
-
-    const hours = document.createElement("span");
-    if (game.is_reconciled && Array.isArray(game.linked_games) && game.linked_games.length > 1) {
-      hours.className = "reconciled-card-indicator";
-      hours.textContent = `🔗 ⏱ ${game.playtime_hours || 0}h`;
-      const breakdown = game.linked_games
-        .map((lg) => `${lg.platform}: ${lg.playtime_hours || 0}h`)
-        .join(" + ");
-      hours.title = `Consolidated across ${game.linked_games.length} copies: ${breakdown}`;
-    } else {
-      hours.textContent = `⏱ ${game.playtime_hours || 0}h`;
-    }
-    footer.appendChild(hours);
+    const statusRow = document.createElement("div");
+    statusRow.className = "card-status-row";
 
     const statusSelect = document.createElement("select");
     statusSelect.className = "card-quick-status";
@@ -1345,11 +1320,20 @@ function renderGames() {
         fetchGames();
       }
     });
-    footer.appendChild(statusSelect);
+    statusRow.appendChild(statusSelect);
+
+    if (game.favorite) {
+      const favSpan = document.createElement("span");
+      favSpan.className = "card-fav-indicator";
+      favSpan.innerHTML = LUCIDE_ICONS.starFilled;
+      favSpan.title = "Favorited";
+      statusRow.appendChild(favSpan);
+    }
+
+    body.appendChild(statusRow);
 
     card.appendChild(wrapper);
     card.appendChild(body);
-    card.appendChild(footer);
 
     card.addEventListener("click", () => openEditModal(game));
     card.addEventListener("keydown", (e) => {
@@ -1628,7 +1612,7 @@ function renderEditLinkedCopies(game) {
       if (copyTot > 0 && copyUnl >= copyTot) {
         copyAch.classList.add("ach-complete");
       }
-      copyAch.textContent = copyTot > 0 ? `🏆 ${copyUnl}/${copyTot}` : `🏆 ${copyUnl}`;
+      copyAch.textContent = copyTot > 0 ? `${copyUnl}/${copyTot}` : `${copyUnl}`;
       copyAch.title = `${copy.platform} achievements: ${copyUnl}/${copyTot}`;
       right.appendChild(copyAch);
     }
@@ -1817,7 +1801,7 @@ function renderAchievementsList() {
       const rewTag = document.createElement("span");
       const rewClass = (a.reward_type || "").toLowerCase();
       rewTag.className = `ach-reward-tag ${rewClass}`;
-      rewTag.textContent = a.reward_type === "Gamerscore" ? `${a.reward_value}G` : `🏆 ${a.reward_type}`;
+      rewTag.textContent = a.reward_type === "Gamerscore" ? `${a.reward_value}G` : `${a.reward_type}`;
       metaTags.appendChild(rewTag);
     }
     if (a.rarity_pct != null) {
@@ -1842,7 +1826,7 @@ function renderAchievementsList() {
       for (const p of a.platforms) {
         const pBadge = document.createElement("span");
         pBadge.className = `ach-plat-badge ${p.unlocked ? "unlocked" : "locked"}`;
-        const check = p.unlocked ? "✓" : "🔒";
+        const check = p.unlocked ? "✓" : "Locked";
         pBadge.textContent = `${check} ${p.short_platform}`;
         if (p.unlocked && p.unlock_time) {
           const uDate = new Date(p.unlock_time);
@@ -1918,9 +1902,9 @@ async function loadAndRenderGameAchievements(gameId, forceSync = false) {
       const achDisplay = document.getElementById("edit-ach-display");
       if (achDisplay) {
         if (t > 0) {
-          achDisplay.textContent = `🏆 ${u} / ${t} (${pct}%)`;
+          achDisplay.textContent = `${u} / ${t} (${pct}%)`;
         } else if (u > 0) {
-          achDisplay.textContent = `🏆 ${u} unlocked`;
+          achDisplay.textContent = `${u} unlocked`;
         } else {
           achDisplay.textContent = "—";
         }
@@ -2022,8 +2006,11 @@ function openEditModal(game) {
   const fallbackSrc = makeFallbackCover(game.title, game.platform);
   const coverPreview = document.getElementById("edit-cover-preview");
   const coverWrap = coverPreview ? coverPreview.closest(".cover-wrapper") : null;
+  const linkedCovers = (game.linked_games || [])
+    .map((lg) => lg.cover_url)
+    .filter((url) => Boolean(url) && url !== game.cover_url);
   if (coverPreview && coverWrap) {
-    attachCoverAspectObserver(coverWrap, coverPreview, fallbackSrc, game.cover_url || fallbackSrc);
+    attachCoverAspectObserver(coverWrap, coverPreview, fallbackSrc, game.cover_url || (linkedCovers[0] || fallbackSrc), linkedCovers);
   }
 
   const achTile = document.getElementById("edit-ach-tile");
@@ -2034,10 +2021,10 @@ function openEditModal(game) {
     const tot = game.achievements_total || 0;
     if (tot > 0) {
       const pct = Math.round((unl / tot) * 100);
-      achDisplay.textContent = `🏆 ${unl} / ${tot} (${pct}%)`;
+      achDisplay.textContent = `${unl} / ${tot} (${pct}%)`;
       achTile.hidden = false;
     } else if (unl > 0) {
-      achDisplay.textContent = `🏆 ${unl} unlocked`;
+      achDisplay.textContent = `${unl} unlocked`;
       achTile.hidden = false;
     } else {
       achDisplay.textContent = "—";
@@ -2139,6 +2126,7 @@ function showReconcileToast(msg) {
 }
 
 async function openReconcileModal() {
+  document.getElementById("library-actions-dialog")?.close();
   const dialog = document.getElementById("reconcile-dialog");
   const scopeSelect = document.getElementById("reconcile-scope");
   state.reconcileScope = scopeSelect.value || "all";
@@ -2334,12 +2322,12 @@ function renderReconcileCard() {
 
     const hrsEl = document.createElement("span");
     hrsEl.className = "reconcile-copy-hours";
-    hrsEl.textContent = `⏱ ${g.playtime_hours || 0} hrs`;
+    hrsEl.textContent = `${g.playtime_hours || 0} hrs`;
     statsRow.appendChild(hrsEl);
 
     if ((g.achievements_total || 0) > 0 || (g.achievements_unlocked || 0) > 0) {
       const achEl = document.createElement("span");
-      achEl.textContent = `🏆 ${g.achievements_unlocked || 0}/${g.achievements_total || 0}`;
+      achEl.textContent = `${g.achievements_unlocked || 0}/${g.achievements_total || 0} ach`;
       statsRow.appendChild(achEl);
     }
 
@@ -3809,9 +3797,9 @@ async function updateWizardSummary() {
 
     list.innerHTML = "";
     const platforms = [
-      { name: "Steam (PC)", active: Boolean(steamVal), icon: "🎮" },
-      { name: "Xbox / PC Game Pass", active: Boolean(xblVal), icon: "🟢" },
-      { name: "PlayStation (PS4 / PS5)", active: Boolean(psnVal), icon: "🔵" },
+      { name: "Steam (PC)", active: Boolean(steamVal), icon: BRAND_ICONS.steam },
+      { name: "Xbox / PC Game Pass", active: Boolean(xblVal), icon: BRAND_ICONS.xbox },
+      { name: "PlayStation (PS4 / PS5)", active: Boolean(psnVal), icon: BRAND_ICONS.playstation },
     ];
 
     for (const p of platforms) {
@@ -3867,6 +3855,7 @@ async function skipWizard() {
 }
 
 async function openTriageModal() {
+  document.getElementById("library-actions-dialog")?.close();
   const dialog = document.getElementById("triage-dialog");
   const scopeSelect = document.getElementById("triage-scope");
   state.triageScope = scopeSelect.value || "unlocked";
@@ -3942,8 +3931,11 @@ function renderTriageCard() {
   const fallbackSrc = makeFallbackCover(game.title, game.platform);
   const imgEl = document.getElementById("triage-img");
   const triageWrap = imgEl ? imgEl.closest(".cover-wrapper") : null;
+  const linkedCovers = (game.linked_games || [])
+    .map((lg) => lg.cover_url)
+    .filter((url) => Boolean(url) && url !== game.cover_url);
   if (imgEl && triageWrap) {
-    attachCoverAspectObserver(triageWrap, imgEl, fallbackSrc, game.cover_url || fallbackSrc);
+    attachCoverAspectObserver(triageWrap, imgEl, fallbackSrc, game.cover_url || (linkedCovers[0] || fallbackSrc), linkedCovers);
   }
   imgEl.alt = `${game.title} cover art`;
 
@@ -3967,7 +3959,7 @@ function renderTriageCard() {
   const metaParts = [game.source];
   if (game.release_year) metaParts.push(`Released ${game.release_year}`);
   if (game.genres && game.genres.length > 0) metaParts.push(game.genres.join(", "));
-  if (game.status_locked) metaParts.push("🔒 Status Locked");
+  if (game.status_locked) metaParts.push("Status Locked");
   document.getElementById("triage-submeta").textContent = metaParts.join(" • ");
 
   document.getElementById("triage-playtime").textContent = `${game.playtime_hours || 0} hrs`;
@@ -4416,7 +4408,7 @@ function renderWishlistGrid() {
   if (items.length === 0) {
     grid.innerHTML = `
       <div class="empty-state-card" style="grid-column: 1 / -1; padding: 3rem 1.5rem; text-align: center; background: var(--bg-card); border-radius: var(--radius-lg); border: 1px dashed var(--border-subtle);">
-        <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">🏷️</div>
+        <div style="font-size: 2.5rem; margin-bottom: 0.75rem; color: var(--text-secondary);">${LUCIDE_ICONS.wishlist}</div>
         <h3 style="margin-bottom: 0.5rem;">No tracked games found</h3>
         <p style="color: var(--text-secondary); max-width: 450px; margin: 0 auto 1.25rem;">
           Add games across PC, Xbox, and PlayStation to monitor store prices, detect All-Time Lows, and alert you when Deluxe editions drop to your target price.
@@ -4513,7 +4505,7 @@ function renderWishlistGrid() {
       } else if (bestPriceNum !== null) {
         abridgedRightHtml = `
           <span class="abridged-lowest-price ${isMet ? 'met' : ''}">$${bestPriceNum.toFixed(2)}</span>
-          <span class="abridged-target-sub">(Target ${priceText})${isMet ? ' 🔥' : ''}</span>
+          <span class="abridged-target-sub">(Target ${priceText})${isMet ? ' (Met)' : ''}</span>
         `;
       } else {
         abridgedRightHtml = `
@@ -4618,8 +4610,8 @@ function renderWishlistGrid() {
             <span>${escapeHtml(cardPlatformLabels)}</span>
           </div>
           <div class="wishlist-badges-strip">
-            ${smartUpgradeDeal ? `<div class="smart-upgrade-callout">🌟 Smart Upgrade: ${escapeHtml(smartUpgradeDeal.edition_name)} $${smartUpgradeDeal.current_price_usd.toFixed(2)}</div>` : ''}
-            ${itemDeals.some(d => d.is_all_time_low) ? `<div class="atl-badge">🔥 All-Time Low</div>` : ''}
+            ${smartUpgradeDeal ? `<div class="smart-upgrade-callout">Smart Upgrade: ${escapeHtml(smartUpgradeDeal.edition_name)} $${smartUpgradeDeal.current_price_usd.toFixed(2)}</div>` : ''}
+            ${itemDeals.some(d => d.is_all_time_low) ? `<div class="atl-badge">All-Time Low</div>` : ''}
           </div>
         </div>
         <div class="wishlist-card-body">
@@ -4633,16 +4625,16 @@ function renderWishlistGrid() {
             ${targetsHtml}
           </div>
 
-          ${item.notes ? `<div style="font-size: 0.8rem; color: var(--text-secondary); font-style: italic;">📝 ${escapeHtml(item.notes)}</div>` : ''}
+          ${item.notes ? `<div style="font-size: 0.8rem; color: var(--text-secondary); font-style: italic;">${escapeHtml(item.notes)}</div>` : ''}
         </div>
         <div class="wishlist-card-footer">
           <div style="display: flex; gap: 0.35rem;">
             <button type="button" class="btn btn-sm btn-secondary" onclick="openWishlistHistoryModal(${item.id})">History</button>
-            <button type="button" class="btn btn-sm btn-secondary" title="Edit monitored platforms &amp; target prices" onclick="openWishlistEditPlatformsModal(${item.id})">⚙️ Stores</button>
+            <button type="button" class="btn btn-sm btn-secondary" title="Edit monitored platforms &amp; target prices" onclick="openWishlistEditPlatformsModal(${item.id})">Stores</button>
           </div>
           <div style="display: flex; gap: 0.4rem;">
             ${item.status === 'active' ? `<button type="button" class="btn btn-sm btn-primary" onclick="openWishlistPurchaseModal(${item.id})">Mark Purchased</button>` : `<span class="badge-pill" style="background: rgba(16,185,129,0.2); color: #34d399;">Purchased</span>`}
-            <button type="button" class="btn btn-sm btn-icon" title="Remove from wishlist" onclick="deleteWishlistItem(${item.id})">🗑️</button>
+            <button type="button" class="btn btn-sm btn-icon" title="Remove from wishlist" onclick="deleteWishlistItem(${item.id})">${LUCIDE_ICONS.trash}</button>
           </div>
         </div>
       </article>
@@ -5076,7 +5068,7 @@ async function openWishlistHistoryModal(itemId) {
                         <td style="padding: 0.25rem;">${h.recorded_at ? h.recorded_at.slice(0, 10) : ''}</td>
                         <td style="padding: 0.25rem; font-weight: 600;">$${h.price_usd.toFixed(2)}</td>
                         <td style="padding: 0.25rem;">${h.discount_pct ? `${h.discount_pct}%` : '—'}</td>
-                        <td style="padding: 0.25rem;">${h.is_all_time_low ? '<span style="color: #a78bfa; font-weight: 700;">ATL 🔥</span>' : ''}</td>
+                        <td style="padding: 0.25rem;">${h.is_all_time_low ? '<span style="color: #a78bfa; font-weight: 700;">ATL</span>' : ''}</td>
                       </tr>
                     `).join('')}
                   </tbody>
@@ -5142,7 +5134,7 @@ async function syncWishlistPrices() {
   const btn = document.getElementById("btn-sync-wishlist");
   if (btn) {
     btn.disabled = true;
-    btn.textContent = "⏳ Syncing...";
+    btn.textContent = "Syncing...";
   }
   try {
     const res = await fetch("/api/wishlist/sync", { method: "POST" });
@@ -5154,7 +5146,7 @@ async function syncWishlistPrices() {
   } finally {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = "🔄 Sync Prices Now";
+      btn.textContent = "Sync Prices";
     }
   }
 }
@@ -5184,7 +5176,7 @@ async function checkPushSubscriptionState() {
     const sub = await reg.pushManager.getSubscription();
     state.pushSubscribed = Boolean(sub);
     if (btn) btn.classList.toggle("active", state.pushSubscribed);
-    if (icon) icon.textContent = state.pushSubscribed ? "🔔" : "🔕";
+    if (icon) icon.innerHTML = state.pushSubscribed ? LUCIDE_ICONS.bell : LUCIDE_ICONS.bellOff;
     if (label) label.textContent = state.pushSubscribed ? "Deal Alerts Active" : "Enable Deal Alerts";
   } catch {
     // Non-fatal
@@ -5619,7 +5611,9 @@ document.addEventListener("DOMContentLoaded", () => {
   async function triggerLibrarySync() {
     if (syncBtn) {
       syncBtn.disabled = true;
-      syncBtn.textContent = "Syncing...";
+      syncBtn.classList.add("sync-running");
+      const icon = syncBtn.querySelector(".lucide-icon");
+      if (icon) icon.classList.add("spin-anim");
     }
     if (mnavSyncBtn) mnavSyncBtn.disabled = true;
     if (mnavSyncIcon) mnavSyncIcon.classList.add("spin-anim");
@@ -5631,7 +5625,9 @@ document.addEventListener("DOMContentLoaded", () => {
     } finally {
       if (syncBtn) {
         syncBtn.disabled = false;
-        syncBtn.textContent = "Sync Libraries";
+        syncBtn.classList.remove("sync-running");
+        const icon = syncBtn.querySelector(".lucide-icon");
+        if (icon) icon.classList.remove("spin-anim");
       }
       if (mnavSyncBtn) mnavSyncBtn.disabled = false;
       if (mnavSyncIcon) mnavSyncIcon.classList.remove("spin-anim");
@@ -5639,9 +5635,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  syncBtn.addEventListener("click", triggerLibrarySync);
+  if (syncBtn) syncBtn.addEventListener("click", triggerLibrarySync);
   if (mnavSyncBtn) {
     mnavSyncBtn.addEventListener("click", triggerLibrarySync);
+  }
+
+  // Contextual Actions Sheet
+  const btnLibraryActions = document.getElementById("btn-library-actions");
+  const actionsDialog = document.getElementById("library-actions-dialog");
+  if (btnLibraryActions && actionsDialog) {
+    btnLibraryActions.addEventListener("click", () => {
+      actionsDialog.showModal();
+    });
   }
 
   // Add Game Dialog

@@ -710,6 +710,16 @@ async def sync_xbox(
                         boxart_url = iurl
 
                 cover_url = poster_url or boxart_url or t.get("displayImage") or None
+                if not poster_url and cover_url:
+                    # Never downgrade an existing cover to square BoxArt / displayImage:
+                    # only fall back when the game has no cover yet.
+                    with get_connection(db_path) as _cconn:
+                        _row = _cconn.execute(
+                            "SELECT cover_url FROM games WHERE external_id = ?",
+                            (f"xbox:{title_id}",),
+                        ).fetchone()
+                    if _row and _row["cover_url"]:
+                        cover_url = None
                 playtime_mins = playtime_map.get(str(title_id), float(t.get("minutesPlayed") or 0.0))
                 playtime_hours = round(playtime_mins / 60.0, 2)
 

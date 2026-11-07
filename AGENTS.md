@@ -55,6 +55,10 @@ Every change, whether feature, fix, or refactor, follows this model. It's built 
 3. **Never commit secrets or data.** That means `.env`, `.agents/plugins/*/mcp_config.json`, `data/`, `data-qa/`, and `*.db*`. The gate checks this.
 4. **Never commit directly to `main` or `develop`.** See GitFlow below.
 5. **Never push, merge to `main`, tag, or deploy without the user's explicit approval.**
+6. **Never create a branch for questions, and never create a new branch for every prompt.**
+   - If a prompt is a question, inquiry, code review, or discussion, **do NOT create a branch or touch git**. Simply read the code and answer directly.
+   - When a **new conversation thread** begins with a request for new functionality or changes to the codebase, create **one** feature or bugfix branch for that thread.
+   - Follow-up prompts, tweaks, fixes, and iterative refinements in that same conversation thread must **stay on that active branch**. Never create, merge, and discard branches on every single prompt turn.
 
 ## The Change Lifecycle
 
@@ -70,7 +74,9 @@ Every change, whether feature, fix, or refactor, follows this model. It's built 
 - Start from a clean tree (`git status` is empty) and run `scripts/check.sh` on the base branch **before** changing anything. If the baseline is already red, stop and report it. Don't build on a broken base, and don't "fix" unrelated failures inside a feature branch.
 
 ### 2. Branch
-- Create the correct GitFlow branch (see below). One branch = one logical change.
+- **Questions do NOT get branches**: If a prompt is a question, inquiry, code review, or architectural discussion, never create a branch or modify git state. Inspect the code and answer directly in text.
+- **One branch per conversation thread**: When a new conversation thread starts with a request for new functionality or codebase changes, open a single GitFlow branch (`feature/<name>` or `bugfix/<name>`).
+- **Stay on the active branch across turns**: Do NOT create a brand new branch for every prompt turn. Follow-up prompts, refinements, styling tweaks, and bug fixes within the same conversation must continue on the existing active branch. Keep working and committing incrementally on that branch until the overarching task is finished.
 
 ### 3. Test First
 - **Bug fix:** first write a test that reproduces the bug and **fails**, then fix it. Add a comment naming the bug or date (see the Portal 2 example in `tests/test_taxonomy.py`).
@@ -110,7 +116,8 @@ Before committing, read your own `git diff develop...HEAD` (plus unstaged change
 - The body explains **why**, and lists any follow-ups or known limitations.
 
 ### 8. Integrate
-See the GitFlow merge procedure below. Re-run the gate on the target branch **after** merging.
+- Do NOT merge back to `develop` after every individual prompt turn while the user is actively iterating, refining, or testing changes in a thread. Stay on the active feature/bugfix branch across turns.
+- Only integrate (merge `--no-ff` into `develop`) once the conversation's task is fully complete and the user is satisfied with the result. Re-run the gate on the target branch after merging.
 
 ### 9. Verify (Deploy Smoke Test)
 Only on user request, after merging to `main`:
@@ -152,20 +159,26 @@ Versioning follows [SemVer](https://semver.org/) with annotated tags `vX.Y.Z` on
 
 ## Procedures
 
-**Start a feature / bugfix**
+**Branching Scope (Thread-Scoped, Not Prompt-Scoped)**
+- **Pure Questions / Discussions:** Never create a branch or touch git. Just answer.
+- **Initial Request in a Thread:** If the first message in a conversation thread requests new functionality or a code change, create one feature or bugfix branch (`feature/<kebab-name>` or `bugfix/<kebab-name>`) from `develop`.
+- **Follow-up Messages in the Same Thread:** Stay on that active branch! Never create a new branch or merge back to `develop` on intermediate prompts. Commit incrementally on the existing branch as the user asks for tweaks, fixes, or refinements.
+- **Finishing / Integrating:** Only merge the branch back into `develop` once the conversation's task is completed or the user is satisfied.
+
+**Start a feature / bugfix (only on initial code-change request in a thread)**
 ```bash
 git switch develop && git pull --ff-only     # skip pull if offline / no remote develop
 scripts/check.sh                             # baseline must be green
 git switch -c feature/<name>
 ```
 
-**Keep a long-running branch current** (if `develop` has moved):
+**Keep an active branch current** (if `develop` has moved):
 ```bash
 git fetch && git rebase develop              # only for unpushed branches; otherwise: git merge develop
 scripts/check.sh
 ```
 
-**Finish a feature / bugfix** (agent may do this once the gate is green):
+**Finish a feature / bugfix** (only once the thread's overarching task is done and the gate is green):
 ```bash
 scripts/check.sh                              # on the feature branch
 git switch develop

@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=35 and sw to v32
-        self.assertIn('href="/static/styles.css?v=35"', index_html)
-        self.assertIn('src="/static/app.js?v=35"', index_html)
-        self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[1-9]|[4-9]\d+)";')
+        # Cache buster must be bumped to v=39 and sw to v39
+        self.assertIn('href="/static/styles.css?v=39"', index_html)
+        self.assertIn('src="/static/app.js?v=39"', index_html)
+        self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[9]|[4-9]\d+)";')
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -263,9 +263,9 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.deleteWishlistItem = deleteWishlistItem;", app_js)
         self.assertIn("window.selectCandidateForConfig = selectCandidateForConfig;", app_js)
 
-        # 5. Cache buster must be bumped to v=35 and sw to v32
-        self.assertIn('href="/static/styles.css?v=35"', index_html)
-        self.assertIn('src="/static/app.js?v=35"', index_html)
+        # 5. Cache buster must be bumped to v=39 and sw to v39
+        self.assertIn('href="/static/styles.css?v=39"', index_html)
+        self.assertIn('src="/static/app.js?v=39"', index_html)
         self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[1-9]|[4-9]\d+)";')
 
         # 6. Abridged platform summary (lowest price per platform) with 1-click expandable detailed store view & brand SVG logos
@@ -324,6 +324,86 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.performLiveXboxLink = performLiveXboxLink;", app_js)
         self.assertIn("window.disconnectXboxAccount = disconnectXboxAccount;", app_js)
         self.assertIn('fetch("/api/sync?platform=xbox"', app_js)
+
+    def test_original_color_palette_restored(self):
+        """
+        Verify that the rich, original slate-navy palette with vibrant blue accents
+        is restored (not stark monochrome black and white).
+        """
+        styles_path = os.path.join(self.static_dir, "styles.css")
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+
+        # Core root palette
+        self.assertIn("--bg-page: #0b0f19;", styles_css)
+        self.assertIn("--bg-surface: #131b2e;", styles_css)
+        self.assertIn("--bg-card: #172036;", styles_css)
+        self.assertIn("--bg-input: #0f1626;", styles_css)
+        self.assertIn("--border-subtle: #26334d;", styles_css)
+        self.assertIn("--text-primary: #f1f5f9;", styles_css)
+        self.assertIn("--text-secondary: #94a3b8;", styles_css)
+        self.assertIn("--accent-primary: #3b82f6;", styles_css)
+        self.assertIn("--accent-hover: #2563eb;", styles_css)
+
+        # Primary button is blue accent with white text, not monochrome black/white
+        self.assertRegex(
+            styles_css,
+            r"\.btn-primary\s*\{[^}]*background-color:\s*var\(--accent-primary\);[^}]*color:\s*#ffffff;",
+        )
+
+    def test_cover_thumbnail_full_bleed_sizing(self):
+        """
+        Verify that game cover thumbnails fill the 2:3 poster frame edge-to-edge
+        with object-fit: cover, eliminating the letterboxed 'box on incorrect fit' blur mode.
+        """
+        styles_path = os.path.join(self.static_dir, "styles.css")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+
+        # .cover-wrapper must define 2:3 aspect ratio and overflow clip
+        self.assertRegex(
+            styles_css,
+            r"\.cover-wrapper\s*\{[^}]*aspect-ratio:\s*2\s*/\s*3;[^}]*overflow:\s*clip;",
+        )
+
+        # .cover-wrapper img must cleanly fill the card with object-fit: cover
+        self.assertRegex(
+            styles_css,
+            r"\.cover-wrapper\s+img\s*\{[^}]*inline-size:\s*100%;[^}]*block-size:\s*100%;[^}]*object-fit:\s*cover;",
+        )
+
+        # Ambient backdrop contain mode ("box on incorrect fit") must not be added in app.js
+        self.assertNotIn('wrapper.classList.add("cover-ambient")', app_js)
+
+    def test_non_standard_cover_art_handling(self):
+        """
+        Verify that non-standard aspect ratio artwork (such as wide landscape banners)
+        is gracefully fitted without severe clipping of titles/art, and cross-platform
+        linked alternative covers are attempted when a primary Steam poster 404s.
+        """
+        styles_path = os.path.join(self.static_dir, "styles.css")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+
+        # .cover-wrapper.cover-landscape styling in styles.css
+        self.assertIn(".cover-wrapper.cover-landscape", styles_css)
+        self.assertIn(".cover-wrapper.cover-landscape::before", styles_css)
+        self.assertRegex(
+            styles_css,
+            r"\.cover-wrapper\.cover-landscape\s+img\s*\{[^}]*inline-size:\s*100%;[^}]*object-fit:\s*contain;",
+        )
+
+        # Aspect ratio observer handles wide landscape artwork in app.js
+        self.assertIn('wrapper.classList.add("cover-landscape")', app_js)
+        self.assertIn('wrapper.classList.remove("cover-landscape")', app_js)
+        self.assertIn('linkedCovers', app_js)
+        self.assertIn('ratio > 0.72', app_js)
 
 
 if __name__ == "__main__":
