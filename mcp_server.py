@@ -60,7 +60,10 @@ from sync_engine import (
     sync_game_achievements_on_demand,
 )
 
-init_db()
+try:
+    init_db(DEFAULT_DB_PATH)
+except Exception:
+    pass
 
 
 def get_default_db_path() -> Optional[str]:

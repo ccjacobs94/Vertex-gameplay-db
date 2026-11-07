@@ -57,7 +57,10 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: Optional[str] = None) -> None:
-    with get_connection(db_path) as conn:
+    target_path = db_path
+    if target_path is None and not current_user_id.get():
+        target_path = DEFAULT_DB_PATH
+    with get_connection(target_path) as conn:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS games (
