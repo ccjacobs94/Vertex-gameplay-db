@@ -358,7 +358,7 @@ def clean_unconfigured_subaccount_libraries(default_user: str, db_path: Optional
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    init_db(DEFAULT_DB_PATH)
     system_db.init_system_db()
     default_user = get_auth_username()
     system_db.ensure_bootstrap_admin(default_user)
@@ -428,7 +428,7 @@ def is_allowed_host(host_header: str) -> bool:
 class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         host = request.headers.get("host", "")
-        if host and not is_allowed_host(host):
+        if not is_allowed_host(host):
             return Response("Invalid Host header", status_code=400)
 
         path = request.url.path
@@ -2427,6 +2427,13 @@ def is_valid_push_endpoint(endpoint: str) -> bool:
     host = (parsed.hostname or "").lower().strip()
     if not host:
         return False
+
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local or ip.is_multicast:
+            return False
+    except ValueError:
+        pass
 
     allowed = False
     for suffix in _ALLOWED_PUSH_HOST_SUFFIXES:

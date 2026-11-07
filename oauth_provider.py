@@ -35,8 +35,9 @@ def _get_client_secret() -> str:
     return os.environ.get("MCP_CLIENT_SECRET", "").strip()
 
 
-# In-memory storage for short-lived authorization codes
+# In-memory storage for short-lived authorization codes and consent tokens
 _auth_codes: Dict[str, dict] = {}
+_consent_tokens: Dict[str, dict] = {}
 
 
 def _init_oauth_table(db_path: Optional[str] = None) -> None:
@@ -122,6 +123,18 @@ def extract_bearer_token(request: Request) -> str:
     return ""
 
 
+_ALLOWED_OAUTH_REDIRECT_DOMAINS = (
+    "localhost",
+    "127.0.0.1",
+    "claude.ai",
+    "anthropic.com",
+    "openai.com",
+    "chatgpt.com",
+    "google.com",
+    "example.com",
+)
+
+
 def is_valid_redirect_uri(redirect_uri: str) -> bool:
     try:
         parsed = urlparse(redirect_uri)
@@ -129,11 +142,77 @@ def is_valid_redirect_uri(redirect_uri: str) -> bool:
         return False
     if not parsed.scheme or not parsed.netloc:
         return False
-    if parsed.scheme == "https":
+    scheme = parsed.scheme.lower()
+    hostname = (parsed.hostname or "").lower().strip()
+    if not hostname:
+        return False
+
+    # localhost / 127.0.0.1 allows both http and https (for local CLI / desktop clients)
+    if hostname in ("localhost", "127.0.0.1"):
+        return scheme in ("http", "https")
+
+    # All external redirect URIs MUST use https
+    if scheme != "https":
+        return False
+
+    # Check custom configured allowed redirect URIs from environment
+    custom_allowed = os.environ.get("MCP_ALLOWED_REDIRECT_URIS", "").strip()
+    if custom_allowed:
+        for pattern in custom_allowed.split(","):
+            p = pattern.strip().lower()
+            if p == "*" or hostname == p:
+                return True
+            if p.startswith("*.") and hostname.endswith(p[1:]):
+                return True
+
+    # Check instance domain
+    base_host = (urlparse(_get_base_domain()).hostname or "").lower()
+    if base_host and hostname == base_host:
         return True
-    if parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1"):
+
+    pub_host = (urlparse(os.environ.get("PUBLIC_BASE_URL", "")).hostname or "").lower()
+    if pub_host and hostname == pub_host:
         return True
+
+    # Check known allowed AI & documentation domains
+    for d in _ALLOWED_OAUTH_REDIRECT_DOMAINS:
+        if hostname == d or hostname.endswith("." + d):
+            return True
+
     return False
+
+
+def _generate_consent_token(user_id: str, client_id: str, redirect_uri: str, code_challenge: str) -> str:
+    now = time.time()
+    expired = [k for k, v in _consent_tokens.items() if v.get("expires_at", 0) < now]
+    for k in expired:
+        _consent_tokens.pop(k, None)
+
+    token = secrets.token_urlsafe(32)
+    _consent_tokens[token] = {
+        "user_id": user_id,
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "code_challenge": code_challenge,
+        "expires_at": now + 600,
+    }
+    return token
+
+
+def _verify_and_consume_consent_token(
+    token: str, user_id: str, client_id: str, redirect_uri: str, code_challenge: str
+) -> bool:
+    if not token or token not in _consent_tokens:
+        return False
+    entry = _consent_tokens.pop(token)
+    if time.time() > entry.get("expires_at", 0):
+        return False
+    return (
+        entry.get("user_id") == user_id
+        and entry.get("client_id") == client_id
+        and entry.get("redirect_uri") == redirect_uri
+        and entry.get("code_challenge") == code_challenge
+    )
 
 
 def verify_code_challenge(verifier: str, challenge: str, method: str = "S256") -> bool:
@@ -248,9 +327,11 @@ def _render_consent_page(
     state: str,
     code_challenge: str,
     code_challenge_method: str,
+    csrf_token: str,
     username: str = "",
     error_msg: str = "",
 ) -> HTMLResponse:
+    redirect_host = urlparse(redirect_uri).netloc or redirect_uri
     error_html = (
         f"<div style='background:#451a1a;border:1px solid #dc2626;color:#fca5a5;padding:10px 12px;"
         f"border-radius:8px;font-size:0.85rem;margin-bottom:16px;'>{html.escape(error_msg)}</div>"
@@ -268,10 +349,15 @@ def _render_consent_page(
   <form method="POST" action="/oauth/authorize" style="background:#131b2e;border:1px solid #26334d;border-radius:12px;padding:32px;max-width:400px;width:100%;box-shadow:0 10px 25px rgba(0,0,0,0.4);">
     <div style="font-size:2.2rem;margin-bottom:8px;text-align:center;">🎮</div>
     <h3 style="margin:0 0 8px 0;text-align:center;">Authorize Game Hub MCP</h3>
-    <p style="color:#94a3b8;font-size:0.88rem;line-height:1.45;text-align:center;margin-bottom:20px;">
+    <p style="color:#94a3b8;font-size:0.88rem;line-height:1.45;text-align:center;margin-bottom:14px;">
       Client <strong>{html.escape(client_id)}</strong> is requesting access to the Game Hub library of <strong>{html.escape(username)}</strong>.
     </p>
+    <div style="background:#0f172a;border:1px solid #334155;border-radius:8px;padding:10px 14px;margin-bottom:20px;font-size:0.84rem;color:#cbd5e1;word-break:break-all;">
+      <span style="color:#64748b;display:block;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Redirect Host</span>
+      <strong>{html.escape(redirect_host)}</strong>
+    </div>
     {error_html}
+    <input type="hidden" name="csrf_token" value="{html.escape(csrf_token)}">
     <input type="hidden" name="client_id" value="{html.escape(client_id)}">
     <input type="hidden" name="redirect_uri" value="{html.escape(redirect_uri)}">
     <input type="hidden" name="state" value="{html.escape(state)}">
@@ -298,6 +384,7 @@ async def authorize_endpoint(request: Request):
     code_challenge = request.query_params.get("code_challenge") or ""
     code_challenge_method = request.query_params.get("code_challenge_method") or "S256"
 
+    form_dict = {}
     if request.method == "POST":
         try:
             form = await request.form()
@@ -331,13 +418,24 @@ async def authorize_endpoint(request: Request):
         return render_login_page(next_url=resume)
 
     if request.method != "POST":
+        csrf_tok = _generate_consent_token(user_id, client_id, redirect_uri, code_challenge)
         return _render_consent_page(
             client_id,
             redirect_uri,
             state,
             code_challenge,
             code_challenge_method,
+            csrf_token=csrf_tok,
             username=system_db.get_username_by_user_id(user_id) or "",
+        )
+
+    # Validate CSRF token on POST
+    csrf_tok = str(form_dict.get("csrf_token") or "")
+    if not _verify_and_consume_consent_token(csrf_tok, user_id, client_id, redirect_uri, code_challenge):
+        logger.warning("OAuth authorization rejected: invalid or missing CSRF consent token")
+        return HTMLResponse(
+            "<p style='font-family:sans-serif;color:#ef4444;padding:24px;'>Authorization failed: invalid or expired consent session (CSRF protection). Please start the connection flow again.</p>",
+            status_code=403,
         )
 
     code = "gh_code_" + secrets.token_urlsafe(32)
@@ -455,7 +553,8 @@ async def token_endpoint(request: Request) -> JSONResponse:
             )
 
         # Enforce client_id binding
-        if client_id and record.get("client_id") and client_id != record.get("client_id"):
+        expected_client = record.get("client_id")
+        if expected_client and (not client_id or client_id != expected_client):
             logger.warning("Token exchange rejected: client_id mismatch")
             return JSONResponse(
                 {"error": "invalid_grant", "error_description": "client_id mismatch"},
@@ -465,6 +564,21 @@ async def token_endpoint(request: Request) -> JSONResponse:
                     "Content-Type": "application/json;charset=UTF-8",
                 },
             )
+
+        # Enforce client_secret authentication if configured for confidential client
+        conf_secret = _get_client_secret()
+        if conf_secret:
+            if client_id == _get_client_id() or client_secret:
+                if not client_secret or not secrets.compare_digest(client_secret, conf_secret):
+                    logger.warning("Token exchange rejected: invalid client_secret")
+                    return JSONResponse(
+                        {"error": "invalid_client", "error_description": "Invalid client secret"},
+                        status_code=401,
+                        headers={
+                            "Access-Control-Allow-Origin": "*",
+                            "Content-Type": "application/json;charset=UTF-8",
+                        },
+                    )
 
         code_verifier = str(data.get("code_verifier") or "")
         if not code_verifier or not verify_code_challenge(
