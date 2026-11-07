@@ -286,6 +286,8 @@ def init_db(db_path: Optional[str] = None) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_canonical ON games(canonical_id);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_ownership ON games(ownership_status);")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_games_is_game_pass ON games(is_game_pass);")
+        # Clean up any placeholder unpriced 0.0 SKUs to NULL
+        conn.execute("UPDATE edition_platform_skus SET current_price_usd = NULL, regular_price_usd = NULL WHERE current_price_usd = 0.0 AND (regular_price_usd = 0.0 OR regular_price_usd IS NULL);")
 
 
 OWNERSHIP_STATUSES = ("Owned", "Subscription", "Borrowed", "None")
@@ -3283,6 +3285,7 @@ def _matches_platform_target(sku: Dict[str, Any], target: Dict[str, Any]) -> boo
 
 def evaluate_wishlist_deals(
     wishlist_item_id: Optional[int] = None,
+    include_above_target: bool = False,
     db_path: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -3325,7 +3328,9 @@ def evaluate_wishlist_deals(
                 if price is None or not _matches_platform_target(sku, target):
                     continue
                 price_f = float(price)
-                if price_f > base_target_usd:
+                if price_f <= 0.0:
+                    continue
+                if not include_above_target and price_f > base_target_usd:
                     continue
 
                 ed = edition_by_id.get(sku["edition_id"], {})
