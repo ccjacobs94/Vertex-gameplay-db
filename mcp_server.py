@@ -843,7 +843,7 @@ def update_item_price(
         storefront=storefront,
         store_sku_id=sku_id_str,
         store_url=store_url,
-        current_price_usd=None,
+        current_price_usd=price_usd,
         regular_price_usd=regular_price_usd,
         db_path=db_path,
     )
@@ -856,7 +856,15 @@ def update_item_price(
         db_path=db_path,
     )
 
-    deals = evaluate_wishlist_deals(wishlist_item_id=item_id, db_path=db_path)
+    # Refresh sku from DB so current_price_usd, historical_low, etc. are reflected
+    with get_connection(db_path) as conn:
+        updated_row = conn.execute("SELECT * FROM edition_platform_skus WHERE id = ?", (sku["id"],)).fetchone()
+        if updated_row:
+            sku = dict(updated_row)
+            sku["is_authorized_seller"] = bool(sku.get("is_authorized_seller"))
+            sku["is_drm_free"] = bool(sku.get("is_drm_free"))
+
+    deals = evaluate_wishlist_deals(wishlist_item_id=item_id, include_above_target=True, db_path=db_path)
     return _sanitize_output({
         "status": "price_recorded",
         "sku": sku,
@@ -878,7 +886,7 @@ def get_wishlist_deals(
     drop to <= the user's base edition target price, and All-Time Lows (ATL).
     """
     db_path = get_default_db_path()
-    deals = evaluate_wishlist_deals(db_path=db_path)
+    deals = evaluate_wishlist_deals(include_above_target=include_above_target, db_path=db_path)
 
     if platform:
         fam = normalize_platform_family(platform)

@@ -404,6 +404,9 @@ class XboxCatalogAdapter:
                                 if list_price is not None:
                                     cur = float(list_price)
                                     reg = float(msrp)
+                                    # If both list and regular are 0.0, the item is unpriced / not yet released
+                                    if cur <= 0.0 and reg <= 0.0:
+                                        continue
                                     cut = int(round((1.0 - (cur / reg)) * 100)) if reg > 0 and cur < reg else 0
                                     results[pid] = {
                                         "current_price_usd": round(cur, 2),
