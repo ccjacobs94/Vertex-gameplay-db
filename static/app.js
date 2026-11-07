@@ -883,7 +883,8 @@ function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc) {
       // Switch to ambient blurred contain mode so the entire logo and artwork remain visible.
       if (ratio > 0.72) {
         wrapper.classList.add("cover-ambient");
-        wrapper.style.setProperty("--cover-bg", `url("${img.currentSrc || img.src}")`);
+        const safeSrc = (img.currentSrc || img.src || "").replace(/"/g, '\\"');
+        wrapper.style.setProperty("--cover-bg", `url("${safeSrc}")`);
       } else {
         wrapper.classList.remove("cover-ambient");
         wrapper.style.removeProperty("--cover-bg");
