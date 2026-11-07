@@ -1,13 +1,13 @@
 :root {
-  --bg-page: #0B0C10;
-  --bg-surface: #14161E;
-  --bg-card: #14161E;
-  --bg-input: #14161E;
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --text-primary: #f4f4f5;
-  --text-secondary: #a1a1aa;
-  --accent-primary: #71717a;
-  --accent-hover: #d4d4d8;
+  --bg-page: #0b0f19;
+  --bg-surface: #131b2e;
+  --bg-card: #172036;
+  --bg-input: #0f1626;
+  --border-subtle: #26334d;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --accent-primary: #3b82f6;
+  --accent-hover: #2563eb;
   --accent-xbox: #107c10;
   --accent-psn: #00439c;
   --accent-switch: #e60012;
@@ -16,8 +16,8 @@
   --success: #10b981;
   --warning: #f59e0b;
   --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
 }
 
 *,
@@ -79,7 +79,7 @@ body {
 
 /* Header */
 .site-header {
-  background-color: rgba(20, 22, 30, 0.95);
+  background-color: rgba(19, 27, 46, 0.95);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-block-end: 1px solid var(--border-subtle);
@@ -110,15 +110,17 @@ body {
 }
 
 .brand-logo {
-  inline-size: 36px;
-  block-size: 36px;
+  inline-size: 38px;
+  block-size: 38px;
   border-radius: var(--radius-sm);
-  transition: transform 0.2s ease;
+  filter: drop-shadow(0 0 12px rgba(56, 189, 248, 0.25));
+  transition: transform 0.2s ease, filter 0.2s ease;
   flex-shrink: 0;
 }
 
 .brand-logo:hover {
-  transform: scale(1.04);
+  transform: scale(1.05);
+  filter: drop-shadow(0 0 16px rgba(56, 189, 248, 0.45));
 }
 
 .brand-text {
@@ -129,10 +131,12 @@ body {
 
 .brand-group h1 {
   margin: 0;
-  font-size: 1.35rem;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  color: #f4f4f5;
+  font-size: 1.45rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 45%, #38bdf8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
   line-height: 1.2;
 }
 
@@ -374,14 +378,12 @@ textarea:focus {
 }
 
 .btn-primary {
-  background-color: #f4f4f5;
-  color: #0B0C10;
-  border: 1px solid transparent;
+  background-color: var(--accent-primary);
+  color: #ffffff;
 }
 
 .btn-primary:hover {
-  background-color: #ffffff;
-  color: #000000;
+  background-color: var(--accent-hover);
 }
 
 .btn-secondary {
@@ -480,7 +482,7 @@ textarea:focus {
   font-size: 1.85rem;
   font-weight: 700;
   letter-spacing: -0.03em;
-  color: #f4f4f5;
+  color: var(--text-primary);
   line-height: 1.15;
 }
 
@@ -488,7 +490,7 @@ textarea:focus {
   margin: 0;
   font-size: 0.85rem;
   font-weight: 500;
-  color: #a1a1aa;
+  color: var(--text-secondary);
   letter-spacing: 0.01em;
 }
 
@@ -503,28 +505,30 @@ textarea:focus {
   position: relative;
   background-color: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  color: #d4d4d8;
+  color: var(--text-secondary);
   font-size: 0.85rem;
   font-weight: 600;
 }
 
 .btn-catalog-actions:hover {
-  color: #f4f4f5;
-  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
+  background-color: rgba(59, 130, 246, 0.08);
+}
   background-color: rgba(255, 255, 255, 0.04);
 }
 
 .btn-catalog-add {
-  background-color: #f4f4f5;
-  color: #0B0C10;
+  background-color: var(--accent-primary);
+  color: #ffffff;
   border: 1px solid transparent;
   font-size: 0.85rem;
   font-weight: 600;
 }
 
 .btn-catalog-add:hover {
-  background-color: #ffffff;
-  color: #000000;
+  background-color: var(--accent-hover);
+  color: #ffffff;
 }
 
 .action-badge-dot {
@@ -557,15 +561,11 @@ textarea:focus {
 @media (hover: hover) and (pointer: fine) {
   .game-card:hover {
     transform: translateY(-2px);
-    border-color: rgba(255, 255, 255, 0.22);
+    border-color: var(--accent-primary);
   }
 
-  .game-card:hover .cover-wrapper:not(.cover-ambient) img {
-    transform: scale(1.025);
-  }
-
-  .game-card:hover .cover-wrapper.cover-ambient img {
-    transform: scale(1.02);
+  .game-card:hover .cover-wrapper img {
+    transform: scale(1.03);
   }
 }
 
@@ -573,12 +573,9 @@ textarea:focus {
   position: relative;
   inline-size: 100%;
   aspect-ratio: 2 / 3;
-  background-color: #0B0C10;
+  background-color: #0d1322;
   overflow: clip;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .cover-wrapper img {
@@ -588,38 +585,6 @@ textarea:focus {
   object-fit: cover;
   object-position: center;
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-/* Ambient backdrop mode for square (1:1) or landscape artwork so logos and titles are never clipped */
-.cover-wrapper.cover-ambient {
-  background-color: #080d19;
-}
-
-.cover-wrapper.cover-ambient::before {
-  content: "";
-  position: absolute;
-  inset: -15px;
-  background-image: var(--cover-bg);
-  background-size: cover;
-  background-position: center;
-  filter: blur(18px) brightness(0.38) saturate(1.35);
-  transform: scale(1.18) translateZ(0);
-  pointer-events: none;
-  z-index: 0;
-  will-change: transform;
-}
-
-.cover-wrapper.cover-ambient img {
-  position: relative;
-  z-index: 1;
-  display: block;
-  inline-size: 100%;
-  block-size: 100%;
-  object-fit: contain;
-  object-position: center;
-  padding-block: 0.35rem;
-  padding-inline: 0.15rem;
-  filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.55));
 }
 
 .cover-wrapper .platform-badge,
@@ -1263,7 +1228,7 @@ textarea:focus {
   margin: 0;
   font-size: 1.05rem;
   font-weight: 700;
-  color: #f4f4f5;
+  color: var(--text-primary);
   letter-spacing: -0.01em;
 }
 
@@ -1281,7 +1246,7 @@ textarea:focus {
   background-color: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  color: #f4f4f5;
+  color: var(--text-primary);
   cursor: pointer;
   text-align: start;
   transition: all 0.15s ease;
@@ -1290,8 +1255,8 @@ textarea:focus {
 }
 
 .action-sheet-item:hover {
-  background-color: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.18);
+  background-color: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.35);
 }
 
 .action-sheet-icon {
@@ -1301,8 +1266,8 @@ textarea:focus {
   inline-size: 32px;
   block-size: 32px;
   border-radius: 6px;
-  background-color: rgba(255, 255, 255, 0.06);
-  color: #d4d4d8;
+  background-color: rgba(59, 130, 246, 0.14);
+  color: #60a5fa;
   flex-shrink: 0;
 }
 
@@ -1317,7 +1282,7 @@ textarea:focus {
 .action-sheet-label {
   font-size: 0.9rem;
   font-weight: 600;
-  color: #f4f4f5;
+  color: var(--text-primary);
 }
 
 .action-sheet-desc {
@@ -2835,17 +2800,17 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     align-items: center;
-    background-color: rgba(20, 22, 30, 0.92);
+    background-color: rgba(19, 27, 46, 0.94);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid var(--border-subtle);
     border-radius: 999px;
     padding-block: 0.35rem;
     padding-inline: 0.75rem;
     inline-size: auto;
     min-inline-size: 380px;
     max-inline-size: 440px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
   }
 
   .mobile-bottom-nav .mnav-item {
@@ -2867,15 +2832,16 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   }
 
   .mobile-bottom-nav .mnav-item:hover {
-    color: #f4f4f5;
+    color: var(--text-primary);
   }
 
   .mobile-bottom-nav .mnav-item.active {
-    color: #f4f4f5;
+    color: #38bdf8;
   }
 
   .mobile-bottom-nav .mnav-item.active .lucide-icon {
-    color: #f4f4f5;
+    color: #38bdf8;
+    stroke: #38bdf8;
   }
 
   .mobile-bottom-nav .mnav-label {
@@ -3377,7 +3343,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     align-items: center;
-    background-color: rgba(20, 22, 30, 0.95);
+    background-color: rgba(19, 27, 46, 0.95);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-block-start: 1px solid var(--border-subtle);
@@ -3413,11 +3379,12 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   }
 
   .mnav-item.active {
-    color: #f4f4f5;
+    color: #38bdf8;
   }
 
   .mnav-item.active .lucide-icon {
-    color: #f4f4f5;
+    color: #38bdf8;
+    stroke: #38bdf8;
   }
 
   .mnav-icon-wrap {

@@ -862,37 +862,18 @@ function makeFallbackCover(title, platform) {
   const safeTitle = (title || "Game").replace(/[<>&"]/g, "");
   const safePlat = (platform || "").replace(/[<>&"]/g, "");
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450">
-    <rect width="300" height="450" fill="#14161E"/>
-    <rect x="16" y="16" width="268" height="418" rx="8" fill="none" stroke="rgba(255, 255, 255, 0.08)" stroke-width="1.5"/>
-    <text x="150" y="200" fill="#a1a1aa" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="500" letter-spacing="0.05em" text-anchor="middle">${safePlat.toUpperCase()}</text>
-    <text x="150" y="235" fill="#f4f4f5" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-weight="600" font-size="16" text-anchor="middle">${safeTitle.slice(0, 24)}</text>
+    <rect width="300" height="450" fill="#172036"/>
+    <rect x="16" y="16" width="268" height="418" rx="8" fill="none" stroke="#26334d" stroke-width="1.5"/>
+    <text x="150" y="200" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="13" font-weight="500" letter-spacing="0.05em" text-anchor="middle">${safePlat.toUpperCase()}</text>
+    <text x="150" y="235" fill="#f1f5f9" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-weight="600" font-size="16" text-anchor="middle">${safeTitle.slice(0, 24)}</text>
   </svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
 function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc) {
-  if (!wrapper || !img) return;
+  if (!img) return;
 
   let attemptedFallbackHeader = false;
-
-  const handleRatio = () => {
-    if (img.naturalWidth && img.naturalHeight) {
-      const ratio = img.naturalWidth / img.naturalHeight;
-      // 2:3 aspect ratio is ~0.667. If > 0.72 (e.g. 1.0 square or wide landscape),
-      // standard object-fit: cover would crop the left and right sides.
-      // Switch to ambient blurred contain mode so the entire logo and artwork remain visible.
-      if (ratio > 0.72) {
-        wrapper.classList.add("cover-ambient");
-        const safeSrc = (img.currentSrc || img.src || "").replace(/"/g, '\\"');
-        wrapper.style.setProperty("--cover-bg", `url("${safeSrc}")`);
-      } else {
-        wrapper.classList.remove("cover-ambient");
-        wrapper.style.removeProperty("--cover-bg");
-      }
-    }
-  };
-
-  img.addEventListener("load", handleRatio);
 
   img.addEventListener("error", () => {
     // If a Steam library_600x900.jpg 404s, attempt Steam header.jpg before falling back to SVG
@@ -901,17 +882,11 @@ function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc) {
       img.src = img.src.replace("library_600x900.jpg", "header.jpg");
       return;
     }
-    wrapper.classList.remove("cover-ambient");
-    wrapper.style.removeProperty("--cover-bg");
     img.src = fallbackSrc;
   });
 
   if (targetSrc) {
     img.src = targetSrc;
-  }
-
-  if (img.complete && img.naturalWidth) {
-    handleRatio();
   }
 }
 
