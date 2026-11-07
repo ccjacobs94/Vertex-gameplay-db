@@ -83,10 +83,10 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=38 and sw to v38
-        self.assertIn('href="/static/styles.css?v=38"', index_html)
-        self.assertIn('src="/static/app.js?v=38"', index_html)
-        self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[8-9]|[4-9]\d+)";')
+        # Cache buster must be bumped to v=39 and sw to v39
+        self.assertIn('href="/static/styles.css?v=39"', index_html)
+        self.assertIn('src="/static/app.js?v=39"', index_html)
+        self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[9]|[4-9]\d+)";')
 
         # Settings dialog markup and buttons
         self.assertIn('id="settings-dialog"', index_html)
@@ -263,9 +263,9 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.deleteWishlistItem = deleteWishlistItem;", app_js)
         self.assertIn("window.selectCandidateForConfig = selectCandidateForConfig;", app_js)
 
-        # 5. Cache buster must be bumped to v=38 and sw to v38
-        self.assertIn('href="/static/styles.css?v=38"', index_html)
-        self.assertIn('src="/static/app.js?v=38"', index_html)
+        # 5. Cache buster must be bumped to v=39 and sw to v39
+        self.assertIn('href="/static/styles.css?v=39"', index_html)
+        self.assertIn('src="/static/app.js?v=39"', index_html)
         self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[1-9]|[4-9]\d+)";')
 
         # 6. Abridged platform summary (lowest price per platform) with 1-click expandable detailed store view & brand SVG logos
@@ -403,6 +403,7 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn('wrapper.classList.add("cover-landscape")', app_js)
         self.assertIn('wrapper.classList.remove("cover-landscape")', app_js)
         self.assertIn('linkedCovers', app_js)
+        self.assertIn('ratio > 0.72', app_js)
 
 
 if __name__ == "__main__":
