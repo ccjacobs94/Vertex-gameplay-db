@@ -776,10 +776,10 @@ async def sync_xbox(
         return {"source": "Xbox", "status": "success", "games_synced": count, "message": f"Synced {count} Xbox titles"}
 
     except Exception as exc:
-        msg = f"Xbox sync failed: {exc}"
-        logger.exception(msg)
-        log_sync_event("Xbox", "error", 0, str(exc), db_path=db_path)
-        return {"source": "Xbox", "status": "error", "games_synced": 0, "message": str(exc)}
+        sanitized_msg = db.sanitize_sync_message(str(exc))
+        logger.warning("Xbox sync failed: %s", sanitized_msg)
+        log_sync_event("Xbox", "error", 0, sanitized_msg, db_path=db_path)
+        return {"source": "Xbox", "status": "error", "games_synced": 0, "message": sanitized_msg}
 
 
 def _sync_psn_blocking(npsso: str, db_path: Optional[str] = None) -> int:
@@ -1030,9 +1030,10 @@ async def sync_psn(
         log_sync_event("PSN", "success", count, f"Synced {count} PlayStation titles", db_path=db_path)
         return {"source": "PSN", "status": "success", "games_synced": count, "message": f"Synced {count} PlayStation titles"}
     except Exception as exc:
-        logger.exception("PSN sync failed")
-        log_sync_event("PSN", "error", 0, str(exc), db_path=db_path)
-        return {"source": "PSN", "status": "error", "games_synced": 0, "message": str(exc)}
+        sanitized_msg = db.sanitize_sync_message(str(exc))
+        logger.warning("PSN sync failed: %s", sanitized_msg)
+        log_sync_event("PSN", "error", 0, sanitized_msg, db_path=db_path)
+        return {"source": "PSN", "status": "error", "games_synced": 0, "message": sanitized_msg}
 
 
 async def sync_all_platforms(
@@ -1725,7 +1726,7 @@ async def search_external_metadata(query: str) -> List[Dict[str, Any]]:
                             }
                         )
             except Exception as exc:
-                logger.debug("RAWG lookup error: %s", exc)
+                logger.debug("RAWG lookup error: %s", db.sanitize_sync_message(str(exc)))
 
         # 2. Keyless Steam Store Search API
         try:

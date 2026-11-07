@@ -95,8 +95,9 @@ def create_web_session(username: str, user_agent: str = "") -> str:
     expires_at = now + SESSION_MAX_AGE_SECONDS
 
     # Store exclusively in system_db (with foreign key cascade to user)
-    system_db.init_system_db()
-    user_id = system_db.get_user_id_by_username(username) or system_db.ensure_user(username)
+    user_id = system_db.get_user_id_by_username(username)
+    if not user_id:
+        raise ValueError(f"Cannot create web session: user '{username}' does not exist")
     with system_db.get_system_connection() as conn:
         conn.execute("DELETE FROM web_sessions WHERE expires_at < ?", (now,))
         conn.execute(

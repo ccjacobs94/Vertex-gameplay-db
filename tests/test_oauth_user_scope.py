@@ -120,9 +120,14 @@ class OAuthUserScopeTests(unittest.TestCase):
             )
             self.assertEqual(page.status_code, 200)
             self.assertIn("bob", page.text)
+            self.assertIn("claude.ai", page.text)
             self.assertNotIn("access_key", page.text)
+            import re
+            m = re.search(r'name="csrf_token"\s+value="([^"]+)"', page.text)
+            csrf_token = m.group(1) if m else ""
+            post_data = {**self._authorize_params(), "csrf_token": csrf_token}
             r = self.client.post(
-                "/oauth/authorize", data=self._authorize_params(), cookies={"vertex_session": "x"}
+                "/oauth/authorize", data=post_data, cookies={"vertex_session": "x"}
             )
         self.assertEqual(r.status_code, 302)
         code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]

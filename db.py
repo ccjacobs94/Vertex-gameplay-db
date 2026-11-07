@@ -1765,11 +1765,17 @@ def resolve_playtime_prompt(
 def sanitize_sync_message(msg: str) -> str:
     if not msg:
         return ""
-    # Scrub sensitive API keys, tokens, and secrets from URLs or error text
+    # Scrub sensitive API keys, tokens, and secrets from URLs, headers, or error text
     cleaned = re.sub(
-        r"([?&](?:key|api_key|token|client_secret|npsso)=)[^&\s'\"]+",
-        r"\1[REDACTED]",
+        r"([\?&;]|\b)(key|api_key|token|client_secret|npsso)\s*=\s*[^&\s;'\"]+",
+        r"\1\2=[REDACTED]",
         msg,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"\b(Bearer\s+)[a-zA-Z0-9._~+/-]+",
+        r"\1[REDACTED]",
+        cleaned,
         flags=re.IGNORECASE,
     )
     return cleaned

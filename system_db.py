@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
 
 import passwords
 
@@ -27,12 +27,21 @@ DEFAULT_SYSTEM_DB_PATH = (
 )
 
 
-def _get_encryption_cipher() -> Fernet:
-    secret = os.environ.get("GAMEHUB_SECRET_KEY", "").strip()
-    if not secret:
-        secret = os.environ.get("VERTEX_PASSWORD", "gamehub-envelope-key-fallback").strip() or "gamehub-default-secret"
-    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
-    return Fernet(key)
+def _get_encryption_cipher() -> MultiFernet:
+    keys = []
+    sec = os.environ.get("GAMEHUB_SECRET_KEY", "").strip()
+    if sec:
+        k = base64.urlsafe_b64encode(hashlib.sha256(sec.encode("utf-8")).digest())
+        keys.append(Fernet(k))
+    pw = os.environ.get("VERTEX_PASSWORD", "").strip()
+    if pw and pw != sec:
+        k = base64.urlsafe_b64encode(hashlib.sha256(pw.encode("utf-8")).digest())
+        keys.append(Fernet(k))
+    fallback = "gamehub-envelope-key-fallback"
+    if fallback != sec and fallback != pw:
+        k = base64.urlsafe_b64encode(hashlib.sha256(fallback.encode("utf-8")).digest())
+        keys.append(Fernet(k))
+    return MultiFernet(keys)
 
 
 def encrypt_credential(value: Optional[str]) -> str:

@@ -161,6 +161,94 @@ class TestSecurityCriticalAndHigh(unittest.TestCase):
         })
         self.assertEqual(resp.status_code, 400)
 
+        # Re-insert code and verify token exchange with missing or wrong client_id fails
+        oauth_provider._auth_codes[code] = {
+            "client_id": "c1",
+            "user_id": "u1",
+            "redirect_uri": "https://example.com/cb",
+            "code_challenge": "xyz",
+            "code_challenge_method": "S256",
+            "expires_at": time.time() + 600,
+        }
+        resp2 = client.post("/oauth/token", data={
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": "",
+            "redirect_uri": "https://example.com/cb",
+            "code_verifier": "xyz",
+        })
+        self.assertEqual(resp2.status_code, 400)
+        self.assertEqual(resp2.json().get("error"), "invalid_grant")
+
+    def test_oauth_token_exchange_validates_client_secret(self):
+        import oauth_provider
+        from starlette.applications import Starlette
+        oauth_app = Starlette(routes=oauth_provider.get_oauth_routes())
+        client = TestClient(oauth_app)
+
+        code = "gh_code_test_secret"
+        oauth_provider._auth_codes[code] = {
+            "client_id": "game-hub-mcp",
+            "user_id": "u1",
+            "redirect_uri": "https://example.com/cb",
+            "code_challenge": "xyz",
+            "code_challenge_method": "S256",
+            "expires_at": time.time() + 600,
+        }
+
+        with mock.patch.dict(os.environ, {"MCP_CLIENT_SECRET": "RealSuperSecret123"}):
+            # Wrong secret rejected
+            resp = client.post("/oauth/token", data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": "game-hub-mcp",
+                "client_secret": "WrongSecret",
+                "redirect_uri": "https://example.com/cb",
+                "code_verifier": "xyz",
+            })
+            self.assertEqual(resp.status_code, 401)
+            self.assertEqual(resp.json().get("error"), "invalid_client")
+
+    def test_oauth_consent_requires_csrf_token_and_displays_redirect_host(self):
+        import oauth_provider
+        import re
+        from starlette.applications import Starlette
+        oauth_app = Starlette(routes=oauth_provider.get_oauth_routes())
+
+        uid = system_db.create_user("dan", "Password123!", db_path=self.sys_db_path)
+        sess = web_auth.create_web_session("dan")
+
+        client = TestClient(oauth_app, cookies={web_auth.SESSION_COOKIE_NAME: sess})
+        params = {
+            "client_id": "c1",
+            "redirect_uri": "https://example.com/callback",
+            "code_challenge": "xyz",
+            "code_challenge_method": "S256",
+        }
+
+        # GET renders consent page with redirect host and CSRF token
+        page = client.get("/oauth/authorize", params=params)
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("example.com", page.text)
+        self.assertIn('name="csrf_token"', page.text)
+
+        m = re.search(r'name="csrf_token"\s+value="([^"]+)"', page.text)
+        self.assertTrue(m, "Consent form must contain csrf_token hidden input")
+        csrf_tok = m.group(1)
+
+        # POST without CSRF token is rejected with 403 Forbidden
+        bad_post = client.post("/oauth/authorize", data=params, follow_redirects=False)
+        self.assertEqual(bad_post.status_code, 403)
+
+        # POST with valid CSRF token succeeds with 302 Redirect
+        good_post = client.post(
+            "/oauth/authorize",
+            data={**params, "csrf_token": csrf_tok},
+            follow_redirects=False,
+        )
+        self.assertEqual(good_post.status_code, 302)
+        self.assertIn("code=gh_code_", good_post.headers["location"])
+
     # --- H3: Local Bypass Default Disabled ---
 
     def test_local_bypass_defaults_to_false(self):
@@ -241,6 +329,66 @@ class TestSecurityCriticalAndHigh(unittest.TestCase):
             user = system_db.get_user(uid, db_path=self.sys_db_path)
             # Verify verify_password with the env password fails
             self.assertFalse(passwords.verify_password("InitialSecret123!", user.get("password_hash")))
+
+
+    def test_host_header_missing_or_disallowed_rejected(self):
+        import app
+        client = TestClient(app.app)
+        # Empty Host header
+        r1 = client.get("/healthz", headers={"host": ""})
+        self.assertEqual(r1.status_code, 400)
+
+        # Disallowed Host header (DNS rebinding)
+        r2 = client.get("/healthz", headers={"host": "evil-rebinding.com"})
+        self.assertEqual(r2.status_code, 400)
+
+        # Allowed localhost / testserver
+        r3 = client.get("/healthz", headers={"host": "localhost:8090"})
+        self.assertEqual(r3.status_code, 200)
+
+    def test_multiuser_lifespan_startup_succeeds(self):
+        import asyncio
+        import app
+        # Create 2 users to trigger is_multiuser_mode()
+        system_db.create_user("user_a", "Pass1234!", db_path=self.sys_db_path)
+        system_db.create_user("user_b", "Pass1234!", db_path=self.sys_db_path)
+        self.assertTrue(db.is_multiuser_mode())
+
+        async def run_lifespan():
+            async with app.lifespan(app.app):
+                pass
+
+        # Should not raise RuntimeError in multi-user mode
+        asyncio.run(run_lifespan())
+
+    def test_multifernet_backward_compatible_decryption(self):
+        # 1. Encrypt with VERTEX_PASSWORD
+        with mock.patch.dict(os.environ, {"VERTEX_PASSWORD": "OldLegacyPassword123!"}, clear=True):
+            enc_legacy = system_db.encrypt_credential("my_xbl_secret_key")
+            self.assertTrue(enc_legacy.startswith("gAAAAA"))
+
+        # 2. Admin later defines GAMEHUB_SECRET_KEY
+        with mock.patch.dict(os.environ, {
+            "GAMEHUB_SECRET_KEY": "NewStrongSecretKey456!",
+            "VERTEX_PASSWORD": "OldLegacyPassword123!",
+        }, clear=True):
+            decrypted = system_db.decrypt_credential(enc_legacy)
+            self.assertEqual(decrypted, "my_xbl_secret_key")
+
+    def test_sanitize_sync_message_cookie_and_bearer_headers(self):
+        cookie_text = "Client error 403 on Cookie: npsso=abcd1234efgh5678; session=xyz"
+        sanitized = db.sanitize_sync_message(cookie_text)
+        self.assertNotIn("abcd1234efgh5678", sanitized)
+        self.assertIn("[REDACTED]", sanitized)
+
+        auth_text = "Failed request with Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.test"
+        sanitized_auth = db.sanitize_sync_message(auth_text)
+        self.assertNotIn("eyJhbGciOiJIUzI1NiJ9.test", sanitized_auth)
+        self.assertIn("[REDACTED]", sanitized_auth)
+
+    def test_create_web_session_fails_for_nonexistent_user(self):
+        with self.assertRaises(ValueError):
+            web_auth.create_web_session("nonexistent_ghost_user")
 
 
 if __name__ == "__main__":
