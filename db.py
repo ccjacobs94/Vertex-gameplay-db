@@ -529,6 +529,11 @@ def _consolidate_dicts(
         cid = members[0].get("canonical_id")
         primary = next((m for m in members if m["id"] == cid), members_sorted[0])
         unified = dict(primary)
+        if not unified.get("cover_url"):
+            unified["cover_url"] = next(
+                (m["cover_url"] for m in members_sorted if m.get("cover_url")),
+                None,
+            )
 
         total_playtime = round(
             sum(float(m.get("playtime_hours") or 0.0) for m in members), 1
