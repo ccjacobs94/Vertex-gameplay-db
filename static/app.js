@@ -870,17 +870,54 @@ function makeFallbackCover(title, platform) {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc) {
+function attachCoverAspectObserver(wrapper, img, fallbackSrc, targetSrc, linkedCovers = []) {
   if (!img) return;
 
   let attemptedFallbackHeader = false;
+  let linkedCoverIndex = 0;
+
+  const handleRatio = () => {
+    if (img.naturalWidth && img.naturalHeight) {
+      const ratio = img.naturalWidth / img.naturalHeight;
+      // Wide landscape artwork (ratio > 1.25, e.g. 16:9 or Steam 460x215 banner)
+      // Switch to seamless full-width landscape presentation so the full title and artwork remain visible
+      if (ratio > 1.25 && wrapper) {
+        wrapper.classList.add("cover-landscape");
+        wrapper.style.setProperty("--cover-bg", `url("${img.currentSrc || img.src}")`);
+      } else if (wrapper) {
+        wrapper.classList.remove("cover-landscape");
+        wrapper.style.removeProperty("--cover-bg");
+      }
+    }
+  };
+
+  img.addEventListener("load", handleRatio);
 
   img.addEventListener("error", () => {
-    // If a Steam library_600x900.jpg 404s, attempt Steam header.jpg before falling back to SVG
-    if (!attemptedFallbackHeader && img.src && img.src.includes("steamstatic.com") && img.src.includes("library_600x900.jpg")) {
+    // 1. Try alternative covers from linked cross-platform copies (e.g. Xbox 720x1080 vertical poster)
+    while (linkedCoverIndex < linkedCovers.length) {
+      const altUrl = linkedCovers[linkedCoverIndex++];
+      if (altUrl && altUrl !== img.src) {
+        img.src = altUrl;
+        return;
+      }
+    }
+
+    // 2. If a Steam library_600x900.jpg 404s, attempt Steam header.jpg before falling back to SVG
+    if (
+      !attemptedFallbackHeader &&
+      img.src &&
+      (img.src.includes("steamstatic.com") || img.src.includes("akamai.steamstatic.com")) &&
+      img.src.includes("library_600x900.jpg")
+    ) {
       attemptedFallbackHeader = true;
       img.src = img.src.replace("library_600x900.jpg", "header.jpg");
       return;
+    }
+
+    if (wrapper) {
+      wrapper.classList.remove("cover-landscape");
+      wrapper.style.removeProperty("--cover-bg");
     }
     img.src = fallbackSrc;
   });
@@ -1193,7 +1230,10 @@ function renderGames() {
     card.tabIndex = 0;
 
     const fallbackSrc = makeFallbackCover(game.title, game.platform);
-    const imgSrc = game.cover_url || fallbackSrc;
+    const linkedCovers = (game.linked_games || [])
+      .map((lg) => lg.cover_url)
+      .filter((url) => Boolean(url) && url !== game.cover_url);
+    const imgSrc = game.cover_url || (linkedCovers[0] || fallbackSrc);
 
     const wrapper = document.createElement("div");
     wrapper.className = "cover-wrapper";
@@ -1204,7 +1244,7 @@ function renderGames() {
     img.height = 450;
     img.loading = i < 6 ? "eager" : "lazy";
     img.decoding = "async";
-    attachCoverAspectObserver(wrapper, img, fallbackSrc, imgSrc);
+    attachCoverAspectObserver(wrapper, img, fallbackSrc, imgSrc, linkedCovers);
     wrapper.appendChild(img);
 
     // Ultra-clean media catalog: Zero stacked badges across the face of the art!
@@ -1966,8 +2006,11 @@ function openEditModal(game) {
   const fallbackSrc = makeFallbackCover(game.title, game.platform);
   const coverPreview = document.getElementById("edit-cover-preview");
   const coverWrap = coverPreview ? coverPreview.closest(".cover-wrapper") : null;
+  const linkedCovers = (game.linked_games || [])
+    .map((lg) => lg.cover_url)
+    .filter((url) => Boolean(url) && url !== game.cover_url);
   if (coverPreview && coverWrap) {
-    attachCoverAspectObserver(coverWrap, coverPreview, fallbackSrc, game.cover_url || fallbackSrc);
+    attachCoverAspectObserver(coverWrap, coverPreview, fallbackSrc, game.cover_url || (linkedCovers[0] || fallbackSrc), linkedCovers);
   }
 
   const achTile = document.getElementById("edit-ach-tile");
@@ -3888,8 +3931,11 @@ function renderTriageCard() {
   const fallbackSrc = makeFallbackCover(game.title, game.platform);
   const imgEl = document.getElementById("triage-img");
   const triageWrap = imgEl ? imgEl.closest(".cover-wrapper") : null;
+  const linkedCovers = (game.linked_games || [])
+    .map((lg) => lg.cover_url)
+    .filter((url) => Boolean(url) && url !== game.cover_url);
   if (imgEl && triageWrap) {
-    attachCoverAspectObserver(triageWrap, imgEl, fallbackSrc, game.cover_url || fallbackSrc);
+    attachCoverAspectObserver(triageWrap, imgEl, fallbackSrc, game.cover_url || (linkedCovers[0] || fallbackSrc), linkedCovers);
   }
   imgEl.alt = `${game.title} cover art`;
 

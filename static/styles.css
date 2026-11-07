@@ -587,6 +587,37 @@ textarea:focus {
   transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+/* Seamless wide landscape cover presentation for 16:9 / header banners (never crops title or artwork) */
+.cover-wrapper.cover-landscape {
+  background-color: var(--bg-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cover-wrapper.cover-landscape::before {
+  content: "";
+  position: absolute;
+  inset: -15px;
+  background-image: var(--cover-bg);
+  background-size: cover;
+  background-position: center;
+  filter: blur(28px) brightness(0.4) saturate(1.25);
+  transform: scale(1.15) translateZ(0);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.cover-wrapper.cover-landscape img {
+  position: relative;
+  z-index: 1;
+  inline-size: 100%;
+  block-size: auto;
+  max-block-size: 100%;
+  object-fit: contain;
+  object-position: center;
+}
+
 .cover-wrapper .platform-badge,
 .cover-wrapper .gamepass-badge,
 .cover-wrapper .ownership-badge,
