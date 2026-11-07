@@ -185,6 +185,27 @@ async def _periodic_wishlist_sync_loop() -> None:
         await asyncio.sleep(max(WISHLIST_SYNC_INTERVAL_HOURS, 1.0) * 3600)
 
 
+def get_allowed_mcp_hosts() -> List[str]:
+    allowed_mcp_hosts = ["localhost", "127.0.0.1", "::1", "localhost:*", "127.0.0.1:*", "[::1]:*"]
+    for env_key in ("MCP_PUBLIC_DOMAIN", "PUBLIC_BASE_URL", "VERTEX_ALLOWED_HOSTS", "MCP_ALLOWED_HOSTS"):
+        val = os.environ.get(env_key, "").strip()
+        if not val:
+            continue
+        for item in val.split(","):
+            raw = item.strip()
+            if not raw:
+                continue
+            parsed = urlparse(raw if "://" in raw else f"http://{raw}")
+            host = (parsed.hostname or "").strip().lower()
+            if host:
+                if host not in allowed_mcp_hosts:
+                    allowed_mcp_hosts.append(host)
+                wildcard = f"{host}:*"
+                if wildcard not in allowed_mcp_hosts:
+                    allowed_mcp_hosts.append(wildcard)
+    return allowed_mcp_hosts
+
+
 async def _run_mcp_http_server(host: str, port: int) -> None:
     import uvicorn
     from starlette.middleware.cors import CORSMiddleware
@@ -193,12 +214,7 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
     from starlette.routing import Route
     from mcp.server.transport_security import TransportSecuritySettings
 
-    allowed_mcp_hosts = ["localhost", "127.0.0.1", "::1"]
-    custom_hosts = os.environ.get("MCP_ALLOWED_HOSTS") or os.environ.get("VERTEX_ALLOWED_HOSTS") or ""
-    if custom_hosts:
-        for ch in custom_hosts.split(","):
-            if ch.strip() and ch.strip() not in allowed_mcp_hosts:
-                allowed_mcp_hosts.append(ch.strip())
+    allowed_mcp_hosts = get_allowed_mcp_hosts()
 
     sec = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
@@ -419,6 +435,14 @@ def is_allowed_host(host_header: str) -> bool:
         try:
             pub_host = urlparse(pub_url).hostname
             if pub_host and h == pub_host.lower():
+                return True
+        except Exception:
+            pass
+    mcp_pub = os.environ.get("MCP_PUBLIC_DOMAIN", "").strip()
+    if mcp_pub:
+        try:
+            mcp_host = urlparse(mcp_pub if "://" in mcp_pub else f"http://{mcp_pub}").hostname
+            if mcp_host and h == mcp_host.lower():
                 return True
         except Exception:
             pass
