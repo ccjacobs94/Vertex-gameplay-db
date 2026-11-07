@@ -55,6 +55,19 @@ def get_auth_password() -> str:
 
 
 def is_web_auth_enabled() -> bool:
+    """
+    Check whether web and API session authentication is enabled.
+
+    Authentication is required if:
+    1. Edition is 'hosted' (SaaS mode).
+    2. Registration policy is not 'disabled' (multi-user signups enabled).
+    3. VERTEX_REQUIRE_AUTH is not explicitly disabled ('0', 'false', 'no', 'off') AND:
+       - VERTEX_PASSWORD is set in environment (bootstrap credential), OR
+       - system.db contains at least one user with a configured password hash.
+
+    If VERTEX_PASSWORD is unset and no users have configured passwords yet,
+    authentication remains disabled to allow initial bootstrap setup without lockout.
+    """
     edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
     if edition == "hosted":
         return True
@@ -66,7 +79,14 @@ def is_web_auth_enabled() -> bool:
     flag = os.environ.get("VERTEX_REQUIRE_AUTH", "true").strip().lower()
     if flag in ("0", "false", "no", "off"):
         return False
-    return bool(get_auth_password())
+    if bool(get_auth_password()):
+        return True
+    try:
+        if system_db.has_users_with_passwords():
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def is_local_bypass_enabled() -> bool:

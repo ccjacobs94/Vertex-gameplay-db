@@ -104,6 +104,45 @@ class TestSecurityCriticalAndHigh(unittest.TestCase):
             res = client.get("/api/stats")
             self.assertIn(res.status_code, (401, 303))
 
+    def test_auth_enabled_when_users_have_passwords_without_env_password(self):
+        import app
+        client = TestClient(app.app)
+        with mock.patch.dict(os.environ, {"VERTEX_PASSWORD": "", "VERTEX_REQUIRE_AUTH": "true"}):
+            # Initially, no users with real passwords exist
+            self.assertFalse(system_db.has_users_with_passwords(self.sys_db_path))
+            self.assertFalse(web_auth.is_web_auth_enabled())
+
+            # Users created with placeholder passwords (managed_by_web_auth) do NOT activate auth
+            system_db.ensure_user("placeholder_user", db_path=self.sys_db_path)
+            self.assertFalse(system_db.has_users_with_passwords(self.sys_db_path))
+            self.assertFalse(web_auth.is_web_auth_enabled())
+
+            # Creating a user with a real hashed password activates auth automatically
+            system_db.create_user("gamer_user", "Password123!", db_path=self.sys_db_path)
+            self.assertTrue(system_db.has_users_with_passwords(self.sys_db_path))
+            self.assertTrue(web_auth.is_web_auth_enabled())
+
+            # Unauthenticated request to /api/stats must return 401 Unauthorized
+            res = client.get("/api/stats")
+            self.assertEqual(res.status_code, 401)
+            self.assertEqual(res.json().get("error"), "unauthorized")
+
+            # Healthcheck remains public and returns 200 OK
+            health_res = client.get("/healthz")
+            self.assertEqual(health_res.status_code, 200)
+
+            # Authenticated session succeeds
+            sess = web_auth.create_web_session("gamer_user")
+            client.cookies.set(web_auth.SESSION_COOKIE_NAME, sess)
+            authed_res = client.get("/api/stats")
+            self.assertEqual(authed_res.status_code, 200)
+
+    def test_auth_respects_explicit_require_auth_false(self):
+        system_db.create_user("user_pass", "Password123!", db_path=self.sys_db_path)
+        self.assertTrue(system_db.has_users_with_passwords(self.sys_db_path))
+        with mock.patch.dict(os.environ, {"VERTEX_REQUIRE_AUTH": "false", "VERTEX_PASSWORD": ""}):
+            self.assertFalse(web_auth.is_web_auth_enabled())
+
     def test_db_get_connection_fails_closed_without_user_context_in_multiuser(self):
         # Create 2 users to be in multi-user mode
         system_db.create_user("user1", "Password123!", db_path=self.sys_db_path)

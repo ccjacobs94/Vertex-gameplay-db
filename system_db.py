@@ -564,6 +564,26 @@ def count_active_admins(db_path: Optional[str] = None) -> int:
         return int(row["c"]) if row else 0
 
 
+def has_users_with_passwords(db_path: Optional[str] = None) -> bool:
+    """Return True if any user in system.db has a configured password hash."""
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    try:
+        init_system_db(target_path)
+        with get_system_connection(target_path) as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM users
+                WHERE password_hash IS NOT NULL
+                  AND TRIM(password_hash) != ''
+                  AND password_hash != 'managed_by_web_auth'
+                LIMIT 1
+                """
+            ).fetchone()
+            return bool(row)
+    except Exception:
+        return False
+
+
 def list_users(status: Optional[str] = None, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     target_path = db_path or DEFAULT_SYSTEM_DB_PATH
     init_system_db(target_path)
