@@ -20,6 +20,22 @@ DEFAULT_DB_PATH = os.environ.get(
 USERS_DB_DIR = os.environ.get("GAMEHUB_USERS_DIR", "/app/data/users")
 
 
+def is_multiuser_mode() -> bool:
+    try:
+        import system_db
+        edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
+        if edition == "hosted":
+            return True
+        reg_policy = system_db.get_setting(
+            "registration_policy", os.environ.get("VERTEX_REGISTRATION", "disabled")
+        )
+        if reg_policy != "disabled":
+            return True
+        return system_db.count_active_users() > 1
+    except Exception:
+        return False
+
+
 def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
     if db_path is not None:
         resolved_path = db_path
@@ -28,6 +44,8 @@ def get_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
         if user_id:
             resolved_path = str(Path(USERS_DB_DIR) / str(user_id) / "games.db")
         else:
+            if is_multiuser_mode():
+                raise RuntimeError("Database access denied: user context is required in multi-user mode")
             resolved_path = DEFAULT_DB_PATH
     path = Path(resolved_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1744,6 +1762,19 @@ def resolve_playtime_prompt(
     }
 
 
+def sanitize_sync_message(msg: str) -> str:
+    if not msg:
+        return ""
+    # Scrub sensitive API keys, tokens, and secrets from URLs or error text
+    cleaned = re.sub(
+        r"([?&](?:key|api_key|token|client_secret|npsso)=)[^&\s'\"]+",
+        r"\1[REDACTED]",
+        msg,
+        flags=re.IGNORECASE,
+    )
+    return cleaned
+
+
 def log_sync_event(
     source: str,
     status: str,
@@ -1752,13 +1783,14 @@ def log_sync_event(
     db_path: Optional[str] = None,
 ) -> None:
     now = datetime.now(timezone.utc).isoformat()
+    clean_message = sanitize_sync_message(message)
     with get_connection(db_path) as conn:
         conn.execute(
             """
             INSERT INTO sync_logs (source, status, games_synced, message, synced_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (source, status, games_synced, message, now),
+            (source, status, games_synced, clean_message, now),
         )
 
 

@@ -145,8 +145,17 @@ def _make_async_client(timeout: float = 20.0, extra_headers: Optional[Dict[str, 
     return httpx.AsyncClient(timeout=timeout, headers=headers, transport=transport)
 
 
+def validate_steam_id(steam_id: str) -> bool:
+    if not steam_id:
+        return False
+    clean = str(steam_id).strip()
+    return bool(re.match(r"^[a-zA-Z0-9_-]{3,64}$", clean))
+
+
 async def resolve_steam_vanity(client: httpx.AsyncClient, api_key: str, steam_id_or_vanity: str) -> str:
     val = steam_id_or_vanity.strip()
+    if not validate_steam_id(val):
+        raise ValueError(f"Invalid Steam ID / vanity name format: {val!r}")
     if val.isdigit() and len(val) >= 16:
         return val
     resp = await client.get(
@@ -504,10 +513,10 @@ async def sync_steam(
         return {"source": "Steam", "status": "success", "games_synced": count, "message": f"Synced {count} Steam games"}
 
     except Exception as exc:
-        msg = f"Steam sync failed: {exc}"
-        logger.exception(msg)
-        log_sync_event("Steam", "error", 0, str(exc), db_path=db_path)
-        return {"source": "Steam", "status": "error", "games_synced": 0, "message": str(exc)}
+        sanitized_msg = db.sanitize_sync_message(str(exc))
+        logger.warning("Steam sync failed: %s", sanitized_msg)
+        log_sync_event("Steam", "error", 0, sanitized_msg, db_path=db_path)
+        return {"source": "Steam", "status": "error", "games_synced": 0, "message": sanitized_msg}
 
 
 async def sync_xbox(

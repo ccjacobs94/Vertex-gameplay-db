@@ -1,5 +1,6 @@
 #!/bin/sh
 set -e
+umask 077
 
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"

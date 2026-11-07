@@ -41,7 +41,7 @@ PUBLIC_PATH_PREFIXES = (
     "/mcp",
     "/sse",
     "/messages",
-    "/api/stats",
+    "/healthz",
 )
 
 
@@ -50,13 +50,8 @@ def get_auth_username() -> str:
 
 
 def get_auth_password() -> str:
-    """
-    Returns VERTEX_PASSWORD if explicitly configured, falling back to MCP_CLIENT_SECRET.
-    """
-    pw = os.environ.get("VERTEX_PASSWORD", "").strip()
-    if pw:
-        return pw
-    return os.environ.get("MCP_CLIENT_SECRET", "").strip()
+    """Returns VERTEX_PASSWORD if explicitly configured."""
+    return os.environ.get("VERTEX_PASSWORD", "").strip()
 
 
 def is_web_auth_enabled() -> bool:
@@ -76,12 +71,11 @@ def is_web_auth_enabled() -> bool:
 
 def is_local_bypass_enabled() -> bool:
     """
-    If VERTEX_AUTH_BYPASS_LOCAL=true (the default), direct requests from private
+    If VERTEX_AUTH_BYPASS_LOCAL=true, direct requests from private
     LAN / Tailscale IPs without a reverse-proxy domain header can bypass the login prompt,
-    provided this is a single-user self-hosted instance. If multiple active accounts exist
-    or if hosted mode is enabled, login is always required.
+    provided this is a single-user self-hosted instance. Defaults to false.
     """
-    flag = os.environ.get("VERTEX_AUTH_BYPASS_LOCAL", "true").strip().lower()
+    flag = os.environ.get("VERTEX_AUTH_BYPASS_LOCAL", "false").strip().lower()
     if flag not in ("1", "true", "yes", "on"):
         return False
     edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
@@ -95,27 +89,12 @@ def is_local_bypass_enabled() -> bool:
     return True
 
 
-def _init_web_sessions_table() -> None:
-    with get_connection() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS web_sessions (
-                session_id TEXT PRIMARY KEY,
-                username TEXT NOT NULL,
-                created_at REAL NOT NULL,
-                expires_at REAL NOT NULL,
-                user_agent TEXT DEFAULT ''
-            );
-            """
-        )
-
-
 def create_web_session(username: str, user_agent: str = "") -> str:
     session_id = secrets.token_urlsafe(32)
     now = time.time()
     expires_at = now + SESSION_MAX_AGE_SECONDS
 
-    # Store in system_db (with foreign key cascade to user)
+    # Store exclusively in system_db (with foreign key cascade to user)
     system_db.init_system_db()
     user_id = system_db.get_user_id_by_username(username) or system_db.ensure_user(username)
     with system_db.get_system_connection() as conn:
@@ -127,22 +106,6 @@ def create_web_session(username: str, user_agent: str = "") -> str:
             """,
             (session_id, user_id, username, now, expires_at, (user_agent or "")[:255]),
         )
-
-    # Also record in legacy table for backwards-compatibility
-    try:
-        _init_web_sessions_table()
-        with get_connection() as conn:
-            conn.execute("DELETE FROM web_sessions WHERE expires_at < ?", (now,))
-            conn.execute(
-                """
-                INSERT INTO web_sessions (session_id, username, created_at, expires_at, user_agent)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (session_id, username, now, expires_at, (user_agent or "")[:255]),
-            )
-    except Exception:
-        pass
-
     return session_id
 
 
@@ -150,7 +113,6 @@ def verify_web_session(session_id: Optional[str]) -> Optional[str]:
     if not session_id:
         return None
 
-    # First check system.db web_sessions joined with users table
     try:
         system_db.init_system_db()
         now = time.time()
@@ -164,42 +126,21 @@ def verify_web_session(session_id: Optional[str]) -> Optional[str]:
                 """,
                 (session_id,),
             ).fetchone()
-            if row:
-                if row["expires_at"] < now:
-                    conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
-                    return None
-                # Allow billing-only sessions for awaiting_payment and subscription_lapsed
-                if row["status"] and row["status"] != "active":
-                    if row["status_reason"] not in ("awaiting_payment", "subscription_lapsed"):
-                        conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
-                        return None
-                return str(row["u_username"] or row["username"])
-
-    except Exception:
-        pass
-
-    # Fallback to games.db web_sessions
-    try:
-        _init_web_sessions_table()
-        now = time.time()
-        with get_connection() as conn:
-            row = conn.execute(
-                "SELECT username, expires_at FROM web_sessions WHERE session_id = ?",
-                (session_id,),
-            ).fetchone()
             if not row:
                 return None
             if row["expires_at"] < now:
                 conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
                 return None
-            username = str(row["username"])
-            # Ensure user status in system_db is active (or billing-only)
-            user = system_db.get_user_by_username(username)
-            if user and user.get("status") != "active":
-                if user.get("status_reason") not in ("awaiting_payment", "subscription_lapsed"):
+            # If user does not exist in users table (e.g. deleted), purge session and fail closed
+            if not row["u_username"] and not system_db.get_user_by_username(str(row["username"])):
+                conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
+                return None
+            # Allow billing-only sessions for awaiting_payment and subscription_lapsed
+            if row["status"] and row["status"] != "active":
+                if row["status_reason"] not in ("awaiting_payment", "subscription_lapsed"):
                     conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
                     return None
-            return username
+            return str(row["u_username"] or row["username"])
     except Exception:
         return None
 
@@ -210,12 +151,6 @@ def revoke_web_session(session_id: Optional[str]) -> None:
     try:
         system_db.init_system_db()
         with system_db.get_system_connection() as conn:
-            conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
-    except Exception:
-        pass
-    try:
-        _init_web_sessions_table()
-        with get_connection() as conn:
             conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_id,))
     except Exception:
         pass
@@ -235,12 +170,6 @@ def revoke_sessions_for_username(username: str) -> None:
                 )
             else:
                 conn.execute("DELETE FROM web_sessions WHERE LOWER(username) = LOWER(?)", (username,))
-    except Exception:
-        pass
-    try:
-        _init_web_sessions_table()
-        with get_connection() as conn:
-            conn.execute("DELETE FROM web_sessions WHERE LOWER(username) = LOWER(?)", (username,))
     except Exception:
         pass
 
@@ -277,12 +206,12 @@ def is_request_authenticated(request: Request) -> bool:
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
     if verify_web_session(session_id):
         return True
-    # Also accept a valid Bearer token for API CLI scripts
+    # Also accept a valid Bearer token from OAuth / PAT
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         token = auth_header[7:].strip()
-        expected = get_auth_password()
-        if expected and secrets.compare_digest(token, expected):
+        from oauth_provider import verify_bearer_token
+        if verify_bearer_token(token):
             return True
     return False
 
@@ -562,6 +491,7 @@ async def handle_login_post(request: Request) -> Response:
             authenticated = True
         elif (
             fallback_allowed
+            and not str(user.get("password_hash") or "").startswith("scrypt$")
             and secrets.compare_digest(username.lower(), bootstrap_user.lower())
             and bool(bootstrap_pass)
             and secrets.compare_digest(password, bootstrap_pass)

@@ -237,12 +237,15 @@ class TestUserSettingsAndPortability(unittest.TestCase):
         import app
 
         client = TestClient(app.app)
-        # Unauthenticated request without session cookie
-        resp = client.get("/api/stats")
-        self.assertEqual(resp.status_code, 200)
-        data = resp.json()
-        self.assertIn("total_games", data)
-        self.assertIn("configured_sources", data)
+        # Dedicated public healthcheck returns ok
+        resp_health = client.get("/healthz")
+        self.assertEqual(resp_health.status_code, 200)
+        self.assertEqual(resp_health.json(), {"ok": True})
+
+        # /api/stats is no longer public and requires auth
+        with mock.patch.dict(os.environ, {"VERTEX_PASSWORD": "Secret123!", "VERTEX_REQUIRE_AUTH": "true"}):
+            resp_stats = client.get("/api/stats")
+            self.assertIn(resp_stats.status_code, (401, 303))
 
     def test_single_port_mcp_forwarding_endpoint_exists(self):
         from starlette.testclient import TestClient

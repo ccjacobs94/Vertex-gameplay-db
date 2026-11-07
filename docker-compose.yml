@@ -16,7 +16,7 @@ services:
       - ${GAMEHUB_CACHE_PATH:-./data/cache}:/app/cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/api/stats"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -43,7 +43,7 @@ services:
       - ${GAMEHUB_CACHE_PATH:-./data-qa/cache}:/app/cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/api/stats"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
