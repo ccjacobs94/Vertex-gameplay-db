@@ -446,6 +446,15 @@ class TestSecurityCriticalAndHigh(unittest.TestCase):
         # Should not raise RuntimeError in multi-user mode
         asyncio.run(run_lifespan())
 
+    def test_init_db_in_multiuser_mode_without_user_context(self):
+        # Create 2 users to trigger is_multiuser_mode()
+        system_db.create_user("init_a", "Pass1234!", db_path=self.sys_db_path)
+        system_db.create_user("init_b", "Pass1234!", db_path=self.sys_db_path)
+        self.assertTrue(db.is_multiuser_mode())
+        # Calling init_db() with no arguments when current_user_id is unset
+        # should initialize DEFAULT_DB_PATH schema safely and not raise RuntimeError
+        db.init_db()
+
     def test_multifernet_backward_compatible_decryption(self):
         # 1. Encrypt with VERTEX_PASSWORD
         with mock.patch.dict(os.environ, {"VERTEX_PASSWORD": "OldLegacyPassword123!"}, clear=True):
