@@ -491,6 +491,17 @@ class TestSecurityCriticalAndHigh(unittest.TestCase):
             self.assertIn("gaming-mcp.crjacobs.cc", hosts)
             self.assertIn("gaming-mcp.crjacobs.cc:*", hosts)
 
+    def test_is_allowed_host_sibling_public_domain_and_tailscale(self):
+        # Regression test (2026-11-07): When MCP_PUBLIC_DOMAIN is set to https://gaming-mcp.crjacobs.cc,
+        # sibling subdomain vertex.crjacobs.cc and Tailscale MagicDNS (*.ts.net) must be allowed.
+        import app
+        with mock.patch.dict(os.environ, {"MCP_PUBLIC_DOMAIN": "https://gaming-mcp.crjacobs.cc", "PUBLIC_BASE_URL": "", "VERTEX_ALLOWED_HOSTS": ""}, clear=False):
+            self.assertTrue(app.is_allowed_host("vertex.crjacobs.cc"))
+            self.assertTrue(app.is_allowed_host("gaming-mcp.crjacobs.cc"))
+            self.assertTrue(app.is_allowed_host("chrisserver.tail1234.ts.net"))
+            self.assertTrue(app.is_allowed_host("game-hub:8090"))
+            self.assertFalse(app.is_allowed_host("evil-rebinding.com"))
+
 
 if __name__ == "__main__":
     unittest.main()
