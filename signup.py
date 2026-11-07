@@ -330,9 +330,11 @@ def render_approval_notice_page(username: str) -> HTMLResponse:
 
 
 async def handle_signup_get(request: Request) -> Response:
+    policy = system_db.get_registration_policy()
+    if policy == "disabled":
+        return render_signup_page(policy="disabled")
     if web_auth.is_request_authenticated(request):
         return RedirectResponse(url="/", status_code=303)
-    policy = system_db.get_registration_policy()
     invite = request.query_params.get("invite", "").strip()
     return render_signup_page(policy=policy, default_invite=invite)
 

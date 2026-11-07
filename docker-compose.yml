@@ -16,7 +16,7 @@ services:
       - ${GAMEHUB_CACHE_PATH:-./data/cache}:/app/cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/api/stats"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -39,11 +39,11 @@ services:
       - "${QA_MCP_PORT:-8099}:8096"
     volumes:
       - ${GAMEHUB_QA_DATA_PATH:-./data-qa}:/app/data
-      - ${GAMEHUB_BACKUP_PATH:-./data-qa/backups}:/app/backups
-      - ${GAMEHUB_CACHE_PATH:-./data-qa/cache}:/app/cache
+      - ${GAMEHUB_QA_BACKUP_PATH:-./data-qa/backups}:/app/backups
+      - ${GAMEHUB_QA_CACHE_PATH:-./data-qa/cache}:/app/cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/api/stats"]
+      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -37,6 +37,8 @@ class OAuthUserScopeTests(unittest.TestCase):
             "client_id": "c1",
             "redirect_uri": "https://claude.ai/cb",
             "state": "s1",
+            "code_challenge": "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM",
+            "code_challenge_method": "S256",
         }
 
     def test_legacy_oauth_tokens_table_gets_user_id_column(self):
@@ -90,14 +92,14 @@ class OAuthUserScopeTests(unittest.TestCase):
         self.assertEqual(oauth_provider._auth_codes, {})
         self.assertIn('action="/login"', r.text)
 
-    def test_session_without_system_user_auto_provisions(self):
+    def test_session_without_system_user_never_auto_provisions(self):
         with mock.patch.object(oauth_provider, "verify_web_session", return_value="ghost"):
             r = self.client.get(
                 "/oauth/authorize", params=self._authorize_params(), cookies={"vertex_session": "x"}
             )
         self.assertEqual(r.status_code, 200)
-        self.assertIn("ghost", r.text)
-        self.assertEqual(system_db.get_user_id_by_username("ghost"), "ghost")
+        self.assertIn('action="/login"', r.text)
+        self.assertIsNone(system_db.get_user_by_username("ghost"))
 
     def test_default_username_is_chameleon94(self):
         import web_auth
@@ -118,16 +120,27 @@ class OAuthUserScopeTests(unittest.TestCase):
             )
             self.assertEqual(page.status_code, 200)
             self.assertIn("bob", page.text)
+            self.assertIn("claude.ai", page.text)
             self.assertNotIn("access_key", page.text)
+            import re
+            m = re.search(r'name="csrf_token"\s+value="([^"]+)"', page.text)
+            csrf_token = m.group(1) if m else ""
+            post_data = {**self._authorize_params(), "csrf_token": csrf_token}
             r = self.client.post(
-                "/oauth/authorize", data=self._authorize_params(), cookies={"vertex_session": "x"}
+                "/oauth/authorize", data=post_data, cookies={"vertex_session": "x"}
             )
         self.assertEqual(r.status_code, 302)
         code = parse_qs(urlparse(r.headers["location"]).query)["code"][0]
         self.assertEqual(oauth_provider._auth_codes[code]["user_id"], "u-bob")
 
         tok = self.client.post(
-            "/oauth/token", data={"grant_type": "authorization_code", "code": code, "client_id": "c1"}
+            "/oauth/token", data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "client_id": "c1",
+                "redirect_uri": "https://claude.ai/cb",
+                "code_verifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+            }
         ).json()
         self.assertEqual(oauth_provider.verify_bearer_token(tok["access_token"]), "u-bob")
 

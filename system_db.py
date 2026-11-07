@@ -7,6 +7,7 @@ and the shared cross-user game catalog metadata cache.
 import hashlib
 import os
 import re
+import base64
 import secrets
 import shutil
 import sqlite3
@@ -15,6 +16,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from cryptography.fernet import Fernet, MultiFernet
+
 import passwords
 
 DEFAULT_SYSTEM_DB_PATH = (
@@ -22,6 +25,45 @@ DEFAULT_SYSTEM_DB_PATH = (
     or os.environ.get("SYSTEM_DB_PATH")
     or str(Path(__file__).resolve().parent / "data" / "system.db")
 )
+
+
+def _get_encryption_cipher() -> MultiFernet:
+    keys = []
+    sec = os.environ.get("GAMEHUB_SECRET_KEY", "").strip()
+    if sec:
+        k = base64.urlsafe_b64encode(hashlib.sha256(sec.encode("utf-8")).digest())
+        keys.append(Fernet(k))
+    pw = os.environ.get("VERTEX_PASSWORD", "").strip()
+    if pw and pw != sec:
+        k = base64.urlsafe_b64encode(hashlib.sha256(pw.encode("utf-8")).digest())
+        keys.append(Fernet(k))
+    fallback = "gamehub-envelope-key-fallback"
+    if fallback != sec and fallback != pw:
+        k = base64.urlsafe_b64encode(hashlib.sha256(fallback.encode("utf-8")).digest())
+        keys.append(Fernet(k))
+    return MultiFernet(keys)
+
+
+def encrypt_credential(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    if value.startswith("gAAAAA"):
+        return value
+    cipher = _get_encryption_cipher()
+    return cipher.encrypt(value.encode("utf-8")).decode("ascii")
+
+
+def decrypt_credential(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    if not value.startswith("gAAAAA"):
+        return value
+    try:
+        cipher = _get_encryption_cipher()
+        return cipher.decrypt(value.encode("ascii")).decode("utf-8")
+    except Exception:
+        return ""
+
 
 
 def get_system_connection(db_path: Optional[str] = None) -> sqlite3.Connection:
@@ -125,6 +167,28 @@ def init_system_db(db_path: Optional[str] = None) -> None:
             conn.execute("ALTER TABLE user_connections ADD COLUMN xbox_gamertag TEXT")
         if "xbox_xuid" not in conn_cols:
             conn.execute("ALTER TABLE user_connections ADD COLUMN xbox_xuid TEXT")
+
+        # Migrate legacy plaintext platform credentials to Fernet-encrypted format
+        try:
+            uc_rows = conn.execute("SELECT user_id, xbl_api_key_encrypted, psn_npsso_encrypted FROM user_connections").fetchall()
+            for r in uc_rows:
+                u_id = r["user_id"]
+                xbl = r["xbl_api_key_encrypted"] or ""
+                psn = r["psn_npsso_encrypted"] or ""
+                needs_update = False
+                if xbl and not xbl.startswith("gAAAAA"):
+                    xbl = encrypt_credential(xbl)
+                    needs_update = True
+                if psn and not psn.startswith("gAAAAA"):
+                    psn = encrypt_credential(psn)
+                    needs_update = True
+                if needs_update:
+                    conn.execute(
+                        "UPDATE user_connections SET xbl_api_key_encrypted = ?, psn_npsso_encrypted = ? WHERE user_id = ?",
+                        (xbl, psn, u_id),
+                    )
+        except Exception:
+            pass
 
         # New tables for account auditing and instance settings
         conn.executescript(
@@ -500,6 +564,26 @@ def count_active_admins(db_path: Optional[str] = None) -> int:
         return int(row["c"]) if row else 0
 
 
+def has_users_with_passwords(db_path: Optional[str] = None) -> bool:
+    """Return True if any user in system.db has a configured password hash."""
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    try:
+        init_system_db(target_path)
+        with get_system_connection(target_path) as conn:
+            row = conn.execute(
+                """
+                SELECT 1 FROM users
+                WHERE password_hash IS NOT NULL
+                  AND TRIM(password_hash) != ''
+                  AND LOWER(TRIM(password_hash)) != 'managed_by_web_auth'
+                LIMIT 1
+                """
+            ).fetchone()
+            return bool(row)
+    except Exception:
+        return False
+
+
 def list_users(status: Optional[str] = None, db_path: Optional[str] = None) -> List[Dict[str, Any]]:
     target_path = db_path or DEFAULT_SYSTEM_DB_PATH
     init_system_db(target_path)
@@ -556,16 +640,23 @@ def set_setting(key: str, value: str, db_path: Optional[str] = None) -> None:
 
 
 def ensure_bootstrap_admin(username: str, db_path: Optional[str] = None) -> str:
-    """Ensure bootstrap user exists and has role='admin' and status='active'."""
+    """Ensure bootstrap user exists and has role='admin' on initial setup."""
     clean_user = (username or "chameleon94").strip()
-    uid = ensure_user(clean_user, db_path=db_path)
     target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
     with get_system_connection(target_path) as conn:
+        row = conn.execute(
+            "SELECT id, role, status FROM users WHERE LOWER(username) = LOWER(?)", (clean_user,)
+        ).fetchone()
+        if row:
+            # Preserve existing user status; do not reactivate suspended admins
+            return str(row["id"])
+        uid = ensure_user(clean_user, db_path=target_path)
         conn.execute(
             "UPDATE users SET role = 'admin', status = 'active' WHERE id = ?",
             (uid,),
         )
-    return uid
+        return uid
 
 
 def get_username_by_user_id(user_id: str, db_path: Optional[str] = None) -> Optional[str]:
@@ -705,10 +796,10 @@ def get_user_connections(user_id: str, db_path: Optional[str] = None) -> Dict[st
         keys = row.keys()
         return {
             "steam_id": str(row["steam_id"] or ""),
-            "xbl_api_key": str(row["xbl_api_key_encrypted"] or ""),
+            "xbl_api_key": decrypt_credential(str(row["xbl_api_key_encrypted"] or "")),
             "xbox_gamertag": str(row["xbox_gamertag"] or "") if "xbox_gamertag" in keys else "",
             "xbox_xuid": str(row["xbox_xuid"] or "") if "xbox_xuid" in keys else "",
-            "psn_npsso": str(row["psn_npsso_encrypted"] or ""),
+            "psn_npsso": decrypt_credential(str(row["psn_npsso_encrypted"] or "")),
             "onboarding_completed": bool(row["onboarding_completed"]),
         }
 
@@ -737,12 +828,17 @@ def set_user_connections(
         ).fetchone()
 
         e_keys = existing.keys() if existing else []
+        existing_xbl = decrypt_credential(existing["xbl_api_key_encrypted"]) if existing else ""
+        existing_psn = decrypt_credential(existing["psn_npsso_encrypted"]) if existing else ""
         final_steam = steam_id.strip() if steam_id is not None else (existing["steam_id"] if existing else "")
-        final_xbl = xbl_api_key.strip() if xbl_api_key is not None else (existing["xbl_api_key_encrypted"] if existing else "")
+        final_xbl = xbl_api_key.strip() if xbl_api_key is not None else existing_xbl
         final_gt = xbox_gamertag.strip() if xbox_gamertag is not None else (existing["xbox_gamertag"] if existing and "xbox_gamertag" in e_keys else "")
         final_xuid = xbox_xuid.strip() if xbox_xuid is not None else (existing["xbox_xuid"] if existing and "xbox_xuid" in e_keys else "")
-        final_psn = psn_npsso.strip() if psn_npsso is not None else (existing["psn_npsso_encrypted"] if existing else "")
+        final_psn = psn_npsso.strip() if psn_npsso is not None else existing_psn
         final_onboarding = int(onboarding_completed) if onboarding_completed is not None else (existing["onboarding_completed"] if existing else 0)
+
+        enc_xbl = encrypt_credential(final_xbl) if final_xbl else ""
+        enc_psn = encrypt_credential(final_psn) if final_psn else ""
 
         conn.execute(
             """
@@ -757,7 +853,7 @@ def set_user_connections(
                 updated_at = excluded.updated_at,
                 onboarding_completed = excluded.onboarding_completed
             """,
-            (user_id, final_steam, final_xbl, final_gt, final_xuid, final_psn, now, final_onboarding),
+            (user_id, final_steam, enc_xbl, final_gt, final_xuid, enc_psn, now, final_onboarding),
         )
     return {
         "steam_id": final_steam,
