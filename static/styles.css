@@ -1445,10 +1445,13 @@ dialog::backdrop {
 }
 
 .form-group {
-  flex: 1 1 180px;
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+}
+
+.form-row > .form-group {
+  flex: 1 1 180px;
 }
 
 .form-group label {
@@ -1466,6 +1469,27 @@ dialog::backdrop {
 .checkbox-group input[type="checkbox"] {
   inline-size: 1.1rem;
   block-size: 1.1rem;
+}
+
+.checkbox-label {
+  display: inline-flex;
+  align-items: safe center;
+  gap: 0.45rem;
+  cursor: pointer;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.checkbox-label:hover {
+  color: var(--text-primary);
+}
+
+.checkbox-label input[type="checkbox"] {
+  margin: 0;
+  inline-size: 1rem;
+  block-size: 1rem;
+  cursor: pointer;
 }
 
 .modal-footer {
@@ -2427,23 +2451,38 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 .edit-main-fields {
   display: flex;
   flex-direction: column;
-  gap: 1.05rem;
+  gap: 0.75rem;
   min-inline-size: 0;
+}
+
+.edit-main-fields > .form-group {
+  flex: 0 0 auto;
 }
 
 .edit-primary-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 1rem;
-  align-items: flex-start;
+  gap: 0.75rem 1rem;
+  align-items: flex-end;
 }
 
 .edit-status-group {
-  flex: 0 1 200px;
+  flex: 1 1 160px;
+}
+
+.edit-ownership-group {
+  flex: 1 1 170px;
+}
+
+.edit-gamepass-group {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: safe center;
+  padding-block-end: 0.45rem;
 }
 
 .edit-rating-group {
-  flex: 1 1 280px;
+  flex: 1 1 100%;
 }
 
 .edit-label-row {
@@ -2453,8 +2492,17 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   gap: 0.5rem;
 }
 
+.edit-rating-pills {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+  max-inline-size: 420px;
+}
+
 .edit-rating-pills .rating-pill {
-  inline-size: 30px;
+  flex: 1 1 32px;
+  min-inline-size: 28px;
+  max-inline-size: 38px;
   block-size: 32px;
   font-size: 0.84rem;
 }
@@ -2525,12 +2573,12 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   field-sizing: content;
   inline-size: 100%;
   block-size: auto;
-  min-block-size: 5.5lh;
+  min-block-size: 3.5lh;
   max-block-size: 14lh;
   line-height: 1.55;
   resize: vertical;
-  padding-block: 0.7rem;
-  padding-inline: 0.9rem;
+  padding-block: 0.6rem;
+  padding-inline: 0.85rem;
 }
 
 .label-muted {
@@ -3254,8 +3302,14 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   }
 
   .edit-status-group,
+  .edit-ownership-group,
+  .edit-gamepass-group,
   .edit-rating-group {
     flex: 1 1 100%;
+  }
+
+  .edit-gamepass-group {
+    padding-block-end: 0;
   }
 
   .edit-modal-header {
