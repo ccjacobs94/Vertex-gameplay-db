@@ -449,6 +449,8 @@ class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
         username = verify_web_session(session_id)
         if not username and is_local_bypass_enabled() and _is_direct_local_or_tailscale_request(request):
             username = get_auth_username()
+        if not username and not is_web_auth_enabled():
+            username = get_auth_username()
         user = system_db.get_user_by_username(username) if username else None
         user_id = user["id"] if user else None
 
@@ -601,6 +603,8 @@ def _get_active_user(request: Request) -> Tuple[Optional[str], Optional[str]]:
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
     username = verify_web_session(session_id)
     if not username and is_local_bypass_enabled() and _is_direct_local_or_tailscale_request(request):
+        username = get_auth_username()
+    if not username and not is_web_auth_enabled():
         username = get_auth_username()
     user_id = get_current_user_id()
     if not user_id and username:
@@ -1114,6 +1118,13 @@ async def api_change_password(payload: ChangePasswordRequest, request: Request) 
             and bool(bootstrap_pass)
             and secrets.compare_digest(payload.current_password, bootstrap_pass)
         ):
+            verified = True
+        elif (
+            secrets.compare_digest(user["username"].lower(), bootstrap_user.lower())
+            and not bool(bootstrap_pass)
+            and str(user.get("password_hash") or "").strip().lower() == "managed_by_web_auth"
+        ):
+            # Initial bootstrap setup: bootstrap admin establishing initial password when VERTEX_PASSWORD was omitted
             verified = True
 
     if not verified:
