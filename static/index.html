@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#0b0f19">
+  <meta name="theme-color" content="#0B0C10">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -25,95 +25,71 @@
     </div>
     <div class="pwa-install-actions">
       <button type="button" id="btn-pwa-install" class="btn btn-primary btn-xs">Install</button>
-      <button type="button" id="btn-pwa-dismiss" class="btn-icon" aria-label="Dismiss install banner">✕</button>
+      <button type="button" id="btn-pwa-dismiss" class="btn-icon" aria-label="Dismiss install banner">
+        <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
     </div>
   </div>
 
   <header class="site-header">
     <div class="header-inner">
       <div class="brand-group">
-        <img src="/static/vertex_logo.svg" alt="Vertex Logo" class="brand-logo" width="40" height="40">
+        <img src="/static/vertex_logo.svg" alt="Vertex Logo" class="brand-logo" width="36" height="36">
         <div class="brand-text">
           <h1>Vertex</h1>
-          <p class="subtitle" id="sync-badge">The Apex of Your Gaming Universe &bull; Steam, Xbox, PlayStation &amp; Switch</p>
+          <p class="subtitle" id="sync-badge">Unified Game Library</p>
         </div>
       </div>
       <div class="header-actions">
+        <button type="button" id="btn-sync" class="btn-sync-health" aria-label="Sync status and trigger sync" title="Sync health &amp; sync libraries">
+          <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+          <span class="sync-health-dot" id="sync-health-dot" aria-hidden="true"></span>
+        </button>
         <button type="button" id="btn-open-connections" class="btn btn-secondary btn-connections" title="Connected Accounts &amp; Onboarding" onclick="window.openConnectionsModal && window.openConnectionsModal()">
-          <span class="btn-connections-icon" aria-hidden="true">🎮</span>
+          <span class="btn-connections-icon" aria-hidden="true">
+            <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="11" x2="10" y2="11"/><line x1="8" y1="9" x2="8" y2="13"/><line x1="15" y1="12" x2="15.01" y2="12"/><line x1="18" y1="10" x2="18.01" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>
+          </span>
           <span class="btn-connections-label">Accounts</span>
         </button>
-        <button type="button" id="btn-open-reconcile" class="btn btn-reconcile">
-          🔗 Reconcile
-        </button>
-        <button type="button" id="btn-open-triage" class="btn btn-triage">
-          ⚡ Quick Triage
-        </button>
-        <button type="button" id="btn-sync" class="btn btn-secondary">
-          Sync Libraries
-        </button>
         <button type="button" id="btn-open-settings" class="btn btn-secondary btn-settings" title="Settings &amp; Connections" onclick="window.openSettingsModal && window.openSettingsModal()">
-          <span class="btn-settings-icon" aria-hidden="true">⚙️</span>
+          <span class="btn-settings-icon" aria-hidden="true">
+            <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </span>
           <span class="btn-settings-label">Settings</span>
         </button>
-        <button type="button" id="btn-open-add" class="btn btn-primary">
-          + Add Game
-        </button>
         <a href="/logout" id="btn-logout" class="btn btn-secondary btn-logout" title="Sign Out" hidden>
-          Sign Out
+          <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          <span>Sign Out</span>
         </a>
       </div>
       <div class="mobile-header-actions">
         <button type="button" id="btn-mobile-sync" class="btn-icon mobile-header-btn" aria-label="Sync Libraries" title="Sync Libraries">
-          🔄
+          <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
         </button>
         <button type="button" id="btn-mobile-settings" class="btn-icon mobile-header-btn" aria-label="Settings &amp; Accounts" title="Settings" onclick="window.openSettingsModal && window.openSettingsModal()">
-          ⚙️
+          <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
         </button>
         <a href="/logout" id="btn-mobile-logout" class="btn-icon mobile-header-btn mobile-logout-btn" aria-label="Sign Out" title="Sign Out" hidden>
-          🚪
+          <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
         </a>
       </div>
     </div>
   </header>
 
   <main class="main-container">
-    <nav class="view-tabs-bar" aria-label="Main Views" role="tablist">
-      <button
-        type="button"
-        id="tab-library"
-        class="view-tab-btn active"
-        role="tab"
-        aria-selected="true"
-        aria-controls="library-view-section"
-      >
-        <span class="tab-icon" aria-hidden="true">🎮</span>
-        <span>Games Library</span>
-      </button>
-      <button
-        type="button"
-        id="tab-habits"
-        class="view-tab-btn"
-        role="tab"
-        aria-selected="false"
-        aria-controls="habits-view-section"
-      >
-        <span class="tab-icon" aria-hidden="true">📊</span>
-        <span>Play Habits &amp; Insights</span>
-      </button>
-      <button
-        type="button"
-        id="tab-wishlist"
-        class="view-tab-btn"
-        role="tab"
-        aria-selected="false"
-        aria-controls="wishlist-view-section"
-      >
-        <span class="tab-icon" aria-hidden="true">🏷️</span>
-        <span>Wishlist &amp; Deals</span>
-        <span id="wishlist-badge" class="badge-pill tab-deal-badge" hidden>0</span>
-      </button>
-    </nav>
+    <!-- Hidden compatibility anchors for existing script references -->
+    <div hidden>
+      <nav class="view-tabs-bar" aria-label="Main Views" role="tablist">
+        <button type="button" id="tab-library" class="view-tab-btn active" role="tab" aria-selected="true" aria-controls="library-view-section">Library</button>
+        <button type="button" id="tab-habits" class="view-tab-btn" role="tab" aria-selected="false" aria-controls="habits-view-section">Insights</button>
+        <button type="button" id="tab-wishlist" class="view-tab-btn" role="tab" aria-selected="false" aria-controls="wishlist-view-section">Wishlist <span id="wishlist-badge" class="badge-pill tab-deal-badge" hidden>0</span></button>
+      </nav>
+      <section class="metrics-bar" id="metrics-bar" aria-hidden="true">
+        <span id="stat-playing">0</span>
+        <span id="stat-backlog">0</span>
+        <span id="stat-completed">0</span>
+      </section>
+    </div>
 
     <section
       id="playtime-prompts-banner"
@@ -122,29 +98,6 @@
       aria-live="polite"
       hidden
     ></section>
-
-    <section class="metrics-bar" aria-label="Library overview metrics" id="metrics-bar">
-      <article class="metric-card metric-interactive active" data-filter-status="" role="button" tabindex="0" title="Show all games">
-        <span class="metric-label">Total Games</span>
-        <strong class="metric-value" id="stat-total-games">0</strong>
-      </article>
-      <article class="metric-card">
-        <span class="metric-label">Total Playtime</span>
-        <strong class="metric-value" id="stat-total-hours">0 hrs</strong>
-      </article>
-      <article class="metric-card metric-interactive" data-filter-status="Playing" role="button" tabindex="0" title="Filter by Currently Playing">
-        <span class="metric-label">Currently Playing</span>
-        <strong class="metric-value" id="stat-playing">0</strong>
-      </article>
-      <article class="metric-card metric-interactive" data-filter-status="Plan to Play" role="button" tabindex="0" title="Filter by Plan to Play">
-        <span class="metric-label">Backlog</span>
-        <strong class="metric-value" id="stat-backlog">0</strong>
-      </article>
-      <article class="metric-card metric-interactive" data-filter-status="Completed" role="button" tabindex="0" title="Filter by Completed">
-        <span class="metric-label">Beaten / Completed</span>
-        <strong class="metric-value" id="stat-completed">0</strong>
-      </article>
-    </section>
 
     <search class="controls-bar" id="controls-bar">
       <form id="filter-form" class="filter-form">
@@ -168,7 +121,8 @@
               aria-expanded="false"
               aria-controls="filter-selects-drawer"
             >
-              <span>⚙ Filters</span>
+              <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>
+              <span>Filters</span>
               <span id="active-filter-badge" class="triage-badge-pill" hidden>0</span>
             </button>
 
@@ -181,7 +135,9 @@
                 title="Poster Grid View"
                 aria-label="Poster Grid View"
                 aria-pressed="true"
-              >⊞</button>
+              >
+                <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+              </button>
               <button
                 type="button"
                 id="btn-view-list"
@@ -190,7 +146,9 @@
                 title="Compact List View"
                 aria-label="Compact List View"
                 aria-pressed="false"
-              >☰</button>
+              >
+                <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+              </button>
             </div>
           </div>
         </div>
@@ -257,7 +215,8 @@
           </select>
 
           <button type="button" id="btn-fav-toggle" class="btn btn-chip" aria-pressed="false">
-            ★ Favorites
+            <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            <span>Favorites</span>
           </button>
 
           <button type="button" id="btn-gamepass-toggle" class="btn btn-chip btn-chip-gp" aria-pressed="false" title="Filter for games currently available on Xbox Game Pass">
@@ -273,21 +232,41 @@
     </search>
 
     <section aria-labelledby="library-heading" id="library-view-section">
-      <div class="section-header">
-        <h2 id="library-heading">Library (<span id="results-count">0</span>)</h2>
-        <div id="source-indicators" class="source-indicators"></div>
+      <div class="catalog-header">
+        <div class="catalog-header-text">
+          <h1 class="catalog-title" id="library-heading">Library</h1>
+          <p class="catalog-subtitle" id="catalog-subtitle">
+            <span id="stat-total-games">0</span> Titles &middot; <span id="stat-total-hours">0</span> Hours
+          </p>
+        </div>
+        <div class="catalog-header-actions">
+          <button type="button" id="btn-library-actions" class="btn btn-secondary btn-catalog-actions" aria-label="Library Actions" title="Manage Library Actions">
+            <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+            <span>Actions</span>
+            <span id="library-actions-badge" class="action-badge-dot" hidden></span>
+          </button>
+          <button type="button" id="btn-open-add" class="btn btn-primary btn-catalog-add">
+            <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span>Add Game</span>
+          </button>
+        </div>
       </div>
+      <div id="source-indicators" class="source-indicators" hidden></div>
+      <span id="results-count" hidden>0</span>
 
       <!-- Empty Library Welcome Banner -->
       <div id="empty-library-welcome" class="empty-library-welcome" hidden>
         <div class="welcome-banner-content">
-          <div class="welcome-banner-icon" aria-hidden="true">🎮</div>
+          <div class="welcome-banner-icon" aria-hidden="true">
+            <svg class="lucide-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="11" x2="10" y2="11"/><line x1="8" y1="9" x2="8" y2="13"/><line x1="15" y1="12" x2="15.01" y2="12"/><line x1="18" y1="10" x2="18.01" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>
+          </div>
           <div class="welcome-banner-text">
             <h3>Welcome to Game Hub!</h3>
             <p>Your library is currently empty. Connect your Steam, Xbox, or PlayStation accounts to automatically aggregate your games, playtime, and achievements.</p>
           </div>
           <button type="button" id="btn-welcome-connect" class="btn btn-primary" onclick="window.openOnboardingWizard && window.openOnboardingWizard()">
-            🚀 Connect Accounts &amp; Sync
+            <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+            <span>Connect Accounts &amp; Sync</span>
           </button>
         </div>
       </div>
@@ -458,18 +437,18 @@
     <section aria-labelledby="wishlist-heading" id="wishlist-view-section" class="wishlist-view-section" hidden>
       <div class="section-header wishlist-section-header">
         <div>
-          <h2 id="wishlist-heading">🏷️ Multi-Platform Wishlist &amp; Deal Monitor</h2>
+          <h2 id="wishlist-heading">Multi-Platform Wishlist &amp; Deal Monitor</h2>
           <p class="section-subtitle">
             Tracking price drops across PC (Steam/GOG/Epic), Xbox, and PlayStation with Smart Upgrade detection.
           </p>
         </div>
         <div class="wishlist-header-actions">
           <button type="button" id="btn-toggle-push" class="btn btn-secondary btn-push-toggle" title="Toggle Web Push Deal Alerts">
-            <span id="push-toggle-icon">🔔</span>
+            <span id="push-toggle-icon"><svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg></span>
             <span id="push-toggle-label">Enable Deal Alerts</span>
           </button>
           <button type="button" id="btn-sync-wishlist" class="btn btn-secondary">
-            🔄 Sync Prices Now
+            Sync Prices
           </button>
           <button type="button" id="btn-open-wishlist-add" class="btn btn-primary" onclick="window.openWishlistAddModal && window.openWishlistAddModal()">
             + Watch Game
@@ -539,7 +518,7 @@
         <div class="wishlist-filter-group">
           <label class="checkbox-label" title="Show only Smart Upgrade deals">
             <input type="checkbox" id="wishlist-smart-only-toggle" />
-            <span>🌟 Smart Upgrades Only</span>
+            <span>Smart Upgrades Only</span>
           </label>
         </div>
         <div class="wishlist-search-box">
@@ -817,7 +796,7 @@
 
         <div id="edit-linked-section" class="linked-copies-panel">
           <div class="linked-copies-header">
-            <strong>🔗 Cross-Platform Copies &amp; Playtime Breakdown</strong>
+            <strong>Cross-Platform Copies &amp; Playtime Breakdown</strong>
             <span id="edit-linked-summary" class="linked-summary-badge"></span>
           </div>
           <ul id="edit-linked-list" class="linked-copies-list"></ul>
@@ -835,12 +814,12 @@
         <div id="edit-achievements-section" class="achievements-explorer-panel">
           <div class="achievements-explorer-header">
             <div class="ach-header-title-group">
-              <strong>🏆 Achievements &amp; Trophies</strong>
+              <strong>Achievements &amp; Trophies</strong>
               <span id="ach-explorer-count-badge" class="linked-summary-badge">0 / 0</span>
               <span id="ach-explorer-overlap-badge" class="ach-overlap-badge" hidden></span>
             </div>
             <button type="button" id="btn-refresh-game-ach" class="btn btn-secondary btn-xs" title="Live sync achievements from platform APIs">
-              ↻ Sync Achievements
+              Sync Achievements
             </button>
           </div>
 
@@ -885,7 +864,7 @@
       <div class="sheet-drag-handle" aria-hidden="true"></div>
       <header class="modal-header triage-header">
         <div class="triage-header-left">
-          <h2 id="reconcile-modal-title">🔗 Reconcile Cross-Platform Games</h2>
+          <h2 id="reconcile-modal-title">Reconcile Cross-Platform Games</h2>
           <span id="reconcile-counter" class="triage-counter-badge">0 / 0</span>
         </div>
         <div class="triage-header-controls">
@@ -955,7 +934,7 @@
         </div>
 
         <div id="reconcile-empty" class="triage-empty-state" hidden>
-          <h3>🎉 All duplicate suggestions reviewed!</h3>
+          <h3>All duplicate suggestions reviewed!</h3>
           <p>All detected cross-platform matches have been reconciled or dismissed. You can manually link any games or manage existing links below.</p>
           <div class="reconcile-empty-actions">
             <button type="button" id="btn-reconcile-open-manual" class="btn btn-primary">Manual Link &amp; Manage Linked</button>
@@ -1013,7 +992,7 @@
     <div class="modal-content onboarding-modal-content">
       <header class="modal-header">
         <div>
-          <h2 id="onboarding-modal-title">🎮 Connect Your Accounts</h2>
+          <h2 id="onboarding-modal-title">Connect Your Accounts</h2>
           <p class="modal-subtitle">Link your gaming libraries to aggregate playtime, achievements, and backlogs</p>
         </div>
         <button type="button" id="btn-close-onboarding" class="btn-icon" aria-label="Close modal" onclick="window.closeOnboardingWizard && window.closeOnboardingWizard()">✕</button>
@@ -1043,7 +1022,9 @@
       <div id="wstep-panel-1" class="wizard-step-panel active">
         <div class="platform-connect-card">
           <div class="platform-card-header">
-            <span class="platform-icon" aria-hidden="true">🎮</span>
+            <span class="platform-icon" aria-hidden="true">
+              <svg class="brand-icon brand-icon-steam" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><use href="#brand-icon-steam"></use></svg>
+            </span>
             <div>
               <h3>Steam (PC)</h3>
               <p class="card-desc">Sync your PC Steam games, hours played, and achievements.</p>
@@ -1075,7 +1056,9 @@
       <div id="wstep-panel-2" class="wizard-step-panel" hidden>
         <div class="platform-connect-card">
           <div class="platform-card-header">
-            <span class="platform-icon" aria-hidden="true">🟢</span>
+            <span class="platform-icon" aria-hidden="true">
+              <svg class="brand-icon brand-icon-xbox" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><use href="#brand-icon-xbox"></use></svg>
+            </span>
             <div>
               <h3>Xbox &amp; PC Game Pass</h3>
               <p class="card-desc">Sync your Xbox consoles, Windows Xbox app, and Game Pass library.</p>
@@ -1099,7 +1082,9 @@
       <div id="wstep-panel-3" class="wizard-step-panel" hidden>
         <div class="platform-connect-card">
           <div class="platform-card-header">
-            <span class="platform-icon" aria-hidden="true">🔵</span>
+            <span class="platform-icon" aria-hidden="true">
+              <svg class="brand-icon brand-icon-playstation" viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><use href="#brand-icon-playstation"></use></svg>
+            </span>
             <div>
               <h3>PlayStation (PS4 / PS5)</h3>
               <p class="card-desc">Sync PlayStation trophies, played titles, and hours.</p>
@@ -1137,7 +1122,9 @@
       <!-- Step 4: Summary & Ready to Sync -->
       <div id="wstep-panel-4" class="wizard-step-panel" hidden>
         <div class="platform-connect-card ready-sync-card">
-          <div class="ready-sync-icon" aria-hidden="true">🚀</div>
+          <div class="ready-sync-icon" aria-hidden="true">
+            <svg class="lucide-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
+          </div>
           <h3>Ready to Aggregate Your Games</h3>
           <p class="card-desc">Your accounts are linked. Click below to begin syncing your libraries, playtimes, and achievements across platforms.</p>
 
@@ -1147,7 +1134,7 @@
 
           <div class="sync-start-action">
             <button type="button" id="btn-wizard-start-sync" class="btn btn-primary btn-large">
-              🔄 Save &amp; Start Initial Sync
+              Save &amp; Start Initial Sync
             </button>
           </div>
         </div>
@@ -1170,7 +1157,7 @@
     <div class="modal-content settings-modal-content">
       <header class="modal-header">
         <div>
-          <h2 id="settings-modal-title">⚙️ Settings &amp; Connections</h2>
+          <h2 id="settings-modal-title">Settings &amp; Connections</h2>
           <p class="modal-subtitle">Platform integrations, MCP AI agents, and personal library backup</p>
         </div>
         <button type="button" id="btn-close-settings" class="btn-icon" aria-label="Close modal" onclick="document.getElementById('settings-dialog') &amp;&amp; document.getElementById('settings-dialog').close()">✕</button>
@@ -1178,19 +1165,19 @@
 
       <div class="settings-tabs-bar" role="tablist">
         <button type="button" class="settings-tab-btn active" role="tab" id="stab-connections" aria-selected="true" aria-controls="ssection-connections" onclick="window.switchSettingsTab && window.switchSettingsTab('stab-connections')">
-          🔌 Connections
+          Connections
         </button>
         <button type="button" class="settings-tab-btn" role="tab" id="stab-mcp" aria-selected="false" aria-controls="ssection-mcp" onclick="window.switchSettingsTab && window.switchSettingsTab('stab-mcp')">
-          🤖 MCP &amp; Tokens
+          MCP &amp; Tokens
         </button>
         <button type="button" class="settings-tab-btn" role="tab" id="stab-portability" aria-selected="false" aria-controls="ssection-portability" onclick="window.switchSettingsTab && window.switchSettingsTab('stab-portability')">
-          💾 Portability
+          Portability
         </button>
         <button type="button" class="settings-tab-btn" role="tab" id="stab-account" aria-selected="false" aria-controls="ssection-account" onclick="window.switchSettingsTab && window.switchSettingsTab('stab-account')">
-          👤 Account
+          Account
         </button>
         <button type="button" class="settings-tab-btn" role="tab" id="stab-admin-users" aria-selected="false" aria-controls="ssection-admin-users" hidden onclick="window.switchSettingsTab && window.switchSettingsTab('stab-admin-users')">
-          👥 Users
+          Users
         </button>
       </div>
 
@@ -1201,7 +1188,7 @@
             Configure your personal gaming accounts for automated multi-platform syncs and achievement tracking.
           </p>
           <button type="button" id="btn-launch-wizard" class="btn btn-sm btn-secondary" onclick="window.openOnboardingWizard && window.openOnboardingWizard()">
-            🚀 Setup Wizard
+            Setup Wizard
           </button>
         </div>
 
@@ -1281,7 +1268,7 @@
         </div>
 
         <div id="new-token-alert" class="token-alert-box" hidden>
-          <div class="token-alert-title">🔑 New Personal Access Token Generated</div>
+          <div class="token-alert-title">New Personal Access Token Generated</div>
           <p>Copy this token now. For your security, it will never be displayed in full again:</p>
           <div class="input-with-button">
             <input type="text" id="new-token-value" readonly class="code-input" />
@@ -1307,7 +1294,9 @@
 
         <div class="portability-grid">
           <div class="portability-card">
-            <div class="portability-icon" aria-hidden="true">📥</div>
+            <div class="portability-icon" aria-hidden="true">
+              <svg class="lucide-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </div>
             <div class="portability-body">
               <h4>Export Library (.db)</h4>
               <p>Download a full, clean SQLite database backup of your library (<code>games.db</code>).</p>
@@ -1318,7 +1307,9 @@
           </div>
 
           <div class="portability-card">
-            <div class="portability-icon" aria-hidden="true">📤</div>
+            <div class="portability-icon" aria-hidden="true">
+              <svg class="lucide-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
             <div class="portability-body">
               <h4>Import Library (.db)</h4>
               <p>Restore or migrate a previously exported <code>games.db</code> file. An automatic safety backup of your current library is created on the server before replacement.</p>
@@ -1348,7 +1339,7 @@
           </div>
           <div class="account-logout-wrap" style="margin-top: 0.85rem; padding-top: 0.75rem; border-top: 1px solid var(--border-subtle); display: flex; justify-content: flex-end;">
             <a href="/logout" id="btn-settings-logout" class="btn btn-secondary" style="display: inline-flex; align-items: center; gap: 0.4rem; color: #f87171; border-color: rgba(239, 68, 68, 0.3);" hidden>
-              <span>🚪</span> Sign Out
+              <span>Sign Out</span>
             </a>
           </div>
         </div>
@@ -1376,7 +1367,7 @@
       <section id="ssection-admin-users" class="settings-tab-panel" role="tabpanel" aria-labelledby="stab-admin-users" hidden>
         <div class="admin-users-header">
           <div>
-            <h3 style="margin: 0; font-size: 1.05rem;">👥 Instance Users</h3>
+            <h3 style="margin: 0; font-size: 1.05rem;">Instance Users</h3>
             <p class="settings-panel-desc" style="margin: 0.25rem 0 0.75rem 0;">
               Manage accounts, roles, access permissions, and passwords on this Vertex instance.
             </p>
@@ -1436,7 +1427,7 @@
 
         <!-- Admin Temp Password Alert Banner -->
         <div id="admin-temp-pw-alert" class="admin-temp-pw-alert" hidden>
-          <span class="alert-icon">🔑</span>
+          <span class="alert-icon"></span>
           <div class="alert-body">
             <strong>Account Created / Password Reset:</strong>
             <p style="margin: 0.25rem 0;">Temporary Password: <code id="admin-temp-pw-display" style="font-size: 1rem; color: #38bdf8;"></code></p>
@@ -1467,7 +1458,7 @@
         <div class="admin-invites-section" style="margin-top: 1.5rem; border-top: 1px solid var(--border-subtle); padding-top: 1.25rem;">
           <div class="admin-users-header">
             <div>
-              <h4 style="margin: 0; font-size: 0.98rem;">🎟️ Registration Invites</h4>
+              <h4 style="margin: 0; font-size: 0.98rem;">Registration Invites</h4>
               <p class="settings-panel-desc" style="margin: 0.2rem 0 0.5rem 0; font-size: 0.8rem;">
                 Single-use invitation links for onboarding new users.
               </p>
@@ -1477,7 +1468,7 @@
 
           <!-- New Invite Created Alert -->
           <div id="admin-new-invite-alert" class="admin-temp-pw-alert" hidden>
-            <span class="alert-icon">🔗</span>
+            <span class="alert-icon"></span>
             <div class="alert-body" style="flex: 1;">
               <strong>Invitation Link Created:</strong>
               <div style="display: flex; gap: 0.5rem; margin-top: 0.35rem; align-items: center;">
@@ -1679,7 +1670,7 @@
         </div>
 
         <div id="triage-empty" class="triage-empty-state" hidden>
-          <h3>🎉 All caught up!</h3>
+          <h3>All caught up!</h3>
           <p>You have triaged all games in this queue. Switch the queue filter above if you want to review another set of games.</p>
           <button type="button" id="btn-done-triage" class="btn btn-primary">Back to Library</button>
         </div>
@@ -1721,7 +1712,7 @@
             <input type="search" id="wishlist-candidate-input" class="form-input" placeholder="Search game title (e.g. Cyberpunk 2077, Elden Ring)..." />
             <button type="button" id="btn-search-candidates" class="btn btn-primary">Search</button>
           </div>
-          <div id="candidates-loading" class="candidates-loading" hidden>🔍 Searching game catalogs...</div>
+          <div id="candidates-loading" class="candidates-loading" hidden>Searching game catalogs...</div>
           <div id="candidates-list" class="candidates-list"></div>
         </div>
 
@@ -1866,49 +1857,95 @@
   </dialog>
 
   <button type="button" id="btn-scroll-top" class="floating-top-btn" aria-label="Scroll to top" hidden>
-    ↑ Top
+    <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+    <span>Top</span>
   </button>
 
-  <!-- Mobile Bottom Navigation Bar (iOS & Android thumb-zone tab bar) -->
-  <nav class="mobile-bottom-nav" aria-label="Mobile navigation">
+  <!-- Contextual Action Sheet Dialog for Administrative Actions (Triage, Reconcile, Accounts) -->
+  <dialog id="library-actions-dialog" class="action-sheet-dialog" aria-labelledby="action-sheet-title">
+    <div class="action-sheet-container">
+      <div class="action-sheet-header">
+        <h3 id="action-sheet-title" class="action-sheet-title">Library Actions</h3>
+        <button type="button" id="btn-close-action-sheet" class="btn-icon" aria-label="Close action sheet" onclick="document.getElementById('library-actions-dialog')?.close()">
+          <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="action-sheet-items">
+        <button type="button" id="btn-open-triage" class="action-sheet-item">
+          <span class="action-sheet-icon">
+            <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m13 2-2 10h6L7 22l2-10H3z"/></svg>
+          </span>
+          <div class="action-sheet-label-group">
+            <span class="action-sheet-label">Quick Triage</span>
+            <span class="action-sheet-desc">Rapidly assign backlog, playing, and completed statuses</span>
+          </div>
+          <span id="sheet-triage-badge" class="triage-badge-pill" hidden>0</span>
+        </button>
+
+        <button type="button" id="btn-open-reconcile" class="action-sheet-item">
+          <span class="action-sheet-icon">
+            <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+          </span>
+          <div class="action-sheet-label-group">
+            <span class="action-sheet-label">Reconcile Cross-Platform</span>
+            <span class="action-sheet-desc">Merge duplicate copies across Steam, Xbox, PSN, and Switch</span>
+          </div>
+          <span id="sheet-reconcile-badge" class="triage-badge-pill" hidden>0</span>
+        </button>
+
+        <button type="button" id="btn-sheet-connections" class="action-sheet-item" onclick="document.getElementById('library-actions-dialog')?.close(); window.openConnectionsModal && window.openConnectionsModal()">
+          <span class="action-sheet-icon">
+            <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="11" x2="10" y2="11"/><line x1="8" y1="9" x2="8" y2="13"/><line x1="15" y1="12" x2="15.01" y2="12"/><line x1="18" y1="10" x2="18.01" y2="10"/><path d="M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z"/></svg>
+          </span>
+          <div class="action-sheet-label-group">
+            <span class="action-sheet-label">Connected Accounts</span>
+            <span class="action-sheet-desc">Configure platform sync credentials</span>
+          </div>
+        </button>
+      </div>
+      <div class="action-sheet-footer">
+        <button type="button" class="btn btn-secondary action-sheet-cancel-btn" onclick="document.getElementById('library-actions-dialog')?.close()">Cancel</button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Modern Media Catalog Bottom Navigation Bar (Strictly 4 Items) -->
+  <nav class="mobile-bottom-nav" aria-label="Main navigation">
     <button type="button" id="mnav-library" class="mnav-item active" aria-label="Library">
-      <span class="mnav-icon" aria-hidden="true">📚</span>
+      <span class="mnav-icon" aria-hidden="true">
+        <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>
+      </span>
       <span class="mnav-label">Library</span>
     </button>
-    <button type="button" id="mnav-habits" class="mnav-item" aria-label="Play Habits Dashboard">
-      <span class="mnav-icon" aria-hidden="true">📊</span>
-      <span class="mnav-label">Habits</span>
-    </button>
-    <button type="button" id="mnav-wishlist" class="mnav-item" aria-label="Wishlist &amp; Deals">
+    <button type="button" id="mnav-wishlist" class="mnav-item" aria-label="Wishlist">
       <span class="mnav-icon-wrap">
-        <span class="mnav-icon" aria-hidden="true">🏷️</span>
+        <span class="mnav-icon" aria-hidden="true">
+          <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg>
+        </span>
         <span id="mnav-wishlist-badge" class="mnav-badge" hidden>0</span>
       </span>
       <span class="mnav-label">Wishlist</span>
     </button>
-    <button type="button" id="mnav-triage" class="mnav-item" aria-label="Quick Triage">
-      <span class="mnav-icon-wrap">
-        <span class="mnav-icon" aria-hidden="true">⚡</span>
-        <span id="mnav-triage-badge" class="mnav-badge" hidden>0</span>
+    <button type="button" id="mnav-habits" class="mnav-item" aria-label="Insights">
+      <span class="mnav-icon" aria-hidden="true">
+        <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       </span>
-      <span class="mnav-label">Triage</span>
+      <span class="mnav-label">Insights</span>
     </button>
-    <button type="button" id="mnav-reconcile" class="mnav-item" aria-label="Reconcile Cross-Platform">
-      <span class="mnav-icon-wrap">
-        <span class="mnav-icon" aria-hidden="true">🔗</span>
-        <span id="mnav-reconcile-badge" class="mnav-badge" hidden>0</span>
+    <button type="button" id="mnav-settings" class="mnav-item" aria-label="Settings" onclick="window.openSettingsModal && window.openSettingsModal()">
+      <span class="mnav-icon" aria-hidden="true">
+        <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </span>
-      <span class="mnav-label">Reconcile</span>
-    </button>
-    <button type="button" id="mnav-add" class="mnav-item mnav-item-primary" aria-label="Add Game">
-      <span class="mnav-fab" aria-hidden="true">＋</span>
-      <span class="mnav-label">Add</span>
-    </button>
-    <button type="button" id="mnav-settings" class="mnav-item" aria-label="Settings &amp; Accounts">
-      <span class="mnav-icon" aria-hidden="true">⚙️</span>
       <span class="mnav-label">Settings</span>
     </button>
   </nav>
+
+  <!-- Legacy hidden anchors for backward-compatibility with subviews -->
+  <div hidden>
+    <button type="button" id="mnav-triage"><span id="mnav-triage-badge">0</span></button>
+    <button type="button" id="mnav-reconcile"><span id="mnav-reconcile-badge">0</span></button>
+    <button type="button" id="mnav-add"></button>
+  </div>
 
   <script src="/static/app.js?v=35"></script>
 </body>
