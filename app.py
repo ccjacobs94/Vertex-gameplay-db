@@ -413,9 +413,9 @@ def is_allowed_host(host_header: str) -> bool:
     h = host_header.split(":")[0].strip().lower()
     if not h:
         return False
-    if h in ("localhost", "127.0.0.1", "::1", "testserver"):
+    if h in ("localhost", "127.0.0.1", "::1", "testserver", "game-hub", "game-hub-qa"):
         return True
-    if h.endswith(".local"):
+    if h.endswith(".local") or h.endswith(".ts.net"):
         return True
     try:
         ipaddress.ip_address(h)
@@ -430,20 +430,19 @@ def is_allowed_host(host_header: str) -> bool:
                 return True
             if p.startswith("*.") and h.endswith(p[1:]):
                 return True
-    pub_url = os.environ.get("PUBLIC_BASE_URL", "").strip()
-    if pub_url:
+    for env_key in ("PUBLIC_BASE_URL", "MCP_PUBLIC_DOMAIN"):
+        pub_val = os.environ.get(env_key, "").strip()
+        if not pub_val:
+            continue
         try:
-            pub_host = urlparse(pub_url).hostname
-            if pub_host and h == pub_host.lower():
-                return True
-        except Exception:
-            pass
-    mcp_pub = os.environ.get("MCP_PUBLIC_DOMAIN", "").strip()
-    if mcp_pub:
-        try:
-            mcp_host = urlparse(mcp_pub if "://" in mcp_pub else f"http://{mcp_pub}").hostname
-            if mcp_host and h == mcp_host.lower():
-                return True
+            pub_host = urlparse(pub_val if "://" in pub_val else f"http://{pub_val}").hostname
+            if pub_host:
+                pub_host_l = pub_host.lower()
+                if h == pub_host_l:
+                    return True
+                parts = pub_host_l.split(".")
+                if len(parts) >= 2 and h.endswith("." + ".".join(parts[-2:])):
+                    return True
         except Exception:
             pass
     return False
