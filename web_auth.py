@@ -54,7 +54,7 @@ def get_auth_password() -> str:
     return os.environ.get("VERTEX_PASSWORD", "").strip()
 
 
-def is_web_auth_enabled() -> bool:
+def is_web_auth_enabled(db_path: Optional[str] = None) -> bool:
     """
     Check whether web and API session authentication is enabled.
 
@@ -63,16 +63,17 @@ def is_web_auth_enabled() -> bool:
     2. Registration policy is not 'disabled' (multi-user signups enabled).
     3. VERTEX_REQUIRE_AUTH is not explicitly disabled ('0', 'false', 'no', 'off') AND:
        - VERTEX_PASSWORD is set in environment (bootstrap credential), OR
-       - system.db contains at least one user with a configured password hash.
+       - system.db contains at least one user with a configured password hash, OR
+       - Multiple active users exist in system.db (multi-user mode).
 
     If VERTEX_PASSWORD is unset and no users have configured passwords yet,
     authentication remains disabled to allow initial bootstrap setup without lockout.
     """
-    edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"))
+    edition = system_db.get_setting("edition", os.environ.get("VERTEX_EDITION", "selfhosted"), db_path=db_path)
     if edition == "hosted":
         return True
     reg_policy = system_db.get_setting(
-        "registration_policy", os.environ.get("VERTEX_REGISTRATION", "disabled")
+        "registration_policy", os.environ.get("VERTEX_REGISTRATION", "disabled"), db_path=db_path
     )
     if reg_policy != "disabled":
         return True
@@ -82,7 +83,9 @@ def is_web_auth_enabled() -> bool:
     if bool(get_auth_password()):
         return True
     try:
-        if system_db.has_users_with_passwords():
+        if system_db.has_users_with_passwords(db_path):
+            return True
+        if system_db.count_active_users(db_path) > 1:
             return True
     except Exception:
         pass

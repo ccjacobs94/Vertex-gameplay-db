@@ -112,30 +112,76 @@ class TestSecurityCriticalAndHigh(unittest.TestCase):
             self.assertFalse(system_db.has_users_with_passwords(self.sys_db_path))
             self.assertFalse(web_auth.is_web_auth_enabled())
 
+            bootstrap_admin = web_auth.get_auth_username()
             # Users created with placeholder passwords (managed_by_web_auth) do NOT activate auth
-            system_db.ensure_user("placeholder_user", db_path=self.sys_db_path)
+            # Even with surrounding whitespace or uppercase
+            system_db.ensure_bootstrap_admin(bootstrap_admin, db_path=self.sys_db_path)
+            with system_db.get_system_connection(self.sys_db_path) as conn:
+                conn.execute(
+                    "UPDATE users SET password_hash = '  MANAGED_BY_WEB_AUTH  ' WHERE username = ?",
+                    (bootstrap_admin,),
+                )
             self.assertFalse(system_db.has_users_with_passwords(self.sys_db_path))
             self.assertFalse(web_auth.is_web_auth_enabled())
 
-            # Creating a user with a real hashed password activates auth automatically
-            system_db.create_user("gamer_user", "Password123!", db_path=self.sys_db_path)
+            # Initial bootstrap account endpoint access is permitted when auth is not yet enabled
+            acc_res = client.get("/api/account")
+            self.assertEqual(acc_res.status_code, 200)
+            self.assertEqual(acc_res.json()["username"], bootstrap_admin)
+
+            # Bootstrap admin can establish their initial password via /api/account/password
+            pw_res = client.post(
+                "/api/account/password",
+                json={"current_password": "init", "new_password": "AdminPassword123!"},
+            )
+            self.assertEqual(pw_res.status_code, 200)
+
+            # Creating a user password activates auth automatically
             self.assertTrue(system_db.has_users_with_passwords(self.sys_db_path))
             self.assertTrue(web_auth.is_web_auth_enabled())
 
-            # Unauthenticated request to /api/stats must return 401 Unauthorized
-            res = client.get("/api/stats")
+            # A new unauthenticated client to /api/stats and /api/account must now return 401 Unauthorized
+            unauthed_client = TestClient(app.app)
+            res = unauthed_client.get("/api/stats")
             self.assertEqual(res.status_code, 401)
             self.assertEqual(res.json().get("error"), "unauthorized")
 
+            acc_unauthed = unauthed_client.get("/api/account")
+            self.assertEqual(acc_unauthed.status_code, 401)
+
             # Healthcheck remains public and returns 200 OK
-            health_res = client.get("/healthz")
+            health_res = unauthed_client.get("/healthz")
             self.assertEqual(health_res.status_code, 200)
 
             # Authenticated session succeeds
-            sess = web_auth.create_web_session("gamer_user")
-            client.cookies.set(web_auth.SESSION_COOKIE_NAME, sess)
-            authed_res = client.get("/api/stats")
+            sess = web_auth.create_web_session(bootstrap_admin)
+            unauthed_client.cookies.set(web_auth.SESSION_COOKIE_NAME, sess)
+            authed_res = unauthed_client.get("/api/stats")
             self.assertEqual(authed_res.status_code, 200)
+
+            # After password is set, attempting to change password with incorrect old password fails
+            wrong_pw_res = unauthed_client.post(
+                "/api/account/password",
+                json={"current_password": "wrong_password", "new_password": "AnotherPassword456!"},
+            )
+            self.assertEqual(wrong_pw_res.status_code, 400)
+
+            # Changing with correct old password succeeds
+            correct_pw_res = unauthed_client.post(
+                "/api/account/password",
+                json={"current_password": "AdminPassword123!", "new_password": "AnotherPassword456!"},
+            )
+            self.assertEqual(correct_pw_res.status_code, 200)
+
+    def test_auth_enabled_in_multiuser_mode_without_env_password(self):
+        with mock.patch.dict(os.environ, {"VERTEX_PASSWORD": "", "VERTEX_REQUIRE_AUTH": "true"}):
+            # Two placeholder users without passwords
+            system_db.ensure_user("user_a", db_path=self.sys_db_path)
+            self.assertFalse(web_auth.is_web_auth_enabled(self.sys_db_path))
+
+            system_db.ensure_user("user_b", db_path=self.sys_db_path)
+            # In multi-user mode (count_active_users > 1), auth is enabled to protect user data
+            self.assertTrue(web_auth.is_web_auth_enabled(self.sys_db_path))
 
     def test_auth_respects_explicit_require_auth_false(self):
         system_db.create_user("user_pass", "Password123!", db_path=self.sys_db_path)

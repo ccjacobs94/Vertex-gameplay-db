@@ -575,7 +575,7 @@ def has_users_with_passwords(db_path: Optional[str] = None) -> bool:
                 SELECT 1 FROM users
                 WHERE password_hash IS NOT NULL
                   AND TRIM(password_hash) != ''
-                  AND password_hash != 'managed_by_web_auth'
+                  AND LOWER(TRIM(password_hash)) != 'managed_by_web_auth'
                 LIMIT 1
                 """
             ).fetchone()
