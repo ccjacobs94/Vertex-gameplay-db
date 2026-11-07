@@ -83,9 +83,9 @@ class TestUIBrandAssets(unittest.TestCase):
         with open(app_js_path, "r", encoding="utf-8") as f:
             app_js = f.read()
 
-        # Cache buster must be bumped to v=36 and sw to v36
-        self.assertIn('href="/static/styles.css?v=36"', index_html)
-        self.assertIn('src="/static/app.js?v=36"', index_html)
+        # Cache buster must be bumped to v=37 and sw to v37
+        self.assertIn('href="/static/styles.css?v=37"', index_html)
+        self.assertIn('src="/static/app.js?v=37"', index_html)
         self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[1-9]|[4-9]\d+)";')
 
         # Settings dialog markup and buttons
@@ -263,9 +263,9 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.deleteWishlistItem = deleteWishlistItem;", app_js)
         self.assertIn("window.selectCandidateForConfig = selectCandidateForConfig;", app_js)
 
-        # 5. Cache buster must be bumped to v=36 and sw to v36
-        self.assertIn('href="/static/styles.css?v=36"', index_html)
-        self.assertIn('src="/static/app.js?v=36"', index_html)
+        # 5. Cache buster must be bumped to v=37 and sw to v37
+        self.assertIn('href="/static/styles.css?v=37"', index_html)
+        self.assertIn('src="/static/app.js?v=37"', index_html)
         self.assertRegex(sw_js, r'const CACHE_NAME = "vertex-pwa-v(3[1-9]|[4-9]\d+)";')
 
         # 6. Abridged platform summary (lowest price per platform) with 1-click expandable detailed store view & brand SVG logos
@@ -325,37 +325,58 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn("window.disconnectXboxAccount = disconnectXboxAccount;", app_js)
         self.assertIn('fetch("/api/sync?platform=xbox"', app_js)
 
-    def test_cover_wrapper_css_syntax_and_image_fitting(self):
+    def test_original_color_palette_restored(self):
         """
-        Regression test (2026-11-06): Guard against dangling CSS syntax or unclosed braces
-        around .cover-wrapper that break CSS parser handling of .cover-wrapper img, and
-        ensure artwork is properly centered and fitted in both normal (cover) and ambient (contain) modes.
+        Verify that the rich, original slate-navy palette with vibrant blue accents
+        is restored (not stark monochrome black and white).
         """
         styles_path = os.path.join(self.static_dir, "styles.css")
         with open(styles_path, "r", encoding="utf-8") as f:
             styles_css = f.read()
 
-        # 1. No stray orphan declaration tokens or doubled closing braces between .cover-wrapper and .cover-wrapper img
-        self.assertNotIn("}\n  overflow: clip;\n  flex-shrink: 0;\n}", styles_css)
-        self.assertNotIn("}\noverflow: clip;\nflex-shrink: 0;\n}", styles_css)
+        # Core root palette
+        self.assertIn("--bg-page: #0b0f19;", styles_css)
+        self.assertIn("--bg-surface: #131b2e;", styles_css)
+        self.assertIn("--bg-card: #172036;", styles_css)
+        self.assertIn("--bg-input: #0f1626;", styles_css)
+        self.assertIn("--border-subtle: #26334d;", styles_css)
+        self.assertIn("--text-primary: #f1f5f9;", styles_css)
+        self.assertIn("--text-secondary: #94a3b8;", styles_css)
+        self.assertIn("--accent-primary: #3b82f6;", styles_css)
+        self.assertIn("--accent-hover: #2563eb;", styles_css)
 
-        # 2. .cover-wrapper must define flex centering and 2:3 aspect ratio
+        # Primary button is blue accent with white text, not monochrome black/white
         self.assertRegex(
             styles_css,
-            r"\.cover-wrapper\s*\{[^}]*aspect-ratio:\s*2\s*/\s*3;[^}]*display:\s*flex;[^}]*align-items:\s*center;[^}]*justify-content:\s*center;",
+            r"\.btn-primary\s*\{[^}]*background-color:\s*var\(--accent-primary\);[^}]*color:\s*#ffffff;",
         )
 
-        # 3. .cover-wrapper img must specify object-fit: cover and object-position: center
+    def test_cover_thumbnail_full_bleed_sizing(self):
+        """
+        Verify that game cover thumbnails fill the 2:3 poster frame edge-to-edge
+        with object-fit: cover, eliminating the letterboxed 'box on incorrect fit' blur mode.
+        """
+        styles_path = os.path.join(self.static_dir, "styles.css")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+
+        # .cover-wrapper must define 2:3 aspect ratio and overflow clip
         self.assertRegex(
             styles_css,
-            r"\.cover-wrapper\s+img\s*\{[^}]*object-fit:\s*cover;[^}]*object-position:\s*center;",
+            r"\.cover-wrapper\s*\{[^}]*aspect-ratio:\s*2\s*/\s*3;[^}]*overflow:\s*clip;",
         )
 
-        # 4. .cover-wrapper.cover-ambient img must specify object-fit: contain and object-position: center
+        # .cover-wrapper img must cleanly fill the card with object-fit: cover
         self.assertRegex(
             styles_css,
-            r"\.cover-wrapper\.cover-ambient\s+img\s*\{[^}]*object-fit:\s*contain;[^}]*object-position:\s*center;",
+            r"\.cover-wrapper\s+img\s*\{[^}]*inline-size:\s*100%;[^}]*block-size:\s*100%;[^}]*object-fit:\s*cover;",
         )
+
+        # Ambient backdrop contain mode ("box on incorrect fit") must not be added in app.js
+        self.assertNotIn('wrapper.classList.add("cover-ambient")', app_js)
 
 
 if __name__ == "__main__":
