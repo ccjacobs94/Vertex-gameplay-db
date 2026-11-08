@@ -467,7 +467,7 @@ def render_billing_page(
 <body>
   <div class="billing-card">
     <div class="header">
-      <img src="/static/vertex_logo.svg" alt="Vertex" width="48" height="48">
+      <img src="/static/vertex_logo.png" alt="Vertex" width="48" height="48">
       <div>
         <h1>Subscription & Billing</h1>
         <p>Vertex Hosted Edition</p>
