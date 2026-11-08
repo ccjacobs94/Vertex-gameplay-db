@@ -76,7 +76,7 @@ def render_signup_page(
 </head>
 <body>
   <div class="card">
-    <img src="/static/vertex_logo.svg" alt="Vertex" width="56" height="56" style="margin-bottom: 1rem;">
+    <img src="/static/vertex_logo.png" alt="Vertex" width="56" height="56" style="margin-bottom: 1rem;">
     <h1>Registration Closed</h1>
     <p>Public account registration is currently disabled on this instance. Please contact the administrator for access.</p>
     <a href="/login">&larr; Return to Sign In</a>
@@ -206,7 +206,7 @@ def render_signup_page(
 <body>
   <main class="signup-card">
     <div class="brand-header">
-      <img src="/static/vertex_logo.svg" alt="Vertex Logo" class="brand-logo" width="54" height="54">
+      <img src="/static/vertex_logo.png" alt="Vertex Logo" class="brand-logo" width="54" height="54">
       <h1>Create Account</h1>
       <p>Set up your unified gaming library on Vertex</p>
     </div>

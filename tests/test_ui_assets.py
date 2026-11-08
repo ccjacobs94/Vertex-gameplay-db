@@ -405,6 +405,53 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn('linkedCovers', app_js)
         self.assertIn('ratio > 0.72', app_js)
 
+    def test_vertex_logo_and_pwa_icons(self):
+        """
+        Verify that the geometric Vertex logo PNG, SVG, and PWA icons exist,
+        are valid image files with correct dimensions and headers, and are cached
+        in the service worker.
+        """
+        logo_png = os.path.join(self.static_dir, "vertex_logo.png")
+        logo_svg = os.path.join(self.static_dir, "vertex_logo.svg")
+        icon_512 = os.path.join(self.icons_dir, "icon-512.png")
+        icon_192 = os.path.join(self.icons_dir, "icon-192.png")
+        apple_icon = os.path.join(self.icons_dir, "apple-touch-icon.png")
+        maskable_512 = os.path.join(self.icons_dir, "icon-maskable-512.png")
+        sw_path = os.path.join(self.static_dir, "sw.js")
+        index_path = os.path.join(self.static_dir, "index.html")
+
+        # PNG magic header: \x89PNG\r\n\x1a\n
+        png_magic = b"\x89PNG\r\n\x1a\n"
+        for p, name in [
+            (logo_png, "vertex_logo.png"),
+            (icon_512, "icon-512.png"),
+            (icon_192, "icon-192.png"),
+            (apple_icon, "apple-touch-icon.png"),
+            (maskable_512, "icon-maskable-512.png"),
+        ]:
+            self.assertTrue(os.path.isfile(p), f"Missing {name}")
+            with open(p, "rb") as f:
+                header = f.read(8)
+            self.assertEqual(header, png_magic, f"{name} is not a valid PNG")
+
+        # SVG validity
+        self.assertTrue(os.path.isfile(logo_svg), "Missing vertex_logo.svg")
+        tree = ET.parse(logo_svg)
+        root = tree.getroot()
+        self.assertTrue(root.tag.endswith("svg"))
+
+        # Service worker caches vertex_logo.png and vertex_logo.svg
+        with open(sw_path, "r", encoding="utf-8") as f:
+            sw_js = f.read()
+        self.assertIn('"/static/vertex_logo.png"', sw_js)
+        self.assertIn('"/static/vertex_logo.svg"', sw_js)
+
+        # Index HTML references vertex_logo.png in brand logo
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+        self.assertIn('src="/static/vertex_logo.png?v=', index_html)
+        self.assertIn('class="brand-logo"', index_html)
+
 
 if __name__ == "__main__":
     unittest.main()
