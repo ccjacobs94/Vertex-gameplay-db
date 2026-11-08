@@ -433,7 +433,7 @@ def render_login_page(next_url: str = "/", error_msg: str = "", default_username
 <body>
   <main class="login-card">
     <div class="brand-header">
-      <img src="/static/vertex_logo.svg" alt="Vertex Logo" class="brand-logo" width="60" height="60">
+      <img src="/static/vertex_logo.png" alt="Vertex Logo" class="brand-logo" width="60" height="60">
       <h1>Vertex</h1>
       <p>Sign in to access your unified gaming universe</p>
     </div>
