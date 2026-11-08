@@ -5,6 +5,7 @@ and the shared cross-user game catalog metadata cache.
 """
 
 import hashlib
+import logging
 import os
 import re
 import base64
@@ -20,6 +21,8 @@ from cryptography.fernet import Fernet, MultiFernet
 
 import passwords
 
+logger = logging.getLogger("gamehub.system_db")
+
 DEFAULT_SYSTEM_DB_PATH = (
     os.environ.get("VERTEX_SYSTEM_DB_PATH")
     or os.environ.get("SYSTEM_DB_PATH")
@@ -27,21 +30,44 @@ DEFAULT_SYSTEM_DB_PATH = (
 )
 
 
+def _fernet_from_secret(secret: str) -> Fernet:
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest()))
+
+
+# Legacy key kept ONLY so rows written before GAMEHUB_SECRET_KEY was configured can
+# still be decrypted (and rotated to the primary key by migrate_secrets_at_rest()).
+_LEGACY_FALLBACK_SECRET = "gamehub-envelope-key-fallback"
+
+
+def _get_primary_fernet() -> Optional[Fernet]:
+    sec = os.environ.get("GAMEHUB_SECRET_KEY", "").strip()
+    return _fernet_from_secret(sec) if sec else None
+
+
 def _get_encryption_cipher() -> MultiFernet:
+    # MultiFernet encrypts with the first key and decrypts with any of them.
     keys = []
     sec = os.environ.get("GAMEHUB_SECRET_KEY", "").strip()
     if sec:
-        k = base64.urlsafe_b64encode(hashlib.sha256(sec.encode("utf-8")).digest())
-        keys.append(Fernet(k))
+        keys.append(_fernet_from_secret(sec))
     pw = os.environ.get("VERTEX_PASSWORD", "").strip()
     if pw and pw != sec:
-        k = base64.urlsafe_b64encode(hashlib.sha256(pw.encode("utf-8")).digest())
-        keys.append(Fernet(k))
-    fallback = "gamehub-envelope-key-fallback"
+        keys.append(_fernet_from_secret(pw))
+    fallback = _LEGACY_FALLBACK_SECRET
     if fallback != sec and fallback != pw:
-        k = base64.urlsafe_b64encode(hashlib.sha256(fallback.encode("utf-8")).digest())
-        keys.append(Fernet(k))
+        keys.append(_fernet_from_secret(fallback))
     return MultiFernet(keys)
+
+
+def warn_if_secret_key_missing() -> bool:
+    """Log a CRITICAL warning when GAMEHUB_SECRET_KEY is unset. Returns True if configured."""
+    if os.environ.get("GAMEHUB_SECRET_KEY", "").strip():
+        return True
+    logger.critical(
+        "GAMEHUB_SECRET_KEY is not set: platform credentials are encrypted with a legacy/"
+        "derived key. Set a strong GAMEHUB_SECRET_KEY in .env and restart to re-encrypt them."
+    )
+    return False
 
 
 def encrypt_credential(value: Optional[str]) -> str:
@@ -63,6 +89,62 @@ def decrypt_credential(value: Optional[str]) -> str:
         return cipher.decrypt(value.encode("ascii")).decode("utf-8")
     except Exception:
         return ""
+
+
+ENCRYPTED_INSTANCE_SETTINGS = ("vapid_private_key",)
+
+
+def _reencrypt_to_primary(value: str, primary: Fernet, cipher: MultiFernet) -> Optional[str]:
+    """Return value re-encrypted under the primary key, or None if no change is needed/possible."""
+    if not value:
+        return None
+    if not value.startswith("gAAAAA"):
+        return primary.encrypt(value.encode("utf-8")).decode("ascii")
+    try:
+        primary.decrypt(value.encode("ascii"))
+        return None  # already under the primary key
+    except Exception:
+        pass
+    try:
+        return cipher.rotate(value.encode("ascii")).decode("ascii")
+    except Exception:
+        return None  # undecryptable with any known key: leave untouched
+
+
+def migrate_secrets_at_rest(db_path: Optional[str] = None) -> int:
+    """Idempotent startup migration: re-encrypt user_connections credentials and
+    encrypted instance settings under GAMEHUB_SECRET_KEY. No-op when it is unset.
+    Returns the number of values rewritten. Never logs secret values."""
+    primary = _get_primary_fernet()
+    if primary is None:
+        return 0
+    cipher = _get_encryption_cipher()
+    target = db_path or DEFAULT_SYSTEM_DB_PATH
+    changed = 0
+    with get_system_connection(target) as conn:
+        rows = conn.execute(
+            "SELECT user_id, xbl_api_key_encrypted, psn_npsso_encrypted FROM user_connections"
+        ).fetchall()
+        for r in rows:
+            for col in ("xbl_api_key_encrypted", "psn_npsso_encrypted"):
+                new_val = _reencrypt_to_primary(str(r[col] or ""), primary, cipher)
+                if new_val is not None:
+                    conn.execute(
+                        f"UPDATE user_connections SET {col} = ? WHERE user_id = ?",
+                        (new_val, r["user_id"]),
+                    )
+                    changed += 1
+        for key in ENCRYPTED_INSTANCE_SETTINGS:
+            row = conn.execute("SELECT value FROM instance_settings WHERE key = ?", (key,)).fetchone()
+            if not row:
+                continue
+            new_val = _reencrypt_to_primary(str(row["value"] or ""), primary, cipher)
+            if new_val is not None:
+                conn.execute("UPDATE instance_settings SET value = ? WHERE key = ?", (new_val, key))
+                changed += 1
+    if changed:
+        logger.info("Re-encrypted %d secret value(s) under GAMEHUB_SECRET_KEY", changed)
+    return changed
 
 
 

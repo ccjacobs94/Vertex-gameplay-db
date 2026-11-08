@@ -34,7 +34,11 @@ def get_or_create_vapid_keys(db_path: Optional[str] = None) -> Dict[str, str]:
     stored_pub = system_db.get_setting("vapid_public_key", db_path=db_path)
     stored_priv = system_db.get_setting("vapid_private_key", db_path=db_path)
     if stored_pub and stored_priv:
-        return {"public_key": stored_pub, "private_key": stored_priv}
+        # Private key is Fernet-encrypted at rest; legacy plaintext values pass through unchanged
+        priv = system_db.decrypt_credential(stored_priv)
+        if priv:
+            return {"public_key": stored_pub, "private_key": priv}
+        logger.error("Stored VAPID private key could not be decrypted; generating a new keypair.")
 
     # Auto-generate standard P-256 keypair
     private_key = ec.generate_private_key(ec.SECP256R1())
@@ -49,7 +53,7 @@ def get_or_create_vapid_keys(db_path: Optional[str] = None) -> Dict[str, str]:
     priv_b64 = base64.urlsafe_b64encode(priv_bytes).rstrip(b"=").decode("ascii")
 
     system_db.set_setting("vapid_public_key", pub_b64, db_path=db_path)
-    system_db.set_setting("vapid_private_key", priv_b64, db_path=db_path)
+    system_db.set_setting("vapid_private_key", system_db.encrypt_credential(priv_b64), db_path=db_path)
     logger.info("Generated new VAPID P-256 keypair and saved to instance settings.")
     return {"public_key": pub_b64, "private_key": priv_b64}
 
