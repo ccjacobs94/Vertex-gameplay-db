@@ -3740,6 +3740,11 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   flex-direction: column;
   gap: 1.5rem;
   animation: habitsFadeIn 0.25s ease-out;
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  inline-size: 100%;
+  overflow-x: clip;
+  box-sizing: border-box;
 }
 
 @keyframes habitsFadeIn {
@@ -3796,8 +3801,10 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 /* Habits KPI Pulse Strip */
 .habits-pulse-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 1rem;
+  min-inline-size: 0;
+  inline-size: 100%;
 }
 
 .habits-kpi-card {
@@ -3812,6 +3819,8 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   transition: transform 0.2s ease, border-color 0.2s ease;
   position: relative;
   overflow: hidden;
+  min-inline-size: 0;
+  box-sizing: border-box;
 }
 
 .habits-kpi-card::before {
@@ -3853,8 +3862,10 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 /* Main Habits Grid */
 .habits-main-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
   gap: 1.5rem;
+  min-inline-size: 0;
+  inline-size: 100%;
 }
 
 .habits-full-width {
@@ -3868,6 +3879,13 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   padding: 1.35rem;
   display: flex;
   flex-direction: column;
+  gap: 1.1rem;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
   gap: 1.1rem;
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
 }
@@ -3922,6 +3940,9 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   gap: 0.65rem;
   cursor: pointer;
   transition: all 0.2s ease;
+  min-inline-size: 0;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
 .system-row-card:hover {
@@ -3941,12 +3962,15 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   align-items: center;
   flex-wrap: wrap;
   gap: 0.5rem;
+  min-inline-size: 0;
 }
 
 .system-title-group {
   display: flex;
   align-items: center;
   gap: 0.6rem;
+  min-inline-size: 0;
+  flex-wrap: wrap;
 }
 
 .system-pill-badge {
@@ -3959,6 +3983,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
+  flex-shrink: 0;
 }
 
 .system-pill-steam { background-color: #171d25; border: 1px solid #2a475e; color: #c7d5e0; }
@@ -3985,6 +4010,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+  min-inline-size: 0;
 }
 
 .meter-track {
@@ -3993,6 +4019,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   background-color: rgba(255, 255, 255, 0.07);
   overflow: hidden;
   position: relative;
+  min-inline-size: 0;
 }
 
 .meter-fill {
@@ -4015,8 +4042,12 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 .meter-labels-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
   font-size: 0.72rem;
   color: var(--text-secondary);
+  min-inline-size: 0;
 }
 
 .system-top-game-snippet {
@@ -4027,6 +4058,16 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   border-block-start: 1px dashed rgba(255, 255, 255, 0.06);
   font-size: 0.78rem;
   color: var(--text-secondary);
+  min-inline-size: 0;
+  overflow: hidden;
+}
+
+.system-top-game-snippet span {
+  min-inline-size: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .system-top-game-img {
@@ -4365,14 +4406,18 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   flex-direction: column;
   gap: 3px;
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-inline-size: 100%;
   padding-block-end: 0.5rem;
+  scrollbar-width: thin;
 }
 
 .circadian-header-row {
   display: grid;
-  grid-template-columns: 36px repeat(24, minmax(18px, 1fr));
+  grid-template-columns: 36px repeat(24, 18px);
   gap: 3px;
   margin-block-end: 2px;
+  min-inline-size: 510px;
 }
 
 .circadian-day-col-hdr {
@@ -4388,9 +4433,10 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 
 .circadian-day-row {
   display: grid;
-  grid-template-columns: 36px repeat(24, minmax(18px, 1fr));
+  grid-template-columns: 36px repeat(24, 18px);
   gap: 3px;
   align-items: center;
+  min-inline-size: 510px;
 }
 
 .circadian-day-label {
@@ -4650,7 +4696,8 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-inline-size: 160px;
+  min-inline-size: 0;
+  flex: 1 1 auto;
 }
 
 .rot-game-hours {
@@ -4741,7 +4788,8 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-inline-size: 150px;
+  min-inline-size: 0;
+  flex: 1 1 auto;
 }
 
 .contrarian-delta-pill {
@@ -4887,15 +4935,20 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 
 .matrix-svg-wrap {
   inline-size: 100%;
+  max-inline-size: 100%;
   block-size: 320px;
   background: rgba(0, 0, 0, 0.25);
   border-radius: var(--radius-md);
   position: relative;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
 }
 
 .genre-matrix-svg {
   inline-size: 100%;
+  min-inline-size: 540px;
   block-size: 100%;
   display: block;
 }
@@ -5132,13 +5185,120 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   }
 
   .habits-pulse-grid {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0.65rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .habits-kpi-card {
+    padding: 0.8rem 0.65rem;
+    min-inline-size: 0;
+  }
+
+  .habits-kpi-label {
+    font-size: 0.68rem;
+    letter-spacing: 0.03em;
+  }
+
+  .habits-kpi-value {
+    font-size: clamp(1.15rem, 4.2vw, 1.4rem);
+  }
+
+  .habits-kpi-sub {
+    font-size: 0.7rem;
+    line-height: 1.25;
+    word-break: break-word;
   }
 
   .habits-main-grid {
-    grid-template-columns: 1fr;
-    gap: 1rem;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.95rem;
+    min-inline-size: 0;
+    inline-size: 100%;
+    max-inline-size: 100%;
+  }
+
+  .habits-panel {
+    padding: 1rem 0.85rem;
+    border-radius: var(--radius-md);
+    gap: 0.85rem;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.45rem;
+  }
+
+  .panel-header .badge-subtle,
+  .panel-header .circadian-badges,
+  .panel-header .matrix-legend-pills {
+    align-self: flex-start;
+  }
+
+  .circadian-badges {
+    gap: 0.35rem;
+  }
+
+  .circadian-time-buckets {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .circadian-bucket-card {
+    padding: 0.5rem 0.65rem;
+  }
+
+  .rot-score-layout {
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  .rot-score-badge-card {
+    flex: 0 0 auto;
+    inline-size: 100%;
+    padding: 0.85rem;
+  }
+
+  .contrarian-columns-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.85rem;
+  }
+
+  .dna-tags-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.55rem;
+  }
+
+  .sub-roi-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+
+  .cross-kpi-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .trophy-pyramid-layout {
+    gap: 0.55rem;
+  }
+
+  .pyramid-tier-hdr {
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .pyramid-tier {
+    padding: 0.65rem 0.85rem;
+  }
+
+  .system-row-card {
+    padding: 0.85rem;
+    min-inline-size: 0;
   }
 
   .status-donut-layout {
@@ -5147,8 +5307,41 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   }
 
   .hof-games-row {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.65rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .habits-pulse-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .habits-kpi-card {
+    padding: 0.65rem 0.55rem;
+  }
+
+  .habits-kpi-label {
+    font-size: 0.64rem;
+  }
+
+  .habits-kpi-value {
+    font-size: 1.15rem;
+  }
+
+  .circadian-time-buckets {
+    grid-template-columns: 1fr;
+  }
+
+  .cross-kpi-pair {
+    grid-template-columns: 1fr;
+    gap: 0.5rem;
+  }
+
+  .dna-bars-dual {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
   }
 }
 
