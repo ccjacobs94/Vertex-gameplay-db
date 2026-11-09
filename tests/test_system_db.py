@@ -128,6 +128,35 @@ class TestSystemDatabase(unittest.TestCase):
             self.assertIsNotNone(cache)
             self.assertEqual(cache["steam_appid"], "620")
 
+    def test_user_timezone_settings(self):
+        with system_db.get_system_connection(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO users (id, username, email, password_hash, created_at)
+                VALUES ('u_tz', 'texan', 'texan@example.com', 'hash999', '2026-11-01T00:00:00Z')
+                """
+            )
+        # Default should be auto and empty eras
+        defaults = system_db.get_user_timezone_settings("u_tz", db_path=self.db_path)
+        self.assertEqual(defaults["timezone"], "auto")
+        self.assertEqual(defaults["timezone_eras"], [])
+
+        # Update timezone and eras
+        updated = system_db.update_user_timezone_settings(
+            "u_tz",
+            tz_name="America/Chicago",
+            timezone_eras=[{"timezone": "America/New_York", "until": "2017-09-01"}],
+            db_path=self.db_path,
+        )
+        self.assertEqual(updated["timezone"], "America/Chicago")
+        self.assertEqual(len(updated["timezone_eras"]), 1)
+        self.assertEqual(updated["timezone_eras"][0]["timezone"], "America/New_York")
+
+        # Re-fetch
+        fetched = system_db.get_user_timezone_settings("u_tz", db_path=self.db_path)
+        self.assertEqual(fetched["timezone"], "America/Chicago")
+        self.assertEqual(len(fetched["timezone_eras"]), 1)
+
     def test_foreign_key_cascade_on_user_delete(self):
         with system_db.get_system_connection(self.db_path) as conn:
             conn.execute(

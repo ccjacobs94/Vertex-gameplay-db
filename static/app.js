@@ -408,6 +408,10 @@ async function fetchHabitsAnalytics() {
   if (state.genre) params.set("genre", state.genre);
   if (state.tag) params.set("tag", state.tag);
   if (state.favoriteOnly) params.set("favorite_only", "true");
+  try {
+    const clientTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (clientTz) params.set("client_timezone", clientTz);
+  } catch (_) {}
 
   try {
     const res = await fetch(`/api/analytics?${params.toString()}`);
@@ -855,6 +859,12 @@ function renderHabitsDashboard(data) {
     if (archPill) archPill.textContent = cr.archetype || "Flexible Gamer";
     const peakPill = document.getElementById("circadian-peak-pill");
     if (peakPill) peakPill.textContent = `Peak: ${cr.peak_day || "—"} at ${cr.peak_hour || "—"}`;
+    const tzPill = document.getElementById("circadian-tz-pill");
+    if (tzPill) {
+      const tzName = cr.timezone || "Local Time";
+      const eraNote = cr.eras_count > 0 ? ` (${cr.eras_count} era${cr.eras_count > 1 ? "s" : ""})` : "";
+      tzPill.textContent = `📍 ${tzName}${eraNote}`;
+    }
 
     const maxVal = Math.max(cr.max_count || 0, 1);
     const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -3631,8 +3641,159 @@ async function loadAccountInfo() {
     if (adminTab) {
       adminTab.hidden = data.role !== "admin";
     }
+
+    // Timezone & Regional History
+    const tzSelect = document.getElementById("select-user-timezone");
+    const detectedTzSpan = document.getElementById("detected-tz-name");
+    const detectedBadge = document.getElementById("tz-current-detected-badge");
+    const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+    if (detectedTzSpan) detectedTzSpan.textContent = detectedTz;
+    if (tzSelect) {
+      tzSelect.value = data.timezone || "auto";
+    }
+    if (detectedBadge) {
+      const activeTz = (data.timezone && data.timezone !== "auto") ? data.timezone : `Auto (${detectedTz})`;
+      detectedBadge.textContent = activeTz;
+    }
+
+    renderTimezoneEras(data.timezone_eras || []);
   } catch (err) {
     console.error("Failed to load account info:", err);
+  }
+}
+
+const COMMON_TIMEZONES = [
+  { value: "America/New_York", label: "America/New_York (US Eastern Time)" },
+  { value: "America/Chicago", label: "America/Chicago (US Central Time)" },
+  { value: "America/Denver", label: "America/Denver (US Mountain Time)" },
+  { value: "America/Los_Angeles", label: "America/Los_Angeles (US Pacific Time)" },
+  { value: "America/Anchorage", label: "America/Anchorage (Alaska Time)" },
+  { value: "Pacific/Honolulu", label: "Pacific/Honolulu (Hawaii Time)" },
+  { value: "Europe/London", label: "Europe/London (GMT / BST)" },
+  { value: "Europe/Paris", label: "Europe/Paris (CET / CEST)" },
+  { value: "Asia/Tokyo", label: "Asia/Tokyo (JST)" },
+  { value: "Australia/Sydney", label: "Australia/Sydney (AEST)" },
+  { value: "UTC", label: "UTC (Universal Time)" },
+];
+
+function renderTimezoneEras(eras) {
+  const container = document.getElementById("tz-eras-list");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!eras || eras.length === 0) {
+    container.innerHTML = `<p class="empty-state" style="margin: 0.25rem 0; font-size: 0.78rem; color: var(--text-muted); font-style: italic;">No previous timezone eras added. All past activity will use your current/detected timezone.</p>`;
+    return;
+  }
+  eras.forEach((era, idx) => {
+    addTimezoneEraRow(era, idx);
+  });
+}
+
+function addTimezoneEraRow(initialData = {}) {
+  const container = document.getElementById("tz-eras-list");
+  if (!container) return;
+  const emptyState = container.querySelector(".empty-state");
+  if (emptyState) emptyState.remove();
+
+  const row = document.createElement("div");
+  row.className = "tz-era-item";
+  row.style.cssText = "background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 0.65rem 0.75rem; display: flex; flex-direction: column; gap: 0.4rem;";
+
+  const currentTz = initialData.timezone || "America/New_York";
+  const currentUntil = initialData.until ? String(initialData.until).slice(0, 10) : "";
+  const currentLabel = initialData.label || "";
+
+  const optionsHtml = COMMON_TIMEZONES.map(t =>
+    `<option value="${t.value}" ${t.value === currentTz ? "selected" : ""}>${t.label}</option>`
+  ).join("");
+
+  row.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <input type="text" class="tz-era-label" placeholder="Era name (e.g. East Coast Era)" value="${escapeHtml(currentLabel)}" style="flex: 1; max-width: 240px; background: transparent; border: none; border-bottom: 1px dashed var(--border-subtle); color: var(--text-primary); font-size: 0.8rem; padding: 2px 0;" />
+      <button type="button" class="btn-icon tz-era-remove-btn" title="Remove era" style="color: var(--text-muted); font-size: 0.9rem; padding: 2px 6px;">✕</button>
+    </div>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+      <div style="flex: 1; min-width: 180px;">
+        <label style="font-size: 0.72rem; color: var(--text-muted); display: block;">Timezone</label>
+        <select class="tz-era-select" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-primary); border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.78rem;">
+          ${optionsHtml}
+        </select>
+      </div>
+      <div style="flex: 1; min-width: 140px;">
+        <label style="font-size: 0.72rem; color: var(--text-muted); display: block;">Active Until (Move Date)</label>
+        <input type="date" class="tz-era-until" value="${escapeHtml(currentUntil)}" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-primary); border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.78rem;" />
+      </div>
+    </div>
+  `;
+
+  row.querySelector(".tz-era-remove-btn").addEventListener("click", () => {
+    row.remove();
+    if (container.querySelectorAll(".tz-era-item").length === 0) {
+      container.innerHTML = `<p class="empty-state" style="margin: 0.25rem 0; font-size: 0.78rem; color: var(--text-muted); font-style: italic;">No previous timezone eras added. All past activity will use your current/detected timezone.</p>`;
+    }
+  });
+
+  container.appendChild(row);
+}
+
+async function saveTimezonePreferences() {
+  const tzSelect = document.getElementById("select-user-timezone");
+  const msgEl = document.getElementById("timezone-status-msg");
+  const container = document.getElementById("tz-eras-list");
+  if (!tzSelect || !msgEl) return;
+
+  msgEl.className = "connections-status-msg";
+  msgEl.textContent = "Saving...";
+
+  const selectedTz = tzSelect.value || "auto";
+  const eraRows = container ? container.querySelectorAll(".tz-era-item") : [];
+  const eras = [];
+
+  for (const r of eraRows) {
+    const sel = r.querySelector(".tz-era-select");
+    const until = r.querySelector(".tz-era-until");
+    const lbl = r.querySelector(".tz-era-label");
+    if (sel && until && until.value) {
+      eras.push({
+        timezone: sel.value,
+        until: until.value,
+        label: lbl ? lbl.value.trim() : "",
+      });
+    }
+  }
+
+  try {
+    const res = await fetch("/api/account/timezone", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        timezone: selectedTz,
+        timezone_eras: eras,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      msgEl.className = "connections-status-msg success";
+      msgEl.textContent = "Timezone preferences saved!";
+      const detectedBadge = document.getElementById("tz-current-detected-badge");
+      if (detectedBadge) {
+        const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+        detectedBadge.textContent = selectedTz !== "auto" ? selectedTz : `Auto (${detectedTz})`;
+      }
+      setTimeout(() => {
+        if (msgEl.textContent === "Timezone preferences saved!") msgEl.textContent = "";
+      }, 4000);
+
+      // Immediately refresh habits analytics
+      loadHabitsAnalytics();
+    } else {
+      msgEl.className = "connections-status-msg error";
+      msgEl.textContent = data.detail || "Failed to update timezone settings.";
+    }
+  } catch (err) {
+    msgEl.className = "connections-status-msg error";
+    msgEl.textContent = `Error: ${err.message}`;
   }
 }
 
@@ -6833,6 +6994,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const btnSubmitPw = document.getElementById("btn-submit-change-password");
   if (btnSubmitPw) btnSubmitPw.addEventListener("click", saveAccountPassword);
+
+  const btnSaveTz = document.getElementById("btn-save-timezone");
+  if (btnSaveTz) btnSaveTz.addEventListener("click", saveTimezonePreferences);
+
+  const btnAddEra = document.getElementById("btn-add-tz-era");
+  if (btnAddEra) btnAddEra.addEventListener("click", () => addTimezoneEraRow());
 
   const btnToggleCreateUser = document.getElementById("btn-toggle-create-user");
   const adminCreateCard = document.getElementById("admin-create-user-card");
