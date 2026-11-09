@@ -1255,28 +1255,23 @@ function renderGames() {
     attachCoverAspectObserver(wrapper, img, fallbackSrc, imgSrc, linkedCovers);
     wrapper.appendChild(img);
 
+    if (game.favorite) {
+      const favSpan = document.createElement("span");
+      favSpan.className = "fav-star";
+      favSpan.innerHTML = LUCIDE_ICONS.starFilled;
+      favSpan.title = "Favorited";
+      wrapper.appendChild(favSpan);
+    }
+
     // Ultra-clean media catalog: Zero stacked badges across the face of the art!
     // Title, platform indicator, and completion state cleanly beneath each poster in high-contrast typography.
     const body = document.createElement("div");
     body.className = "card-body";
 
-    const titleRow = document.createElement("div");
-    titleRow.className = "card-title-row";
-
     const h3 = document.createElement("h3");
     h3.className = "card-title";
     h3.textContent = game.title;
-    titleRow.appendChild(h3);
-
-    if (game.favorite) {
-      const favSpan = document.createElement("span");
-      favSpan.className = "card-fav-indicator";
-      favSpan.innerHTML = LUCIDE_ICONS.starFilled;
-      favSpan.title = "Favorited";
-      titleRow.appendChild(favSpan);
-    }
-
-    body.appendChild(titleRow);
+    body.appendChild(h3);
 
     const ownStatus = game.ownership_status || "Owned";
     const metaRow = document.createElement("div");
