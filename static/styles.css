@@ -1068,7 +1068,7 @@ textarea:focus {
   font-size: 0.72rem;
   min-inline-size: 0;
   overflow: clip;
-  flex: 0 1 auto;
+  flex-shrink: 0;
 }
 
 .card-plat-indicator .brand-icon {
@@ -1093,7 +1093,7 @@ textarea:focus {
 
 .card-gp-indicator {
   display: inline-block;
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -1102,13 +1102,15 @@ textarea:focus {
   border: 1px solid rgba(74, 222, 128, 0.3);
   border-radius: 3px;
   padding-block: 0.05rem;
-  padding-inline: 0.35rem;
+  padding-inline: 0.3rem;
   line-height: 1.2;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .card-xpa-indicator {
   display: inline-block;
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -1117,13 +1119,15 @@ textarea:focus {
   border: 1px solid rgba(34, 211, 238, 0.35);
   border-radius: 3px;
   padding-block: 0.05rem;
-  padding-inline: 0.35rem;
+  padding-inline: 0.3rem;
   line-height: 1.2;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .card-ownership-indicator {
   display: inline-block;
-  font-size: 0.65rem;
+  font-size: 0.62rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -1132,8 +1136,10 @@ textarea:focus {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 3px;
   padding-block: 0.05rem;
-  padding-inline: 0.35rem;
+  padding-inline: 0.3rem;
   line-height: 1.2;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .card-time-indicator {
