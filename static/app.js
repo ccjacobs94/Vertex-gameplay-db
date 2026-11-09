@@ -1275,7 +1275,7 @@ function renderGames() {
     if (brandIcons) platSpan.appendChild(brandIcons);
     const platText = document.createElement("span");
     platText.className = "card-plat-text";
-    platText.textContent = game.platform;
+    platText.textContent = formatCardPlatformLabel(game.platform);
     platSpan.appendChild(platText);
     metaRow.appendChild(platSpan);
 
@@ -1694,6 +1694,24 @@ function shortPlatformLabel(platform) {
     "PC (Other)": "PC",
   };
   return mapping[p] || p;
+}
+
+function formatCardPlatformLabel(platform) {
+  const p = (platform || "").trim();
+  if (!p.includes(" + ")) return p;
+  const parts = p.split(" + ").map((s) => s.trim());
+  if (parts.every((s) => s.includes("Xbox"))) {
+    return "Xbox / PC";
+  }
+  const cleaned = [];
+  for (const part of parts) {
+    let lbl = part;
+    if (part === "Xbox/PC" || part === "PC (Xbox)" || part === "Xbox / PC") {
+      lbl = "Xbox";
+    }
+    if (!cleaned.includes(lbl)) cleaned.push(lbl);
+  }
+  return cleaned.join("/");
 }
 
 function renderAchievementsList() {
