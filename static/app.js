@@ -845,6 +845,551 @@ function renderHabitsDashboard(data) {
       });
     }
   }
+
+  // 10. Circadian Gaming Rhythm
+  const circadianContainer = document.getElementById("circadian-heatmap-container");
+  const circadianBuckets = document.getElementById("circadian-time-buckets");
+  const cr = data.circadian_rhythm;
+  if (circadianContainer && cr) {
+    const archPill = document.getElementById("circadian-archetype-pill");
+    if (archPill) archPill.textContent = cr.archetype || "Flexible Gamer";
+    const peakPill = document.getElementById("circadian-peak-pill");
+    if (peakPill) peakPill.textContent = `Peak: ${cr.peak_day || "—"} at ${cr.peak_hour || "—"}`;
+
+    const maxVal = Math.max(cr.max_count || 0, 1);
+    const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+    let html = '<div class="circadian-grid-wrap"><div class="circadian-header-row"><span class="circadian-day-col-hdr"></span>';
+    for (let h = 0; h < 24; h++) {
+      const ampm = h < 12 ? "a" : "p";
+      const h12 = h % 12 === 0 ? 12 : h % 12;
+      const label = (h % 3 === 0) ? `${h12}${ampm}` : "";
+      html += `<span class="circadian-hour-hdr">${label}</span>`;
+    }
+    html += '</div>';
+
+    for (let d = 0; d < 7; d++) {
+      html += `<div class="circadian-day-row"><span class="circadian-day-label">${dayLabels[d]}</span>`;
+      for (let h = 0; h < 24; h++) {
+        const val = (cr.grid && cr.grid[d] && cr.grid[d][h]) || 0;
+        let lvl = 0;
+        if (val > 0) {
+          const ratio = val / maxVal;
+          if (ratio <= 0.25) lvl = 1;
+          else if (ratio <= 0.5) lvl = 2;
+          else if (ratio <= 0.75) lvl = 3;
+          else lvl = 4;
+        }
+        const ampm = h < 12 ? "AM" : "PM";
+        const h12 = h % 12 === 0 ? 12 : h % 12;
+        const tip = `${dayLabels[d]} ${h12}:00 ${ampm}: ${val} session/achievement events`;
+        html += `<div class="circadian-cell" data-level="${lvl}" title="${escapeHtml(tip)}" tabindex="0" role="img" aria-label="${escapeHtml(tip)}"></div>`;
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    circadianContainer.innerHTML = html;
+
+    if (circadianBuckets && cr.time_buckets) {
+      const tb = cr.time_buckets;
+      const tot = Math.max(cr.total_events || 0, 1);
+      const bItems = [
+        { label: "Night (12a–6a)", count: tb.night || 0, icon: "🌙" },
+        { label: "Morning (6a–12p)", count: tb.morning || 0, icon: "🌅" },
+        { label: "Afternoon (12p–6p)", count: tb.afternoon || 0, icon: "☀️" },
+        { label: "Evening (6p–12a)", count: tb.evening || 0, icon: "🌆" },
+      ];
+      circadianBuckets.innerHTML = bItems.map(b => {
+        const pct = Math.round((b.count / tot) * 100);
+        return `
+          <div class="circadian-bucket-card">
+            <div class="circadian-bucket-header">
+              <span>${b.icon} ${escapeHtml(b.label)}</span>
+              <strong>${pct}%</strong>
+            </div>
+            <div class="meter-track" style="block-size: 6px;">
+              <div class="meter-fill" style="inline-size: ${Math.max(2, pct)}%; background: linear-gradient(90deg, #38bdf8, #a855f7);"></div>
+            </div>
+            <span class="circadian-bucket-sub">${b.count} events</span>
+          </div>
+        `;
+      }).join("");
+    }
+  }
+
+  // 11. The Quit Curve & Survival Retention
+  const quitContainer = document.getElementById("quit-curve-container");
+  const qc = data.quit_curve;
+  if (quitContainer && qc) {
+    const bailoutBadge = document.getElementById("median-bailout-badge");
+    if (bailoutBadge) bailoutBadge.textContent = `Median Bailout: ${qc.median_drop_hours}h`;
+
+    const intervals = qc.intervals || [];
+    let svgPath = "";
+    let svgArea = "";
+    let dots = "";
+    const w = 500;
+    const h = 140;
+    const padL = 40;
+    const padR = 20;
+    const padT = 20;
+    const padB = 30;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
+
+    if (intervals.length > 0) {
+      const pts = intervals.map((pt, i) => {
+        const x = padL + (i / (intervals.length - 1)) * plotW;
+        const y = padT + (1 - (pt.rate / 100)) * plotH;
+        return { x: Math.round(x), y: Math.round(y), ...pt };
+      });
+
+      svgPath = `M ${pts[0].x} ${pts[0].y} ` + pts.slice(1).map(p => `L ${p.x} ${p.y}`).join(" ");
+      svgArea = `${svgPath} L ${pts[pts.length - 1].x} ${padT + plotH} L ${pts[0].x} ${padT + plotH} Z`;
+
+      dots = pts.map(p => `
+        <circle cx="${p.x}" cy="${p.y}" r="4.5" fill="#38bdf8" stroke="#0f172a" stroke-width="2" />
+        <text x="${p.x}" y="${p.y - 8}" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="700">${p.rate}%</text>
+        <text x="${p.x}" y="${padT + plotH + 18}" text-anchor="middle" fill="#64748b" font-size="10">${p.hours}h</text>
+      `).join("");
+    }
+
+    let medianMarker = "";
+    if (qc.median_drop_hours > 0 && intervals.length > 0) {
+      const medRatio = Math.min(1, Math.max(0, qc.median_drop_hours / 20));
+      const medX = padL + medRatio * plotW * 0.75;
+      medianMarker = `
+        <line x1="${medX}" y1="${padT}" x2="${medX}" y2="${padT + plotH}" stroke="#f43f5e" stroke-width="2" stroke-dasharray="4 3" />
+        <text x="${medX + 4}" y="${padT + 12}" fill="#f43f5e" font-size="10" font-weight="700">Drop Median (${qc.median_drop_hours}h)</text>
+      `;
+    }
+
+    const dropBinsHtml = (qc.drop_bins || []).map(b => `
+      <div class="quit-bin-item">
+        <div class="quit-bin-label">
+          <span>${escapeHtml(b.label)}</span>
+          <strong>${b.count} (${b.pct}%)</strong>
+        </div>
+        <div class="meter-track" style="block-size: 5px;">
+          <div class="meter-fill" style="inline-size: ${Math.max(2, b.pct)}%; background: #f43f5e;"></div>
+        </div>
+      </div>
+    `).join("");
+
+    quitContainer.innerHTML = `
+      <div class="quit-chart-wrap">
+        <svg viewBox="0 0 ${w} ${h}" class="quit-curve-svg" preserveAspectRatio="none" role="img" aria-label="Game survival curve">
+          <defs>
+            <linearGradient id="survivalGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.0"/>
+            </linearGradient>
+          </defs>
+          <line x1="${padL}" y1="${padT + plotH}" x2="${padL + plotW}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+          <path d="${svgArea}" fill="url(#survivalGrad)"/>
+          <path d="${svgPath}" fill="none" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
+          ${medianMarker}
+          ${dots}
+        </svg>
+      </div>
+      <div class="quit-bins-grid">
+        <span class="quit-bins-title">Drop Timing Distribution (${qc.dropped_count} total dropped)</span>
+        <div class="quit-bins-list">${dropBinsHtml}</div>
+      </div>
+    `;
+  }
+
+  // 12. Rotation Focus vs. Game Hopping
+  const rotContainer = document.getElementById("rotation-focus-container");
+  const rf = data.rotation_focus;
+  if (rotContainer && rf) {
+    const archBadge = document.getElementById("rotation-archetype-badge");
+    if (archBadge) archBadge.textContent = rf.archetype || "Balanced Juggler";
+
+    const gamesHtml = (rf.recent_games || []).map(g => {
+      const fallback = makeFallbackCover(g.title, g.platform);
+      const coverSrc = g.cover_url || fallback;
+      return `
+        <div class="rot-game-row" role="button" tabindex="0" onclick="openGameById(${g.id})">
+          <img src="${escapeHtml(coverSrc)}" alt="" class="rot-game-thumb" loading="lazy" onerror="this.src='${fallback}'">
+          <div class="rot-game-info">
+            <div class="rot-game-title-row">
+              <span class="rot-game-name">${escapeHtml(g.title)}</span>
+              <span class="rot-game-hours">${g.hours}h (${g.share_pct}%)</span>
+            </div>
+            <div class="meter-track" style="block-size: 6px;">
+              <div class="meter-fill" style="inline-size: ${Math.max(3, g.share_pct)}%; background: linear-gradient(90deg, #a855f7, #38bdf8);"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    rotContainer.innerHTML = `
+      <div class="rot-score-layout">
+        <div class="rot-score-badge-card">
+          <div class="rot-score-circle">
+            <span class="rot-score-num">${rf.focus_score}%</span>
+            <span class="rot-score-lbl">Focus Score</span>
+          </div>
+          <p class="rot-desc">${escapeHtml(rf.description || "")}</p>
+        </div>
+        <div class="rot-recent-list">
+          <span class="rot-recent-heading">Active Rotation Games</span>
+          ${gamesHtml || '<p class="empty-state">No active playtime logs.</p>'}
+        </div>
+      </div>
+    `;
+  }
+
+  // 13. Contrarian Index: Taste vs. Critics
+  const contrarianContainer = document.getElementById("contrarian-container");
+  const ci = data.contrarian_index;
+  if (contrarianContainer && ci) {
+    const scoreBadge = document.getElementById("contrarian-score-badge");
+    if (scoreBadge) scoreBadge.textContent = `Divergence: ±${ci.contrarian_score} pts`;
+
+    const renderCard = (g, isPositive) => {
+      const fallback = makeFallbackCover(g.title, g.platform);
+      const coverSrc = g.cover_url || fallback;
+      const deltaText = isPositive ? `+${g.delta}` : `${g.delta}`;
+      const deltaClass = isPositive ? "delta-positive" : "delta-negative";
+      return `
+        <div class="contrarian-item-card" role="button" tabindex="0" onclick="openGameById(${g.id})">
+          <img src="${escapeHtml(coverSrc)}" alt="" class="contrarian-thumb" loading="lazy" onerror="this.src='${fallback}'">
+          <div class="contrarian-details">
+            <div class="contrarian-title-row">
+              <span class="contrarian-game-title">${escapeHtml(g.title)}</span>
+              <span class="contrarian-delta-pill ${deltaClass}">${deltaText} Δ</span>
+            </div>
+            <div class="contrarian-scores-row">
+              <span class="contrarian-user-score">★ You: ${g.user_rating}/5 (${g.user_score_norm})</span>
+              <span class="contrarian-critic-score">⭐ Critics: ${g.critic_score}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    };
+
+    const guiltyHtml = (ci.guilty_pleasures || []).length > 0
+      ? ci.guilty_pleasures.map(g => renderCard(g, true)).join("")
+      : '<p class="empty-state">No guilty pleasures found in current filter.</p>';
+
+    const missesHtml = (ci.overhyped_misses || []).length > 0
+      ? ci.overhyped_misses.map(g => renderCard(g, false)).join("")
+      : '<p class="empty-state">No overhyped misses found in current filter.</p>';
+
+    contrarianContainer.innerHTML = `
+      <div class="contrarian-columns-grid">
+        <div class="contrarian-column">
+          <div class="contrarian-col-header text-emerald">
+            <span>✨ Personal Gems &amp; Guilty Pleasures</span>
+            <small>Rated higher than critics</small>
+          </div>
+          <div class="contrarian-cards-stack">${guiltyHtml}</div>
+        </div>
+        <div class="contrarian-column">
+          <div class="contrarian-col-header text-rose">
+            <span>📉 Overhyped Misses &amp; Dropouts</span>
+            <small>Acclaimed by critics, skipped/dropped by you</small>
+          </div>
+          <div class="contrarian-cards-stack">${missesHtml}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 14. Mechanic & Theme DNA
+  const dnaContainer = document.getElementById("mechanic-dna-container");
+  const dna = data.mechanic_dna;
+  if (dnaContainer && dna) {
+    const tagsHtml = (dna.tags || []).map(t => `
+      <div class="dna-tag-row" role="button" tabindex="0" onclick="state.tag='${escapeHtml(t.tag)}'; syncFilterInputs(); refreshActiveView();">
+        <div class="dna-tag-header">
+          <span class="dna-tag-name">🏷️ ${escapeHtml(t.tag)}</span>
+          <span class="dna-tag-meta">${t.count} games &bull; ${t.hours}h</span>
+        </div>
+        <div class="dna-bars-dual">
+          <div class="dna-meter-block">
+            <span class="dna-meter-lbl text-emerald">✓ ${t.finish_rate}% Finish</span>
+            <div class="meter-track" style="block-size: 6px;">
+              <div class="meter-fill" style="inline-size: ${Math.max(2, t.finish_rate)}%; background: #10b981;"></div>
+            </div>
+          </div>
+          <div class="dna-meter-block">
+            <span class="dna-meter-lbl text-rose">✕ ${t.drop_rate}% Drop</span>
+            <div class="meter-track" style="block-size: 6px;">
+              <div class="meter-fill" style="inline-size: ${Math.max(2, t.drop_rate)}%; background: #ef4444;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `).join("");
+
+    dnaContainer.innerHTML = `
+      <div class="dna-list-layout">
+        ${(dna.best_finished_tag || dna.worst_dropped_tag) ? `
+          <div class="dna-insight-banner">
+            ${dna.best_finished_tag ? `<span><strong>Highest Finish:</strong> ${escapeHtml(dna.best_finished_tag.tag)} (${dna.best_finished_tag.finish_rate}%)</span>` : ""}
+            ${dna.worst_dropped_tag ? `<span><strong>Most Dropped:</strong> ${escapeHtml(dna.worst_dropped_tag.tag)} (${dna.worst_dropped_tag.drop_rate}%)</span>` : ""}
+          </div>
+        ` : ""}
+        <div class="dna-tags-grid">${tagsHtml || '<p class="empty-state">No tag metadata available.</p>'}</div>
+      </div>
+    `;
+  }
+
+  // 15. Genre Time Sink vs Finish Rate Bubble Matrix
+  const matrixContainer = document.getElementById("genre-matrix-container");
+  const gm = data.genre_matrix;
+  if (matrixContainer && gm) {
+    const w = 700;
+    const h = 320;
+    const padL = 60;
+    const padR = 40;
+    const padT = 30;
+    const padB = 40;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
+
+    const maxHours = Math.max(...gm.map(g => g.hours), 50);
+    const maxCount = Math.max(...gm.map(g => g.count), 5);
+
+    const catColors = {
+      "Dedicated Mastery": "#38bdf8",
+      "High Execution": "#10b981",
+      "Comfort Sinks": "#a855f7",
+      "Casual Testing": "#64748b",
+    };
+
+    const bubblesSvg = gm.map(g => {
+      const x = Math.round(padL + Math.min(1, g.hours / maxHours) * plotW);
+      const y = Math.round(padT + (1 - (g.completion_rate / 100)) * plotH);
+      const r = Math.round(8 + (g.count / maxCount) * 16);
+      const col = catColors[g.category] || "#38bdf8";
+      const tip = `${g.genre}: ${g.hours}h, ${g.completion_rate}% finish rate, ${g.count} games (${g.category})`;
+
+      return `
+        <g class="matrix-bubble-group" tabindex="0" role="img" aria-label="${escapeHtml(tip)}" onclick="state.genre='${escapeHtml(g.genre)}'; syncFilterInputs(); refreshActiveView();">
+          <circle cx="${x}" cy="${y}" r="${r}" fill="${col}" fill-opacity="0.4" stroke="${col}" stroke-width="2" class="matrix-bubble-node">
+            <title>${escapeHtml(tip)}</title>
+          </circle>
+          <text x="${x}" y="${y - r - 4}" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700" pointer-events="none">${escapeHtml(g.genre)}</text>
+        </g>
+      `;
+    }).join("");
+
+    matrixContainer.innerHTML = `
+      <div class="matrix-svg-wrap">
+        <svg viewBox="0 0 ${w} ${h}" class="genre-matrix-svg" preserveAspectRatio="none">
+          <rect x="${padL}" y="${padT}" width="${plotW / 2}" height="${plotH / 2}" fill="rgba(16, 185, 129, 0.04)" />
+          <rect x="${padL + plotW / 2}" y="${padT}" width="${plotW / 2}" height="${plotH / 2}" fill="rgba(56, 189, 248, 0.04)" />
+          <rect x="${padL}" y="${padT + plotH / 2}" width="${plotW / 2}" height="${plotH / 2}" fill="rgba(100, 116, 139, 0.04)" />
+          <rect x="${padL + plotW / 2}" y="${padT + plotH / 2}" width="${plotW / 2}" height="${plotH / 2}" fill="rgba(168, 85, 247, 0.04)" />
+
+          <line x1="${padL}" y1="${padT + plotH}" x2="${padL + plotW}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+          <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+
+          <line x1="${padL + plotW / 2}" y1="${padT}" x2="${padL + plotW / 2}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.08)" stroke-dasharray="4 4"/>
+          <line x1="${padL}" y1="${padT + plotH / 2}" x2="${padL + plotW}" y2="${padT + plotH / 2}" stroke="rgba(255,255,255,0.08)" stroke-dasharray="4 4"/>
+
+          <text x="${padL + plotW / 2}" y="${padT + plotH + 30}" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="600">Total Playtime Hours →</text>
+          <text x="${padL - 10}" y="${padT + 12}" text-anchor="end" fill="#94a3b8" font-size="10">100%</text>
+          <text x="${padL - 10}" y="${padT + plotH / 2 + 4}" text-anchor="end" fill="#94a3b8" font-size="10">50%</text>
+          <text x="${padL - 10}" y="${padT + plotH}" text-anchor="end" fill="#94a3b8" font-size="10">0%</text>
+
+          <text x="${padL + 12}" y="${padT + 20}" fill="rgba(16, 185, 129, 0.45)" font-size="11" font-weight="700">High Execution</text>
+          <text x="${padL + plotW - 12}" y="${padT + 20}" text-anchor="end" fill="rgba(56, 189, 248, 0.45)" font-size="11" font-weight="700">Dedicated Mastery</text>
+          <text x="${padL + 12}" y="${padT + plotH - 12}" fill="rgba(148, 163, 184, 0.45)" font-size="11" font-weight="700">Casual Testing</text>
+          <text x="${padL + plotW - 12}" y="${padT + plotH - 12}" text-anchor="end" fill="rgba(168, 85, 247, 0.45)" font-size="11" font-weight="700">Comfort Sinks</text>
+
+          ${bubblesSvg}
+        </svg>
+      </div>
+    `;
+  }
+
+  // 16. Subscription / Game Pass ROI
+  const subContainer = document.getElementById("subscription-roi-container");
+  const sub = data.subscription_roi;
+  if (subContainer && sub) {
+    const o = sub.owned || {};
+    const s = sub.subscription || {};
+
+    subContainer.innerHTML = `
+      <div class="sub-roi-grid">
+        <div class="sub-cohort-card sub-cohort-owned">
+          <div class="sub-cohort-hdr">
+            <span class="sub-cohort-title">📦 Owned Purchases</span>
+            <span class="badge-subtle">${o.count || 0} games</span>
+          </div>
+          <div class="sub-metrics-list">
+            <div class="sub-metric-row">
+              <span>Avg Playtime:</span>
+              <strong>${o.avg_hours || 0} hrs</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Finish Rate:</span>
+              <strong class="text-emerald">${o.completion_rate || 0}%</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Drop Rate:</span>
+              <strong class="text-rose">${o.drop_rate || 0}%</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Tourist (&lt;1h):</span>
+              <strong>${o.tourist_rate || 0}%</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="sub-cohort-card sub-cohort-subscription">
+          <div class="sub-cohort-hdr">
+            <span class="sub-cohort-title">🎮 Game Pass / Subscriptions</span>
+            <span class="badge-subtle">${s.count || 0} games</span>
+          </div>
+          <div class="sub-metrics-list">
+            <div class="sub-metric-row">
+              <span>Avg Playtime:</span>
+              <strong>${s.avg_hours || 0} hrs</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Finish Rate:</span>
+              <strong class="text-emerald">${s.completion_rate || 0}%</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Drop Rate:</span>
+              <strong class="text-rose">${s.drop_rate || 0}%</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Tourist (&lt;1h):</span>
+              <strong class="text-amber">${s.tourist_rate || 0}%</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 17. Multi-Platform Ecosystem Mobility
+  const crossContainer = document.getElementById("cross-platform-container");
+  const cp = data.cross_platform;
+  if (crossContainer && cp) {
+    const pairsHtml = (cp.pairs || []).map(p => `
+      <span class="badge-subtle badge-accent">${escapeHtml(p.pair)} (${p.count})</span>
+    `).join("");
+
+    const titlesHtml = (cp.top_titles || []).map(t => `
+      <div class="cross-title-item">
+        <div class="cross-title-name">${escapeHtml(t.title)}</div>
+        <div class="cross-title-plats">
+          ${t.platform_hours.map(ph => `<span>${escapeHtml(ph.platform)}: <strong>${ph.hours}h</strong></span>`).join(" &bull; ")}
+        </div>
+      </div>
+    `).join("");
+
+    crossContainer.innerHTML = `
+      <div class="cross-plat-layout">
+        <div class="cross-kpi-pair">
+          <div class="cross-kpi-box">
+            <span class="cross-kpi-num">${cp.double_dipped_count || 0}</span>
+            <span class="cross-kpi-label">Double-Dipped Titles</span>
+          </div>
+          <div class="cross-kpi-box">
+            <span class="cross-kpi-num">${cp.double_dipped_hours || 0}h</span>
+            <span class="cross-kpi-label">Multi-Platform Hours</span>
+          </div>
+        </div>
+        ${pairsHtml ? `<div class="cross-pairs-wrap"><span class="cross-pairs-lbl">Storefront Overlaps:</span> ${pairsHtml}</div>` : ""}
+        <div class="cross-titles-stack">${titlesHtml || '<p class="empty-state">No cross-platform titles detected.</p>'}</div>
+      </div>
+    `;
+  }
+
+  // 18. Trophy Hunter & Rarity Pyramid
+  const pyrContainer = document.getElementById("trophy-pyramid-container");
+  const tp = data.trophy_pyramid;
+  if (pyrContainer && tp) {
+    pyrContainer.innerHTML = `
+      <div class="trophy-pyramid-layout">
+        <div class="pyramid-tier tier-ultra-rare">
+          <div class="pyramid-tier-hdr">
+            <span class="tier-badge-pill pill-gold">🥇 Ultra Rare (&lt; 5%)</span>
+            <strong>${tp.ultra_rare.unlocked} / ${tp.ultra_rare.total} (${tp.ultra_rare.pct}%)</strong>
+          </div>
+          <div class="meter-track" style="block-size: 8px;">
+            <div class="meter-fill" style="inline-size: ${Math.max(2, tp.ultra_rare.pct)}%; background: linear-gradient(90deg, #f59e0b, #fbbf24);"></div>
+          </div>
+        </div>
+
+        <div class="pyramid-tier tier-rare">
+          <div class="pyramid-tier-hdr">
+            <span class="tier-badge-pill pill-purple">🥈 Rare (5% – 20%)</span>
+            <strong>${tp.rare.unlocked} / ${tp.rare.total} (${tp.rare.pct}%)</strong>
+          </div>
+          <div class="meter-track" style="block-size: 8px;">
+            <div class="meter-fill" style="inline-size: ${Math.max(2, tp.rare.pct)}%; background: linear-gradient(90deg, #8b5cf6, #c084fc);"></div>
+          </div>
+        </div>
+
+        <div class="pyramid-tier tier-common">
+          <div class="pyramid-tier-hdr">
+            <span class="tier-badge-pill pill-blue">🥉 Common (&gt; 20%)</span>
+            <strong>${tp.common.unlocked} / ${tp.common.total} (${tp.common.pct}%)</strong>
+          </div>
+          <div class="meter-track" style="block-size: 8px;">
+            <div class="meter-fill" style="inline-size: ${Math.max(2, tp.common.pct)}%; background: linear-gradient(90deg, #2563eb, #38bdf8);"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 19. Almost Perfect (Closest to 100% Mastery)
+  const apContainer = document.getElementById("almost-perfect-container");
+  const ap = data.almost_perfect;
+  if (apContainer && ap) {
+    apContainer.innerHTML = "";
+    if (ap.length === 0) {
+      apContainer.innerHTML = '<p class="empty-state">No games currently between 70% and 99% achievement completion.</p>';
+    } else {
+      ap.forEach(g => {
+        const card = document.createElement("div");
+        card.className = "hof-game-card";
+        card.setAttribute("role", "button");
+        card.setAttribute("tabindex", "0");
+        card.setAttribute("title", `Inspect ${g.title}`);
+
+        const fallback = makeFallbackCover(g.title, g.platform);
+        const coverSrc = g.cover_url || fallback;
+
+        card.innerHTML = `
+          <div class="hof-poster-wrap">
+            <span class="hof-rank-badge" style="color: #38bdf8;">${g.pct}%</span>
+            <img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(g.title)}" class="hof-poster-img" loading="lazy" onerror="this.src='${fallback}'">
+          </div>
+          <div class="hof-card-body">
+            <div class="hof-card-title">${escapeHtml(g.title)}</div>
+            <div class="meter-track" style="block-size: 6px; margin: 4px 0;">
+              <div class="meter-fill" style="inline-size: ${g.pct}%; background: linear-gradient(90deg, #38bdf8, #10b981);"></div>
+            </div>
+            <div class="hof-card-meta">
+              <span class="system-pill-badge system-pill-other" style="font-size: 0.68rem; padding: 0.1rem 0.4rem;">${escapeHtml(g.platform)}</span>
+              <span style="color: #38bdf8; font-weight: 700; font-size: 0.74rem;">${g.remaining} to 100%!</span>
+            </div>
+          </div>
+        `;
+        card.addEventListener("click", () => openGameById(g.id));
+        card.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openGameById(g.id);
+          }
+        });
+        apContainer.appendChild(card);
+      });
+    }
+  }
 }
 
 function applyViewMode(mode) {

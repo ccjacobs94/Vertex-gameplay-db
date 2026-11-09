@@ -4342,6 +4342,761 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   color: #60a5fa;
 }
 
+/* ==========================================================================
+   Advanced Behavioral, Pacing, Taste & Mastery Visual Widgets
+   ========================================================================== */
+
+/* Circadian Rhythm Heatmap */
+.circadian-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.circadian-content-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.circadian-grid-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  overflow-x: auto;
+  padding-block-end: 0.5rem;
+}
+
+.circadian-header-row {
+  display: grid;
+  grid-template-columns: 36px repeat(24, minmax(18px, 1fr));
+  gap: 3px;
+  margin-block-end: 2px;
+}
+
+.circadian-day-col-hdr {
+  display: block;
+}
+
+.circadian-hour-hdr {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.circadian-day-row {
+  display: grid;
+  grid-template-columns: 36px repeat(24, minmax(18px, 1fr));
+  gap: 3px;
+  align-items: center;
+}
+
+.circadian-day-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.circadian-cell {
+  aspect-ratio: 1 / 1;
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.circadian-cell:hover, .circadian-cell:focus-visible {
+  transform: scale(1.3);
+  z-index: 2;
+  filter: brightness(1.3);
+  outline: none;
+}
+
+.circadian-cell[data-level="0"] {
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+.circadian-cell[data-level="1"] {
+  background-color: #1e3a8a; /* deep navy blue */
+}
+
+.circadian-cell[data-level="2"] {
+  background-color: #2563eb; /* vibrant royal blue */
+}
+
+.circadian-cell[data-level="3"] {
+  background-color: #7c3aed; /* neon purple */
+}
+
+.circadian-cell[data-level="4"] {
+  background-color: #c084fc; /* electric bright purple/violet */
+  box-shadow: 0 0 6px rgba(192, 132, 252, 0.6);
+}
+
+.circadian-time-buckets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.circadian-bucket-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.circadian-bucket-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.circadian-bucket-sub {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+/* The Quit Curve & Retention */
+.quit-curve-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.quit-chart-wrap {
+  inline-size: 100%;
+  block-size: 140px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: var(--radius-md);
+  padding: 0.25rem;
+  position: relative;
+}
+
+.quit-curve-svg {
+  inline-size: 100%;
+  block-size: 100%;
+  display: block;
+}
+
+.quit-bins-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.quit-bins-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.quit-bins-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.5rem;
+}
+
+.quit-bin-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.quit-bin-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.quit-bin-label strong {
+  color: var(--text-primary);
+}
+
+/* Rotation Focus & Game Hopping */
+.rot-score-layout {
+  display: flex;
+  gap: 1.25rem;
+  align-items: stretch;
+}
+
+@media (max-width: 640px) {
+  .rot-score-layout {
+    flex-direction: column;
+  }
+}
+
+.rot-score-badge-card {
+  flex: 0 0 140px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 0.6rem;
+}
+
+.rot-score-circle {
+  inline-size: 76px;
+  block-size: 76px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(168, 85, 247, 0.2) 0%, rgba(15, 23, 42, 0.8) 100%);
+  border: 2px solid #a855f7;
+  box-shadow: 0 0 14px rgba(168, 85, 247, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.rot-score-num {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #f8fafc;
+  line-height: 1;
+}
+
+.rot-score-lbl {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  color: #c084fc;
+  font-weight: 700;
+  margin-block-start: 2px;
+}
+
+.rot-desc {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.rot-recent-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.rot-recent-heading {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.rot-game-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.rot-game-row:hover {
+  border-color: #a855f7;
+  transform: translateX(3px);
+}
+
+.rot-game-thumb {
+  inline-size: 32px;
+  block-size: 44px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background-color: #0b0f19;
+}
+
+.rot-game-info {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.rot-game-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.78rem;
+}
+
+.rot-game-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-inline-size: 160px;
+}
+
+.rot-game-hours {
+  font-weight: 700;
+  color: #38bdf8;
+  font-size: 0.74rem;
+}
+
+/* Contrarian Index */
+.contrarian-columns-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.contrarian-column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.contrarian-col-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  border-block-end: 1px solid rgba(255, 255, 255, 0.06);
+  padding-block-end: 0.4rem;
+}
+
+.contrarian-col-header small {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  font-weight: normal;
+}
+
+.contrarian-cards-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.contrarian-item-card {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.contrarian-item-card:hover {
+  border-color: var(--accent-primary);
+  transform: translateY(-2px);
+}
+
+.contrarian-thumb {
+  inline-size: 34px;
+  block-size: 48px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background-color: #0b0f19;
+}
+
+.contrarian-details {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.contrarian-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.contrarian-game-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-inline-size: 150px;
+}
+
+.contrarian-delta-pill {
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.delta-positive {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.delta-negative {
+  background: rgba(244, 63, 94, 0.2);
+  color: #fb7185;
+  border: 1px solid rgba(244, 63, 94, 0.35);
+}
+
+.contrarian-scores-row {
+  display: flex;
+  gap: 0.6rem;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+/* Mechanic & Theme DNA */
+.dna-list-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.dna-insight-banner {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.75rem;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
+  border-radius: var(--radius-sm);
+  font-size: 0.76rem;
+  color: var(--text-primary);
+}
+
+.dna-tags-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.65rem;
+}
+
+.dna-tag-row {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.dna-tag-row:hover {
+  border-color: #38bdf8;
+  transform: translateY(-2px);
+}
+
+.dna-tag-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.dna-tag-name {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.dna-tag-meta {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.dna-bars-dual {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.dna-meter-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.dna-meter-lbl {
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+/* Genre Bubble Matrix */
+.matrix-legend-pills {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.legend-pill {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+}
+
+.pill-mastery {
+  background: rgba(56, 189, 248, 0.15);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.pill-execution {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.pill-comfort {
+  background: rgba(168, 85, 247, 0.15);
+  color: #a855f7;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+}
+
+.pill-casual {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
+.matrix-svg-wrap {
+  inline-size: 100%;
+  block-size: 320px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: var(--radius-md);
+  position: relative;
+  overflow: hidden;
+}
+
+.genre-matrix-svg {
+  inline-size: 100%;
+  block-size: 100%;
+  display: block;
+}
+
+.matrix-bubble-group {
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.matrix-bubble-group:hover .matrix-bubble-node {
+  fill-opacity: 0.8;
+  stroke-width: 3;
+}
+
+/* Subscription ROI */
+.sub-roi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.85rem;
+}
+
+.sub-cohort-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.sub-cohort-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  border-block-end: 1px solid rgba(255, 255, 255, 0.06);
+  padding-block-end: 0.4rem;
+}
+
+.sub-metrics-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+}
+
+.sub-metric-row {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-secondary);
+}
+
+.sub-metric-row strong {
+  color: var(--text-primary);
+}
+
+/* Cross-Platform Ecosystem Mobility */
+.cross-plat-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.cross-kpi-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.cross-kpi-box {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.cross-kpi-num {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: #38bdf8;
+}
+
+.cross-kpi-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.cross-pairs-wrap {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  align-items: center;
+  font-size: 0.74rem;
+}
+
+.cross-pairs-lbl {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.cross-titles-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.cross-title-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-size: 0.78rem;
+}
+
+.cross-title-name {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.cross-title-plats {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+/* Trophy Hunter & Rarity Pyramid */
+.trophy-pyramid-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  justify-content: center;
+}
+
+.pyramid-tier {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  transition: transform 0.15s ease;
+}
+
+.pyramid-tier:hover {
+  transform: translateX(4px);
+}
+
+.tier-ultra-rare {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.08), transparent);
+}
+
+.tier-rare {
+  border-color: rgba(139, 92, 246, 0.4);
+  background: linear-gradient(90deg, rgba(139, 92, 246, 0.08), transparent);
+}
+
+.tier-common {
+  border-color: rgba(37, 99, 235, 0.4);
+  background: linear-gradient(90deg, rgba(37, 99, 235, 0.08), transparent);
+}
+
+.pyramid-tier-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+}
+
+.tier-badge-pill {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+}
+
+.pill-gold {
+  background: rgba(245, 158, 11, 0.25);
+  color: #fbbf24;
+}
+
+.pill-purple {
+  background: rgba(139, 92, 246, 0.25);
+  color: #c084fc;
+}
+
+.pill-blue {
+  background: rgba(37, 99, 235, 0.25);
+  color: #60a5fa;
+}
+
 /* Responsive Overrides */
 @media (max-width: 768px) {
   .view-tabs-bar {

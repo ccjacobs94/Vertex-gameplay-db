@@ -2230,6 +2230,492 @@ def get_habits_analytics(
     dominant_system = platform_list[0]["name"] if platform_list else "None"
     dominant_genre = sorted_genres[0]["genre"] if sorted_genres else "None"
 
+    # -------------------------------------------------------------
+    # Advanced Behavioral, Pacing, Taste, and Mastery Analytics
+    # -------------------------------------------------------------
+    filtered_game_ids = [g["id"] for g in games]
+
+    # 1. Circadian Gaming Rhythm & Active Days
+    # 7 rows (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun), 24 cols (0..23)
+    circadian_grid = [[0 for _ in range(24)] for _ in range(7)]
+    total_rhythm_events = 0
+    time_buckets = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+
+    def _parse_ts(val: Any) -> Optional[datetime]:
+        if not val or not isinstance(val, str):
+            return None
+        v = val.strip()
+        if not v:
+            return None
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(v)
+        except Exception:
+            pass
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(v, fmt)
+            except Exception:
+                continue
+        return None
+
+    achievement_times: List[str] = []
+    prompt_times: List[str] = []
+    if filtered_game_ids:
+        placeholders = ",".join("?" for _ in filtered_game_ids)
+        try:
+            with get_connection(db_path) as conn:
+                rows_ach = conn.execute(
+                    f"SELECT unlock_time FROM game_achievements WHERE game_id IN ({placeholders}) AND unlocked = 1 AND unlock_time IS NOT NULL",
+                    filtered_game_ids,
+                ).fetchall()
+                achievement_times = [r["unlock_time"] for r in rows_ach if r["unlock_time"]]
+
+                rows_prompts = conn.execute(
+                    f"SELECT detected_at FROM playtime_prompts WHERE game_id IN ({placeholders}) AND detected_at IS NOT NULL",
+                    filtered_game_ids,
+                ).fetchall()
+                prompt_times = [r["detected_at"] for r in rows_prompts if r["detected_at"]]
+        except Exception:
+            pass
+
+    all_timestamps = achievement_times + prompt_times
+    if len(all_timestamps) < 10:
+        for g in games:
+            lp = g.get("last_played")
+            if lp:
+                all_timestamps.append(lp)
+
+    for ts_str in all_timestamps:
+        dt = _parse_ts(ts_str)
+        if dt:
+            w = dt.weekday()
+            h = dt.hour
+            circadian_grid[w][h] += 1
+            total_rhythm_events += 1
+            if 0 <= h < 6:
+                time_buckets["night"] += 1
+            elif 6 <= h < 12:
+                time_buckets["morning"] += 1
+            elif 12 <= h < 18:
+                time_buckets["afternoon"] += 1
+            else:
+                time_buckets["evening"] += 1
+
+    peak_day_idx = 0
+    peak_hour_idx = 0
+    max_cell_count = 0
+    day_totals = [sum(row) for row in circadian_grid]
+    hour_totals = [sum(circadian_grid[d][h] for d in range(7)) for h in range(24)]
+
+    for d in range(7):
+        for h in range(24):
+            if circadian_grid[d][h] > max_cell_count:
+                max_cell_count = circadian_grid[d][h]
+                peak_day_idx = d
+                peak_hour_idx = h
+
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    peak_day_name = day_names[peak_day_idx]
+    ampm = "AM" if peak_hour_idx < 12 else "PM"
+    h12 = 12 if peak_hour_idx % 12 == 0 else peak_hour_idx % 12
+    peak_hour_str = f"{h12} {ampm}"
+
+    weekend_events = day_totals[5] + day_totals[6]
+    weekday_events = sum(day_totals[:5])
+    if total_rhythm_events == 0:
+        rhythm_archetype = "Flexible Gamer"
+    elif weekend_events > weekday_events * 0.7 and (time_buckets["evening"] + time_buckets["night"] >= time_buckets["morning"] + time_buckets["afternoon"]):
+        rhythm_archetype = "Weekend Night Owl"
+    elif time_buckets["evening"] >= max(time_buckets.values()):
+        rhythm_archetype = "Prime-Time Evening Warrior"
+    elif time_buckets["night"] >= max(time_buckets.values()):
+        rhythm_archetype = "Midnight Grinder"
+    elif time_buckets["morning"] >= max(time_buckets.values()):
+        rhythm_archetype = "Early Morning Explorer"
+    else:
+        rhythm_archetype = "Afternoon Tactician"
+
+    circadian_rhythm = {
+        "grid": circadian_grid,
+        "max_count": max_cell_count,
+        "total_events": total_rhythm_events,
+        "peak_day": peak_day_name,
+        "peak_hour": peak_hour_str,
+        "peak_hour_num": peak_hour_idx,
+        "archetype": rhythm_archetype,
+        "day_totals": day_totals,
+        "hour_totals": hour_totals,
+        "time_buckets": time_buckets,
+    }
+
+    # 2. The Quit Curve (Drop Distribution & Survival / Retention)
+    quit_intervals = [1, 2, 5, 10, 20, 50]
+    survival_data = []
+    for threshold in quit_intervals:
+        survived = sum(
+            1 for g in played_games
+            if float(g.get("playtime_hours") or 0.0) >= threshold
+            or g.get("completion_status") in ("Beaten", "Completed")
+        )
+        rate = round((survived / max(played_count, 1)) * 100, 1) if played_count > 0 else 0.0
+        survival_data.append({"hours": threshold, "alive_count": survived, "rate": rate})
+
+    drop_bins = [
+        {"key": "under_1h", "label": "< 1h (Quick Bounce)", "count": 0, "pct": 0.0},
+        {"key": "1_to_3h", "label": "1–3h (Early Drop)", "count": 0, "pct": 0.0},
+        {"key": "3_to_5h", "label": "3–5h (Opening Arc)", "count": 0, "pct": 0.0},
+        {"key": "5_to_10h", "label": "5–10h (Mid-Game Fade)", "count": 0, "pct": 0.0},
+        {"key": "10_to_20h", "label": "10–20h (Late Burnout)", "count": 0, "pct": 0.0},
+        {"key": "over_20h", "label": "20h+ (Deep Drop)", "count": 0, "pct": 0.0},
+    ]
+    dropped_hours_list = [float(g.get("playtime_hours") or 0.0) for g in dropped_games]
+    for h in dropped_hours_list:
+        if h < 1.0:
+            drop_bins[0]["count"] += 1
+        elif h < 3.0:
+            drop_bins[1]["count"] += 1
+        elif h < 5.0:
+            drop_bins[2]["count"] += 1
+        elif h < 10.0:
+            drop_bins[3]["count"] += 1
+        elif h < 20.0:
+            drop_bins[4]["count"] += 1
+        else:
+            drop_bins[5]["count"] += 1
+
+    for b in drop_bins:
+        b["pct"] = round((b["count"] / max(dropped_count, 1)) * 100, 1) if dropped_count > 0 else 0.0
+
+    dropped_sorted = sorted(dropped_hours_list)
+    if dropped_sorted:
+        mid = len(dropped_sorted) // 2
+        median_drop_hours = round(
+            (dropped_sorted[mid] if len(dropped_sorted) % 2 != 0 else (dropped_sorted[mid - 1] + dropped_sorted[mid]) / 2.0),
+            1,
+        )
+    else:
+        median_drop_hours = 0.0
+
+    quit_curve = {
+        "intervals": survival_data,
+        "drop_bins": drop_bins,
+        "median_drop_hours": median_drop_hours,
+        "dropped_count": dropped_count,
+        "beaten_count": beaten_count,
+    }
+
+    # 3. Rotation Focus vs. Game Hopping Index
+    recent_active_candidates = [
+        g for g in games
+        if float(g.get("playtime_hours") or 0.0) > 0 and g.get("last_played")
+    ]
+    if not recent_active_candidates:
+        recent_active_candidates = [g for g in games if float(g.get("playtime_hours") or 0.0) > 0]
+
+    recent_active_candidates.sort(
+        key=lambda x: (x.get("last_played") or "", float(x.get("playtime_hours") or 0.0)),
+        reverse=True,
+    )
+    recent_slice = recent_active_candidates[:8]
+    recent_slice_hours = sum(float(g.get("playtime_hours") or 0.0) for g in recent_slice)
+    top_active_game_hours = float(recent_slice[0].get("playtime_hours") or 0.0) if recent_slice else 0.0
+    top_share_pct = round((top_active_game_hours / max(recent_slice_hours, 0.1)) * 100, 1) if recent_slice_hours > 0 else 0.0
+    focus_score = min(100, max(0, int(top_share_pct)))
+
+    if focus_score >= 65:
+        focus_archetype = "Serial Monogamist"
+        focus_desc = "Concentrates heavily on one primary title until beaten."
+    elif focus_score >= 35:
+        focus_archetype = "Balanced Juggler"
+        focus_desc = "Rotates smoothly across 2 to 4 active titles in parallel."
+    else:
+        focus_archetype = "Channel Surfer"
+        focus_desc = "Disperses playtime across numerous games simultaneously."
+
+    rotation_focus = {
+        "focus_score": focus_score,
+        "archetype": focus_archetype,
+        "description": focus_desc,
+        "active_rotation_count": len(recent_slice),
+        "recent_games": [
+            {
+                "id": g["id"],
+                "title": g["title"],
+                "platform": g["platform"],
+                "hours": float(g.get("playtime_hours") or 0.0),
+                "completion_status": g.get("completion_status"),
+                "cover_url": g.get("cover_url"),
+                "last_played": g.get("last_played"),
+                "share_pct": round((float(g.get("playtime_hours") or 0.0) / max(recent_slice_hours, 0.1)) * 100, 1),
+            }
+            for g in recent_slice
+        ],
+    }
+
+    # 4. Contrarian Index (Critic vs. Personal Rating)
+    rated_both = []
+    for g in games:
+        ur = g.get("user_rating")
+        cs = g.get("critic_score")
+        if ur is not None and cs is not None:
+            ur_float = float(ur)
+            norm_user = ur_float * 20.0 if ur_float <= 5.0 else ur_float * 10.0
+            diff = round(norm_user - float(cs), 1)
+            rated_both.append({
+                "id": g["id"],
+                "title": g["title"],
+                "platform": g["platform"],
+                "cover_url": g.get("cover_url"),
+                "user_rating": ur,
+                "user_score_norm": int(norm_user),
+                "critic_score": int(cs),
+                "delta": diff,
+                "status": g.get("completion_status"),
+            })
+
+    guilty_pleasures = sorted(
+        [r for r in rated_both if r["delta"] >= 10.0 or (r["user_score_norm"] >= 80 and r["critic_score"] <= 75)],
+        key=lambda x: x["delta"],
+        reverse=True,
+    )[:5]
+
+    overhyped_misses = sorted(
+        [r for r in rated_both if r["delta"] <= -10.0 or (r["user_score_norm"] <= 50 and r["critic_score"] >= 80) or (r["status"] == "Dropped" and r["critic_score"] >= 80)],
+        key=lambda x: x["delta"],
+    )[:5]
+
+    contrarian_score = round(
+        sum(abs(r["delta"]) for r in rated_both) / max(len(rated_both), 1),
+        1,
+    ) if rated_both else 0.0
+
+    contrarian_index = {
+        "contrarian_score": contrarian_score,
+        "guilty_pleasures": guilty_pleasures,
+        "overhyped_misses": overhyped_misses,
+        "scatter_points": rated_both[:40],
+    }
+
+    # 5. Genre Matrix (Hours vs Finish Rate Bubble Chart)
+    genre_matrix = []
+    for gd in sorted_genres[:16]:
+        h = gd["hours"]
+        cr = gd["completion_rate"]
+        cnt = gd["count"]
+        if h >= 25.0 and cr >= 50.0:
+            cat = "Dedicated Mastery"
+        elif h < 25.0 and cr >= 50.0:
+            cat = "High Execution"
+        elif h >= 25.0 and cr < 50.0:
+            cat = "Comfort Sinks"
+        else:
+            cat = "Casual Testing"
+        genre_matrix.append({
+            "genre": gd["genre"],
+            "hours": h,
+            "completion_rate": cr,
+            "count": cnt,
+            "category": cat,
+        })
+
+    # 6. Mechanic & Theme DNA (Tags)
+    tag_counts: Dict[str, Dict[str, Any]] = {}
+    for g in games:
+        st = g.get("completion_status") or "Not Played"
+        fav = bool(g.get("favorite"))
+        h = float(g.get("playtime_hours") or 0.0)
+        for tag in (g.get("tags") or []):
+            if tag not in tag_counts:
+                tag_counts[tag] = {
+                    "tag": tag,
+                    "count": 0,
+                    "hours": 0.0,
+                    "played_count": 0,
+                    "beaten_count": 0,
+                    "dropped_count": 0,
+                    "favorite_count": 0,
+                }
+            tc = tag_counts[tag]
+            tc["count"] += 1
+            tc["hours"] = round(tc["hours"] + h, 1)
+            if fav:
+                tc["favorite_count"] += 1
+            if h > 0:
+                tc["played_count"] += 1
+            if st in ("Beaten", "Completed"):
+                tc["beaten_count"] += 1
+            elif st == "Dropped":
+                tc["dropped_count"] += 1
+
+    tag_list = []
+    for tc in tag_counts.values():
+        p_cnt = max(tc["played_count"], 1)
+        tc["finish_rate"] = round((tc["beaten_count"] / p_cnt) * 100, 1) if tc["played_count"] > 0 else 0.0
+        tc["drop_rate"] = round((tc["dropped_count"] / p_cnt) * 100, 1) if tc["played_count"] > 0 else 0.0
+        tag_list.append(tc)
+
+    tag_list.sort(key=lambda x: (x["hours"], x["count"]), reverse=True)
+    top_tags = tag_list[:12]
+
+    qualified_for_insights = [t for t in tag_list if t["played_count"] >= 2]
+    best_tag = max(qualified_for_insights, key=lambda x: x["finish_rate"], default=None) if qualified_for_insights else None
+    worst_tag = max(qualified_for_insights, key=lambda x: x["drop_rate"], default=None) if qualified_for_insights else None
+
+    mechanic_dna = {
+        "tags": top_tags,
+        "best_finished_tag": best_tag,
+        "worst_dropped_tag": worst_tag,
+    }
+
+    # 7. Subscription / Game Pass ROI
+    sub_games = [g for g in games if g.get("is_game_pass") or g.get("ownership_status") == "Subscription"]
+    owned_games = [g for g in games if (g.get("ownership_status") or "Owned") == "Owned" and not g.get("is_game_pass")]
+
+    def _calc_cohort_stats(cohort: List[Dict[str, Any]]) -> Dict[str, Any]:
+        c_count = len(cohort)
+        c_hours = round(sum(float(g.get("playtime_hours") or 0.0) for g in cohort), 1)
+        c_played = [g for g in cohort if float(g.get("playtime_hours") or 0.0) > 0]
+        c_p_count = len(c_played)
+        c_beaten = sum(1 for g in cohort if g.get("completion_status") in ("Beaten", "Completed"))
+        c_dropped = sum(1 for g in cohort if g.get("completion_status") == "Dropped")
+        c_tourist = sum(1 for g in cohort if 0 < float(g.get("playtime_hours") or 0.0) < 1.0)
+        return {
+            "count": c_count,
+            "hours": c_hours,
+            "played_count": c_p_count,
+            "avg_hours": round(c_hours / max(c_count, 1), 1),
+            "completion_rate": round((c_beaten / max(c_p_count, 1)) * 100, 1) if c_p_count > 0 else 0.0,
+            "drop_rate": round((c_dropped / max(c_p_count, 1)) * 100, 1) if c_p_count > 0 else 0.0,
+            "tourist_rate": round((c_tourist / max(c_p_count, 1)) * 100, 1) if c_p_count > 0 else 0.0,
+            "tourist_count": c_tourist,
+        }
+
+    subscription_roi = {
+        "subscription": _calc_cohort_stats(sub_games),
+        "owned": _calc_cohort_stats(owned_games),
+    }
+
+    # 8. Double-Dip & Cross-Platform Overlap
+    canonical_map: Dict[str, List[Dict[str, Any]]] = {}
+    for g in games:
+        key = str(g.get("canonical_id") or g.get("title", "").strip().lower())
+        if key not in canonical_map:
+            canonical_map[key] = []
+        canonical_map[key].append(g)
+
+    double_dipped_titles = []
+    pair_counts: Dict[str, int] = {}
+    double_dipped_hours = 0.0
+
+    for title_key, members in canonical_map.items():
+        unique_plats = sorted({_platform_family(m.get("platform") or "") for m in members})
+        if len(unique_plats) > 1:
+            tot_h = round(sum(float(m.get("playtime_hours") or 0.0) for m in members), 1)
+            double_dipped_hours = round(double_dipped_hours + tot_h, 1)
+            pair_key = " + ".join(unique_plats[:2])
+            pair_counts[pair_key] = pair_counts.get(pair_key, 0) + 1
+            primary = max(members, key=lambda m: float(m.get("playtime_hours") or 0.0))
+            double_dipped_titles.append({
+                "title": primary["title"],
+                "platforms": unique_plats,
+                "total_hours": tot_h,
+                "cover_url": primary.get("cover_url"),
+                "platform_hours": [
+                    {"platform": m["platform"], "hours": float(m.get("playtime_hours") or 0.0)}
+                    for m in members
+                ],
+            })
+
+    double_dipped_titles.sort(key=lambda x: x["total_hours"], reverse=True)
+
+    cross_platform = {
+        "double_dipped_count": len(double_dipped_titles),
+        "double_dipped_hours": double_dipped_hours,
+        "pairs": [
+            {"pair": k, "count": v}
+            for k, v in sorted(pair_counts.items(), key=lambda x: x[1], reverse=True)
+        ],
+        "top_titles": double_dipped_titles[:6],
+    }
+
+    # 9. Trophy Hunter / Rarity Pyramid
+    ultra_rare = {"unlocked": 0, "total": 0, "pct": 0.0}
+    rare = {"unlocked": 0, "total": 0, "pct": 0.0}
+    common = {"unlocked": 0, "total": 0, "pct": 0.0}
+
+    if filtered_game_ids:
+        placeholders = ",".join("?" for _ in filtered_game_ids)
+        try:
+            with get_connection(db_path) as conn:
+                row_pyr = conn.execute(
+                    f"""
+                    SELECT
+                        SUM(CASE WHEN rarity_pct < 5.0 AND rarity_pct IS NOT NULL THEN 1 ELSE 0 END) as ur_tot,
+                        SUM(CASE WHEN rarity_pct < 5.0 AND rarity_pct IS NOT NULL AND unlocked = 1 THEN 1 ELSE 0 END) as ur_unl,
+                        SUM(CASE WHEN rarity_pct >= 5.0 AND rarity_pct < 20.0 THEN 1 ELSE 0 END) as r_tot,
+                        SUM(CASE WHEN rarity_pct >= 5.0 AND rarity_pct < 20.0 AND unlocked = 1 THEN 1 ELSE 0 END) as r_unl,
+                        SUM(CASE WHEN rarity_pct >= 20.0 OR rarity_pct IS NULL THEN 1 ELSE 0 END) as c_tot,
+                        SUM(CASE WHEN (rarity_pct >= 20.0 OR rarity_pct IS NULL) AND unlocked = 1 THEN 1 ELSE 0 END) as c_unl
+                    FROM game_achievements
+                    WHERE game_id IN ({placeholders})
+                    """,
+                    filtered_game_ids,
+                ).fetchone()
+                if row_pyr and (row_pyr["ur_tot"] is not None or row_pyr["r_tot"] is not None or row_pyr["c_tot"] is not None):
+                    ur_tot = row_pyr["ur_tot"] or 0
+                    ur_unl = row_pyr["ur_unl"] or 0
+                    ultra_rare = {
+                        "unlocked": ur_unl,
+                        "total": ur_tot,
+                        "pct": round((ur_unl / max(ur_tot, 1)) * 100, 1) if ur_tot > 0 else 0.0,
+                    }
+                    r_tot = row_pyr["r_tot"] or 0
+                    r_unl = row_pyr["r_unl"] or 0
+                    rare = {
+                        "unlocked": r_unl,
+                        "total": r_tot,
+                        "pct": round((r_unl / max(r_tot, 1)) * 100, 1) if r_tot > 0 else 0.0,
+                    }
+                    c_tot = row_pyr["c_tot"] or 0
+                    c_unl = row_pyr["c_unl"] or 0
+                    common = {
+                        "unlocked": c_unl,
+                        "total": c_tot,
+                        "pct": round((c_unl / max(c_tot, 1)) * 100, 1) if c_tot > 0 else 0.0,
+                    }
+        except Exception:
+            pass
+
+    trophy_pyramid = {
+        "ultra_rare": ultra_rare,
+        "rare": rare,
+        "common": common,
+    }
+
+    # 10. Almost Perfect Games (Closest to 100% Mastery)
+    almost_perfect_candidates = []
+    for g in games:
+        tot_ach = int(g.get("achievements_total") or 0)
+        unl_ach = int(g.get("achievements_unlocked") or 0)
+        if tot_ach >= 3 and 0 < unl_ach < tot_ach:
+            pct = round((unl_ach / tot_ach) * 100, 1)
+            if pct >= 70.0:
+                almost_perfect_candidates.append({
+                    "id": g["id"],
+                    "title": g["title"],
+                    "platform": g["platform"],
+                    "cover_url": g.get("cover_url"),
+                    "unlocked": unl_ach,
+                    "total": tot_ach,
+                    "remaining": tot_ach - unl_ach,
+                    "pct": pct,
+                })
+
+    almost_perfect_candidates.sort(key=lambda x: (x["pct"], -x["remaining"]), reverse=True)
+    almost_perfect = almost_perfect_candidates[:8]
+
     return {
         "summary": {
             "total_games": total_games,
@@ -2267,6 +2753,16 @@ def get_habits_analytics(
             "backlog_gems": backlog_gems,
         },
         "hall_of_fame": hall_of_fame,
+        "circadian_rhythm": circadian_rhythm,
+        "quit_curve": quit_curve,
+        "rotation_focus": rotation_focus,
+        "contrarian_index": contrarian_index,
+        "genre_matrix": genre_matrix,
+        "mechanic_dna": mechanic_dna,
+        "subscription_roi": subscription_roi,
+        "cross_platform": cross_platform,
+        "trophy_pyramid": trophy_pyramid,
+        "almost_perfect": almost_perfect,
     }
 
 
