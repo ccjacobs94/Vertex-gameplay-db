@@ -1035,6 +1035,14 @@ textarea:focus {
   flex: 1 1 auto;
 }
 
+.card-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+  min-inline-size: 0;
+}
+
 .card-title {
   margin: 0;
   font-size: 0.88rem;
@@ -1043,6 +1051,8 @@ textarea:focus {
   letter-spacing: -0.01em;
   line-height: 1.25;
   display: block;
+  flex: 1 1 auto;
+  min-inline-size: 0;
   white-space: nowrap;
   overflow: clip;
   text-overflow: ellipsis;
@@ -1177,6 +1187,11 @@ textarea:focus {
   justify-content: center;
   color: #fbbf24;
   flex-shrink: 0;
+}
+
+.card-fav-indicator svg {
+  inline-size: 0.8rem;
+  block-size: 0.8rem;
 }
 
 .card-genres {
