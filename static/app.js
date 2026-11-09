@@ -3786,7 +3786,9 @@ async function saveTimezonePreferences() {
       }, 4000);
 
       // Immediately refresh habits analytics
-      loadHabitsAnalytics();
+      if (typeof fetchHabitsAnalytics === "function") {
+        fetchHabitsAnalytics();
+      }
     } else {
       msgEl.className = "connections-status-msg error";
       msgEl.textContent = data.detail || "Failed to update timezone settings.";
