@@ -108,10 +108,22 @@ class XboxSessionMonitor:
         if not presence_payload:
             return None
 
+        # Unwrap {"content": ...} envelope if returned by OpenXBL
+        if isinstance(presence_payload, dict) and "content" in presence_payload:
+            presence_payload = presence_payload["content"]
+
         records = presence_payload if isinstance(presence_payload, list) else [presence_payload]
 
         for entry in records:
             if not isinstance(entry, dict):
+                continue
+
+            # Unwrap inner content if nested
+            if "content" in entry and isinstance(entry["content"], dict):
+                entry = entry["content"]
+
+            # If user state is explicitly Offline, no active game title
+            if str(entry.get("state") or "").lower() == "offline":
                 continue
 
             # Check devices[] format
@@ -155,24 +167,21 @@ class XboxSessionMonitor:
         tid_int = int(title_id) if str(title_id).isdigit() else None
         tid_str = str(title_id)
 
-        # 1. statlistscollection format
-        stat_groups = (stats_payload.get("statlistscollection") or [{}])[0].get("stats") or []
-        for s in stat_groups:
-            s_tid = s.get("titleid") or s.get("titleId")
-            s_name = s.get("name")
-            if (s_tid == tid_int or str(s_tid) == tid_str) and str(s_name).lower() == "minutesplayed":
-                val = s.get("value")
-                if val is not None and str(val).strip() != "":
-                    try:
-                        return float(val)
-                    except (ValueError, TypeError):
-                        pass
+        # Look in top-level or under "content"
+        colls = (
+            (stats_payload.get("content") or {}).get("statlistscollection")
+            or stats_payload.get("statlistscollection")
+            or []
+        )
+        if isinstance(colls, dict):
+            colls = [colls]
 
-        # 2. content.statlistscollection format
-        content = stats_payload.get("content") or {}
-        if isinstance(content, dict):
-            stat_groups_c = (content.get("statlistscollection") or [{}])[0].get("stats") or []
-            for s in stat_groups_c:
+        for coll in colls:
+            if not isinstance(coll, dict):
+                continue
+            for s in coll.get("stats") or []:
+                if not isinstance(s, dict):
+                    continue
                 s_tid = s.get("titleid") or s.get("titleId")
                 s_name = s.get("name")
                 if (s_tid == tid_int or str(s_tid) == tid_str) and str(s_name).lower() == "minutesplayed":
@@ -214,13 +223,16 @@ class XboxSessionMonitor:
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        clean_tid = str(title_id).strip()
         body = {
-            "titleIds": [int(title_id) if title_id.isdigit() else title_id]
+            "titleIds": [int(clean_tid) if clean_tid.isdigit() else clean_tid]
         }
         endpoints = []
         if self.target_xuid:
-            endpoints.append(f"https://api.xbl.io/v2/achievements/stats/{self.target_xuid}")
+            endpoints.append("https://xbl.io/api/v2/player/stats")
             endpoints.append(f"https://xbl.io/api/v2/achievements/stats/{self.target_xuid}")
+            endpoints.append(f"https://api.xbl.io/v2/achievements/stats/{self.target_xuid}")
+        else:
             endpoints.append("https://xbl.io/api/v2/player/stats")
 
         async with httpx.AsyncClient(timeout=20.0, headers=headers) as client:
@@ -229,7 +241,7 @@ class XboxSessionMonitor:
                     if ep.endswith("/player/stats"):
                         r = await client.post(
                             ep,
-                            json={"xuids": [self.target_xuid], "stats": [{"name": "MinutesPlayed", "titleId": title_id}]},
+                            json={"xuids": [str(self.target_xuid)] if self.target_xuid else [], "stats": [{"name": "MinutesPlayed", "titleId": clean_tid}]},
                         )
                     else:
                         r = await client.post(ep, json=body)
@@ -472,6 +484,7 @@ async def run_daily_reconciliation_sweep(
                                 "titleId": t_id,
                                 "name": t.get("name") or f"Xbox Title {t_id}",
                                 "lastTimePlayed": last_time,
+                                "currentAchievements": int((t.get("achievement") or {}).get("currentAchievements") or 0),
                             })
         except Exception as exc:
             logger.warning("Daily sweep player achievements call failed: %s", exc)
@@ -480,28 +493,58 @@ async def run_daily_reconciliation_sweep(
         return {"status": "ok", "reconciled_count": 0, "titles_checked": 0}
 
     # 2. Batch-request MinutesPlayed for those specific titleIds (1 call)
-    title_ids = [int(t["titleId"]) if t["titleId"].isdigit() else t["titleId"] for t in recent_titles]
+    title_ids = [str(t["titleId"]) for t in recent_titles]
     playtime_map: Dict[str, float] = {}
 
+    endpoints = [
+        "https://xbl.io/api/v2/player/stats",
+        f"https://xbl.io/api/v2/achievements/stats/{clean_xuid}",
+        f"https://api.xbl.io/v2/achievements/stats/{clean_xuid}",
+    ]
+
     async with httpx.AsyncClient(timeout=25.0, headers=headers) as client:
-        try:
-            r = await client.post(
-                f"https://api.xbl.io/v2/achievements/stats/{clean_xuid}",
-                json={"titleIds": title_ids},
-            )
-            if r.status_code == 200:
-                s_payload = r.json()
-                stat_groups = (s_payload.get("statlistscollection") or [{}])[0].get("stats") or []
-                for s in stat_groups:
-                    s_tid = str(s.get("titleid") or s.get("titleId") or "")
-                    s_name = str(s.get("name") or "").lower()
-                    if s_name == "minutesplayed" and s.get("value") is not None:
-                        try:
-                            playtime_map[s_tid] = float(s["value"])
-                        except (ValueError, TypeError):
-                            pass
-        except Exception as exc:
-            logger.warning("Daily sweep batch stats call failed: %s", exc)
+        for ep in endpoints:
+            try:
+                if ep.endswith("/player/stats"):
+                    r = await client.post(
+                        ep,
+                        json={
+                            "xuids": [clean_xuid],
+                            "stats": [{"name": "MinutesPlayed", "titleId": tid} for tid in title_ids],
+                        },
+                    )
+                else:
+                    r = await client.post(
+                        ep,
+                        json={"titleIds": [int(tid) if tid.isdigit() else tid for tid in title_ids]},
+                    )
+
+                if r.status_code == 200:
+                    s_payload = r.json()
+                    colls = (
+                        (s_payload.get("content") or {}).get("statlistscollection")
+                        or s_payload.get("statlistscollection")
+                        or []
+                    )
+                    if isinstance(colls, dict):
+                        colls = [colls]
+                    for coll in colls:
+                        if not isinstance(coll, dict):
+                            continue
+                        for s in coll.get("stats") or []:
+                            if not isinstance(s, dict):
+                                continue
+                            s_tid = str(s.get("titleid") or s.get("titleId") or "")
+                            s_name = str(s.get("name") or "").lower()
+                            if s_name == "minutesplayed" and s.get("value") is not None:
+                                try:
+                                    playtime_map[s_tid] = float(s["value"])
+                                except (ValueError, TypeError):
+                                    pass
+                    if playtime_map:
+                        break
+            except Exception as exc:
+                logger.debug("Daily sweep stats fetch failed at %s: %s", ep, exc)
 
     reconciled_count = 0
     with get_connection(db_path) as conn:
@@ -509,6 +552,7 @@ async def run_daily_reconciliation_sweep(
             tid = t_info["titleId"]
             name = t_info["name"]
             last_played_iso = t_info["lastTimePlayed"]
+            achs_earned = int(t_info.get("currentAchievements") or 0)
             new_minutes = playtime_map.get(tid)
             if new_minutes is None:
                 continue
@@ -523,20 +567,24 @@ async def run_daily_reconciliation_sweep(
             g_id = game_row["id"]
             # Sum recorded active_minutes for this game in game_sessions
             sess_sum_row = conn.execute(
-                "SELECT SUM(active_minutes) as tot FROM game_sessions WHERE game_id = ? AND status IN ('completed', 'reconciled')",
+                "SELECT SUM(active_minutes) as tot, COUNT(*) as cnt FROM game_sessions WHERE game_id = ? AND status IN ('completed', 'reconciled')",
                 (g_id,),
             ).fetchone()
             recorded_session_mins = float(sess_sum_row["tot"] or 0.0)
-            baseline_game_mins = float(game_row["playtime_hours"] or 0.0) * 60.0
+            session_count = int(sess_sum_row["cnt"] or 0)
 
-            # Delta between API MinutesPlayed and recorded sessions
-            unrecorded_delta = round(new_minutes - max(recorded_session_mins, baseline_game_mins), 2)
+            if session_count > 0:
+                unrecorded_delta = round(new_minutes - recorded_session_mins, 2)
+            else:
+                unrecorded_delta = round(min(new_minutes, 720.0), 2)
+
             if unrecorded_delta >= 1.0:
                 record_reconciled_session(
                     game_id=g_id,
                     delta_minutes=unrecorded_delta,
                     last_time_played_iso=last_played_iso,
                     detection_method="daily_reconciliation",
+                    achievements_earned=achs_earned,
                     user_timezone=user_timezone,
                     user_timezone_eras=user_timezone_eras,
                     db_path=db_path,

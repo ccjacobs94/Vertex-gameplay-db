@@ -777,6 +777,17 @@ async def sync_xbox(
                     return_exceptions=True,
                 )
 
+        if xuid and xbl_key:
+            try:
+                from telemetry_engine import run_daily_reconciliation_sweep
+                await run_daily_reconciliation_sweep(
+                    api_key=xbl_key,
+                    target_xuid=str(xuid),
+                    db_path=db_path,
+                )
+            except Exception as sweep_err:
+                logger.debug("Automatic Xbox session reconciliation skipped: %s", sweep_err)
+
         log_sync_event("Xbox", "success", count, f"Synced {count} Xbox / PC Game Pass titles", db_path=db_path)
         return {"source": "Xbox", "status": "success", "games_synced": count, "message": f"Synced {count} Xbox titles"}
 

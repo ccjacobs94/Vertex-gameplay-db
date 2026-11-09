@@ -237,6 +237,47 @@ class TestXboxSessionMonitor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(extracted["titleId"], "123456")
         self.assertEqual(extracted["name"], "Halo Infinite")
 
+        # OpenXBL {"content": ...} envelope format (Offline)
+        payload_openxbl_offline = {
+            "content": {
+                "xuid": "2533274978424164",
+                "state": "Offline",
+                "lastSeen": {
+                    "deviceType": "Scarlett",
+                    "titleId": "750323071",
+                    "titleName": "Home",
+                    "timestamp": "2026-11-09T20:45:26.5997916"
+                }
+            },
+            "code": 200
+        }
+        self.assertIsNone(monitor.extract_active_game_title(payload_openxbl_offline))
+
+        # OpenXBL {"content": ...} envelope format (Active Game)
+        payload_openxbl_active = {
+            "content": {
+                "xuid": "2533274978424164",
+                "state": "Online",
+                "devices": [
+                    {
+                        "type": "Scarlett",
+                        "titles": [
+                            {
+                                "id": "1679168855",
+                                "name": "A Quiet Place: The Road Ahead",
+                                "state": "Active"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "code": 200
+        }
+        extracted_xbl = monitor.extract_active_game_title(payload_openxbl_active)
+        self.assertIsNotNone(extracted_xbl)
+        self.assertEqual(extracted_xbl["titleId"], "1679168855")
+        self.assertEqual(extracted_xbl["name"], "A Quiet Place: The Road Ahead")
+
     async def test_session_state_machine_and_reconciliation(self):
         # Create game in DB
         db.upsert_synced_game(
@@ -532,13 +573,15 @@ class TestTelemetryEndpointsAndMCP(unittest.TestCase):
             },
         ]
         stats_response = {
-            "statlistscollection": [
-                {
-                    "stats": [
-                        {"titleid": 123456, "name": "MinutesPlayed", "value": "180"}
-                    ]
-                }
-            ]
+            "content": {
+                "statlistscollection": [
+                    {
+                        "stats": [
+                            {"titleid": "123456", "name": "MinutesPlayed", "value": "180"}
+                        ]
+                    }
+                ]
+            }
         }
         with patch("telemetry_engine.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
@@ -564,6 +607,13 @@ class TestTelemetryEndpointsAndMCP(unittest.TestCase):
             ))
             self.assertEqual(res["status"], "ok")
             self.assertEqual(res["titles_checked"], 1)
+            self.assertEqual(res["reconciled_count"], 1)
+
+            with db.get_connection(self.user_db_path) as conn:
+                sess_row = conn.execute("SELECT * FROM game_sessions WHERE detection_method = 'daily_reconciliation'").fetchone()
+                self.assertIsNotNone(sess_row)
+                self.assertEqual(sess_row["status"], "reconciled")
+                self.assertEqual(sess_row["active_minutes"], 180.0)
 
 
 if __name__ == "__main__":
