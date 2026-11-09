@@ -1042,6 +1042,7 @@ textarea:focus {
   color: #f4f4f5;
   letter-spacing: -0.01em;
   line-height: 1.3;
+  min-block-size: 2.6em;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
@@ -1052,10 +1053,11 @@ textarea:focus {
 .card-meta-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  justify-content: space-between;
   gap: 0.35rem;
   font-size: 0.74rem;
   color: #a1a1aa;
+  min-inline-size: 0;
 }
 
 .card-plat-indicator {
@@ -1065,11 +1067,29 @@ textarea:focus {
   color: #a1a1aa;
   font-weight: 500;
   font-size: 0.73rem;
+  min-inline-size: 0;
+  overflow: clip;
+  flex: 1 1 auto;
 }
 
 .card-plat-indicator .brand-icon {
   inline-size: 0.82rem;
   block-size: 0.82rem;
+  flex-shrink: 0;
+}
+
+.card-plat-text {
+  overflow: clip;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  min-inline-size: 0;
 }
 
 .card-gp-indicator {
@@ -1122,9 +1142,10 @@ textarea:focus {
   align-items: center;
   gap: 0.2rem;
   color: #71717a;
-  margin-inline-start: auto;
   font-size: 0.72rem;
   font-weight: 500;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .card-status-row {
@@ -2840,6 +2861,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 }
 
 .games-grid.list-view .card-title {
+  min-block-size: unset;
   -webkit-line-clamp: 1;
   line-clamp: 1;
   font-size: 0.96rem;
@@ -3281,6 +3303,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   .games-grid:not(.list-view) .card-title {
     font-size: 0.88rem;
     line-height: 1.3;
+    min-block-size: 2.6em;
   }
 
   .games-grid:not(.list-view) .card-genres {
