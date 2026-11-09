@@ -1279,34 +1279,25 @@ function renderGames() {
     platSpan.appendChild(platText);
     metaRow.appendChild(platSpan);
 
-    if (game.playtime_hours > 0) {
-      const hoursSpan = document.createElement("span");
-      hoursSpan.className = "card-time-indicator";
-      hoursSpan.innerHTML = `${LUCIDE_ICONS.clock} <span>${game.playtime_hours}h</span>`;
-      metaRow.appendChild(hoursSpan);
+    if (game.is_game_pass) {
+      const gpSpan = document.createElement("span");
+      gpSpan.className = "card-gp-indicator";
+      gpSpan.textContent = "Game Pass";
+      metaRow.appendChild(gpSpan);
+    } else if (ownStatus !== "Owned") {
+      const ownSpan = document.createElement("span");
+      const ownSlug = ownStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+      ownSpan.className = `card-ownership-indicator ${ownSlug}`;
+      ownSpan.textContent = ownStatus;
+      metaRow.appendChild(ownSpan);
     }
     body.appendChild(metaRow);
 
-    if (game.is_game_pass || ownStatus !== "Owned") {
-      const badgeRow = document.createElement("div");
-      badgeRow.className = "card-badge-row";
-      if (game.is_game_pass) {
-        const gpSpan = document.createElement("span");
-        gpSpan.className = "card-gp-indicator";
-        gpSpan.textContent = "Game Pass";
-        badgeRow.appendChild(gpSpan);
-      } else if (ownStatus !== "Owned") {
-        const ownSpan = document.createElement("span");
-        const ownSlug = ownStatus.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-        ownSpan.className = `card-ownership-indicator ${ownSlug}`;
-        ownSpan.textContent = ownStatus;
-        badgeRow.appendChild(ownSpan);
-      }
-      body.appendChild(badgeRow);
-    }
-
     const statusRow = document.createElement("div");
     statusRow.className = "card-status-row";
+
+    const statusLeft = document.createElement("div");
+    statusLeft.className = "card-status-left";
 
     const statusSelect = document.createElement("select");
     statusSelect.className = "card-quick-status";
@@ -1333,14 +1324,22 @@ function renderGames() {
         fetchGames();
       }
     });
-    statusRow.appendChild(statusSelect);
+    statusLeft.appendChild(statusSelect);
 
     if (game.favorite) {
       const favSpan = document.createElement("span");
       favSpan.className = "card-fav-indicator";
       favSpan.innerHTML = LUCIDE_ICONS.starFilled;
       favSpan.title = "Favorited";
-      statusRow.appendChild(favSpan);
+      statusLeft.appendChild(favSpan);
+    }
+    statusRow.appendChild(statusLeft);
+
+    if (game.playtime_hours > 0) {
+      const hoursSpan = document.createElement("span");
+      hoursSpan.className = "card-time-indicator";
+      hoursSpan.innerHTML = `${LUCIDE_ICONS.clock} <span>${game.playtime_hours}h</span>`;
+      statusRow.appendChild(hoursSpan);
     }
 
     body.appendChild(statusRow);
