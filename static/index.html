@@ -10,10 +10,10 @@
   <meta name="apple-mobile-web-app-title" content="Vertex">
   <title>Vertex | Unified Game Nexus</title>
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png?v=42">
-  <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg?v=42">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=42">
-  <link rel="stylesheet" href="/static/styles.css?v=42">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png?v=48">
+  <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg?v=48">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=48">
+  <link rel="stylesheet" href="/static/styles.css?v=48">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -35,7 +35,7 @@
   <header class="site-header">
     <div class="header-inner">
       <div class="brand-group">
-        <img src="/static/vertex_logo.png?v=42" alt="Vertex Logo" class="brand-logo" width="36" height="36">
+        <img src="/static/vertex_logo.png?v=48" alt="Vertex Logo" class="brand-logo" width="36" height="36">
         <div class="brand-text">
           <h1>Vertex</h1>
           <p class="subtitle" id="sync-badge">Unified Game Library</p>
@@ -223,6 +223,11 @@
           <button type="button" id="btn-gamepass-toggle" class="btn btn-chip btn-chip-gp" aria-pressed="false" title="Filter for games currently available on Xbox Game Pass">
             <svg class="brand-icon brand-icon-gp" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4.102 21.033C6.211 22.881 8.977 24 12 24c3.026 0 5.789-1.119 7.902-2.967 1.877-1.912-4.316-8.709-7.902-11.417-3.582 2.708-9.779 9.505-7.898 11.417zm11.16-14.406c2.5 2.961 7.484 10.313 6.076 12.912C23.002 17.48 24 14.861 24 12.004c0-3.34-1.365-6.362-3.57-8.536 0 0-.027-.022-.082-.042-.063-.022-.152-.045-.281-.045-.592 0-1.985.434-4.805 3.246zM3.654 3.426c-.057.02-.082.041-.086.042C1.365 5.642 0 8.664 0 12.004c0 2.854.998 5.473 2.661 7.533-1.401-2.605 3.579-9.951 6.08-12.91-2.82-2.813-4.216-3.245-4.806-3.245-.131 0-.223.021-.281.046v-.002zM12 3.551S9.055 1.828 6.755 1.746c-.903-.033-1.454.295-1.521.339C7.379.646 9.659 0 11.984 0H12c2.334 0 4.605.646 6.766 2.085-.068-.046-.615-.372-1.52-.339C14.946 1.828 12 3.545 12 3.545v.006z"/></svg>
             <span>Game Pass</span>
+          </button>
+
+          <button type="button" id="btn-play-anywhere-toggle" class="btn btn-chip btn-chip-xpa" aria-pressed="false" title="Filter for Xbox Play Anywhere games">
+            <svg class="brand-icon brand-icon-xpa" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="10" x="2" y="3" rx="2"/><rect width="6" height="10" x="16" y="11" rx="1"/><path d="M10 21H6a2 2 0 0 1-2-2v-2"/></svg>
+            <span>Play Anywhere</span>
           </button>
 
           <button type="button" id="btn-reset-filters" class="btn-link-subtle" hidden>
@@ -609,6 +614,12 @@
               <span>Available on Game Pass</span>
             </label>
           </div>
+          <div class="form-group form-checkbox-group" style="align-self: flex-end;">
+            <label class="checkbox-label" for="add-playanywhere">
+              <input type="checkbox" id="add-playanywhere" name="is_play_anywhere" />
+              <span>Xbox Play Anywhere</span>
+            </label>
+          </div>
           <div class="form-group">
             <label for="add-hours">Playtime (Hours)</label>
             <input type="number" id="add-hours" name="playtime_hours" step="any" min="0" value="0">
@@ -743,6 +754,13 @@
                 <label class="checkbox-label" for="edit-gamepass">
                   <input type="checkbox" id="edit-gamepass" name="is_game_pass" />
                   <span>Available on Game Pass</span>
+                </label>
+              </div>
+
+              <div class="form-group edit-playanywhere-group">
+                <label class="checkbox-label" for="edit-playanywhere">
+                  <input type="checkbox" id="edit-playanywhere" name="is_play_anywhere" />
+                  <span>Xbox Play Anywhere</span>
                 </label>
               </div>
 
@@ -1948,6 +1966,6 @@
     <button type="button" id="mnav-add"></button>
   </div>
 
-  <script src="/static/app.js?v=42"></script>
+  <script src="/static/app.js?v=48"></script>
 </body>
 </html>

@@ -686,6 +686,9 @@ async def sync_xbox(
                     continue
 
                 devices = t.get("devices") or []
+                is_xpa = ("Win32" in devices or "PC" in devices) and any(
+                    x in devices for x in ("XboxSeries", "XboxOne", "Xbox360")
+                )
                 if "Win32" in devices or "PC" in devices:
                     if any(x in devices for x in ("XboxSeries", "XboxOne", "Xbox360")):
                         platform = "Xbox / PC"
@@ -749,6 +752,7 @@ async def sync_xbox(
                     achievements_total=total_ach,
                     cover_url=cover_url,
                     is_game_pass=is_gp,
+                    is_play_anywhere=is_xpa,
                     db_path=db_path,
                 )
                 upserted_xbox_games.append((saved_game["id"], str(title_id), platform, playtime_hours, total_ach))
