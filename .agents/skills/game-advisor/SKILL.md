@@ -32,8 +32,9 @@ If MCP tools are not loaded in the current session, query the local REST API on 
 ## 3. Adding Games with Cover Art
 
 When adding a new game (such as a Nintendo Switch or PS4 title):
-1. First search `/api/search-external?q=<title>` to get the high-resolution `cover_url` and `release_year`.
-2. Add the game via `POST http://localhost:8095/api/games` or the `add_game_to_library` MCP tool.
+1. Call `add_game_to_library(title, platform, ...)` via MCP. If `cover_url` is omitted, cover art is automatically discovered and populated via keyless external store search (preferring vertical 2:3 capsule art).
+2. Alternatively, discover candidates and visual metadata explicitly with `search_game_candidates(query)` or `GET /api/search-external?q=<title>` and pass `cover_url` directly.
+3. To repair or replace existing cover art, call `update_game_progress(title, cover_url=...)`, or backfill missing covers across the library via `enrich_library_genres()`.
 
 ## 4. Wishlist, Price Monitoring & Smart Upgrades
 

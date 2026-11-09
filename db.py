@@ -2606,34 +2606,37 @@ def check_library_ownership_conflicts(
     owned library or play history. Returns conflict status and platforms.
     """
     norm_title = normalize_game_title(title)
-    with get_connection(db_path) as conn:
-        lib_game_id = None
-        if canonical_game_id is not None:
-            c_row = conn.execute(
-                "SELECT library_game_id FROM canonical_games WHERE id = ?",
-                (canonical_game_id,),
-            ).fetchone()
-            if c_row and c_row["library_game_id"]:
-                lib_game_id = c_row["library_game_id"]
+    try:
+        with get_connection(db_path) as conn:
+            lib_game_id = None
+            if canonical_game_id is not None:
+                c_row = conn.execute(
+                    "SELECT library_game_id FROM canonical_games WHERE id = ?",
+                    (canonical_game_id,),
+                ).fetchone()
+                if c_row and c_row["library_game_id"]:
+                    lib_game_id = c_row["library_game_id"]
 
-        all_games = conn.execute(
-            """
-            SELECT id, title, platform, source, playtime_hours, ownership_status,
-                   is_game_pass, achievements_unlocked, canonical_id
-            FROM games
-            """
-        ).fetchall()
+            all_games = conn.execute(
+                """
+                SELECT id, title, platform, source, playtime_hours, ownership_status,
+                       is_game_pass, achievements_unlocked, canonical_id
+                FROM games
+                """
+            ).fetchall()
 
+            matched_rows = []
+            for g in all_games:
+                is_match = False
+                if lib_game_id is not None and (g["id"] == lib_game_id or g["canonical_id"] == lib_game_id):
+                    is_match = True
+                elif normalize_game_title(g["title"]) == norm_title:
+                    is_match = True
+
+                if is_match:
+                    matched_rows.append(g)
+    except Exception:
         matched_rows = []
-        for g in all_games:
-            is_match = False
-            if lib_game_id is not None and (g["id"] == lib_game_id or g["canonical_id"] == lib_game_id):
-                is_match = True
-            elif normalize_game_title(g["title"]) == norm_title:
-                is_match = True
-
-            if is_match:
-                matched_rows.append(g)
 
     conflicted_platforms = set()
     library_games = []
