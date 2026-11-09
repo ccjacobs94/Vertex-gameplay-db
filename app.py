@@ -556,7 +556,21 @@ async def lifespan(app: FastAPI):
             logger.warning("Could not seed default user database: %s", e)
     clean_unconfigured_subaccount_libraries(default_user)
     try:
-        backfill_historical_sessions_from_achievements(str(default_user_db))
+        active_uids = system_db.list_active_user_ids()
+        if not active_uids:
+            active_uids = [default_user]
+        for uid in active_uids:
+            u_db = _get_active_user_db_path(uid)
+            tz_settings = system_db.get_user_timezone_settings(uid) or {}
+            tz = tz_settings.get("timezone") or "auto"
+            eras = tz_settings.get("timezone_eras") or []
+            backfill_historical_sessions_from_achievements(
+                db_path=str(u_db),
+                user_timezone=tz,
+                user_timezone_eras=eras,
+            )
+        if Path(DEFAULT_DB_PATH).exists():
+            backfill_historical_sessions_from_achievements(db_path=DEFAULT_DB_PATH)
     except Exception as e:
         logger.warning("Could not backfill historical sessions: %s", e)
     sync_task = asyncio.create_task(_periodic_sync_loop())
