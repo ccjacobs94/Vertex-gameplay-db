@@ -119,6 +119,7 @@ def search_game_library(
     tag: Optional[str] = None,
     ownership_status: Optional[str] = None,
     is_game_pass: Optional[bool] = None,
+    is_play_anywhere: Optional[bool] = None,
     favorite_only: bool = False,
     sort_by: str = "playtime_desc",
     limit: int = 30,
@@ -129,6 +130,7 @@ def search_game_library(
     - status: 'Not Played', 'Plan to Play', 'Playing', 'Beaten', 'Completed', 'Dropped'
     - ownership_status: 'Owned', 'Subscription', 'Borrowed', 'None' (self-reported)
     - is_game_pass: true to filter for titles currently available on Xbox Game Pass
+    - is_play_anywhere: true to filter for Xbox Play Anywhere titles
     - sort_by: 'playtime_desc', 'last_played_desc', 'rating_desc', 'title_asc'
     - tag: e.g. 'Stealth', 'Open World', 'Co-op'. Matches tags and genres.
     """
@@ -140,6 +142,7 @@ def search_game_library(
         tag=tag,
         ownership=ownership_status,
         is_game_pass=is_game_pass,
+        is_play_anywhere=is_play_anywhere,
         favorite_only=favorite_only,
         sort_by=sort_by,
         limit=limit,
@@ -153,6 +156,7 @@ def get_what_to_play_recommendations(
     tag: Optional[str] = None,
     ownership_status: Optional[str] = None,
     is_game_pass: Optional[bool] = None,
+    is_play_anywhere: Optional[bool] = None,
     max_candidates: int = 20,
 ) -> Dict[str, Any]:
     """
@@ -164,6 +168,7 @@ def get_what_to_play_recommendations(
     - tag: filter backlog by mechanic/mode/theme (e.g. 'Stealth', 'Co-op', 'Open World')
     - ownership_status: optional filter ('Owned', 'Subscription', 'Borrowed', 'None')
     - is_game_pass: optional filter for titles currently on Xbox Game Pass
+    - is_play_anywhere: optional filter for Xbox Play Anywhere titles
     """
     all_games = query_games(limit=2000)
 
@@ -180,6 +185,7 @@ def get_what_to_play_recommendations(
         if g.get("completion_status") == "Playing"
         and (not platform or platform.lower() in g.get("platform", "").lower())
         and (is_game_pass is None or bool(g.get("is_game_pass")) == bool(is_game_pass))
+        and (is_play_anywhere is None or bool(g.get("is_play_anywhere")) == bool(is_play_anywhere))
         and (
             not o_q
             or (g.get("ownership_status") or "Owned").lower() == o_q
@@ -196,6 +202,7 @@ def get_what_to_play_recommendations(
         and (g.get("playtime_hours") or 0) < 2.0
         and (not platform or platform.lower() in g.get("platform", "").lower())
         and (is_game_pass is None or bool(g.get("is_game_pass")) == bool(is_game_pass))
+        and (is_play_anywhere is None or bool(g.get("is_play_anywhere")) == bool(is_play_anywhere))
         and (
             not o_q
             or (g.get("ownership_status") or "Owned").lower() == o_q
@@ -350,6 +357,7 @@ def update_game_progress(
     completion_status: Optional[str] = None,
     ownership_status: Optional[str] = None,
     is_game_pass: Optional[bool] = None,
+    is_play_anywhere: Optional[bool] = None,
     user_rating: Optional[int] = None,
     notes: Optional[str] = None,
     favorite: Optional[bool] = None,
@@ -357,7 +365,7 @@ def update_game_progress(
     """
     Update a game's completion status ('Not Played', 'Plan to Play', 'Playing', 'Beaten', 'Completed', 'Dropped'),
     ownership_status ('Owned', 'Subscription', 'Borrowed', 'None'),
-    is_game_pass (true/false), user rating (1-10), personal notes, or favorite flag by matching its title.
+    is_game_pass (true/false), is_play_anywhere (true/false), user rating (1-10), personal notes, or favorite flag by matching its title.
     """
     matches = query_games(search=title, limit=5)
     if not matches:
@@ -372,6 +380,8 @@ def update_game_progress(
         updates["ownership_status"] = normalize_ownership_status(ownership_status)
     if is_game_pass is not None:
         updates["is_game_pass"] = bool(is_game_pass)
+    if is_play_anywhere is not None:
+        updates["is_play_anywhere"] = bool(is_play_anywhere)
     if user_rating is not None:
         updates["user_rating"] = user_rating
     if notes is not None:
@@ -388,6 +398,7 @@ def update_game_ownership(
     title: Optional[str] = None,
     ownership_status: str = "Owned",
     is_game_pass: Optional[bool] = None,
+    is_play_anywhere: Optional[bool] = None,
     platform: Optional[str] = None,
     titles: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
@@ -455,6 +466,8 @@ def update_game_ownership(
         patch_dict: Dict[str, Any] = {"ownership_status": norm_own}
         if is_game_pass is not None:
             patch_dict["is_game_pass"] = bool(is_game_pass)
+        if is_play_anywhere is not None:
+            patch_dict["is_play_anywhere"] = bool(is_play_anywhere)
 
         res = update_game(target_id, patch_dict)
         if res:
@@ -465,6 +478,7 @@ def update_game_ownership(
                     "platform": res["platform"],
                     "ownership_status": res.get("ownership_status"),
                     "is_game_pass": res.get("is_game_pass"),
+                    "is_play_anywhere": res.get("is_play_anywhere"),
                     "linked_games": res.get("linked_games"),
                 }
             )
@@ -473,6 +487,7 @@ def update_game_ownership(
         "status": "updated",
         "ownership_status": norm_own,
         "is_game_pass": is_game_pass,
+        "is_play_anywhere": is_play_anywhere,
         "updated_count": len(updated_games),
         "updated_games": updated_games,
         "not_found": not_found,
@@ -486,6 +501,7 @@ def add_game_to_library(
     completion_status: str = "Plan to Play",
     ownership_status: str = "Owned",
     is_game_pass: bool = False,
+    is_play_anywhere: bool = False,
     playtime_hours: float = 0.0,
     user_rating: Optional[int] = None,
     genres: Optional[List[str]] = None,
@@ -496,6 +512,7 @@ def add_game_to_library(
     Add a new game (such as a Nintendo Switch, PS4, Xbox, or PC title) to the library.
     - ownership_status: 'Owned', 'Subscription', 'Borrowed', or 'None'
     - is_game_pass: boolean flag for Xbox Game Pass availability
+    - is_play_anywhere: boolean flag for Xbox Play Anywhere capability
     """
     ignored: List[str] = []
     for label in genres or []:
@@ -511,6 +528,7 @@ def add_game_to_library(
         completion_status=completion_status,
         ownership_status=normalize_ownership_status(ownership_status),
         is_game_pass=is_game_pass,
+        is_play_anywhere=is_play_anywhere,
         playtime_hours=playtime_hours,
         user_rating=user_rating,
         genres=validate_genres(genres),

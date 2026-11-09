@@ -759,6 +759,12 @@ textarea:focus {
   border-color: rgba(74, 222, 128, 0.6);
 }
 
+.btn-chip-xpa[aria-pressed="true"] {
+  background-color: rgba(6, 182, 212, 0.25);
+  color: #67e8f9;
+  border-color: rgba(34, 211, 238, 0.6);
+}
+
 .triage-gp-pill {
   display: inline-flex;
   align-items: center;
@@ -791,6 +797,16 @@ textarea:focus {
   border: 1px solid rgba(74, 222, 128, 0.5);
 }
 
+.badge-xpa-mini {
+  font-size: 0.65rem;
+  font-weight: 800;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  background-color: rgba(6, 182, 212, 0.85);
+  color: #ecfeff;
+  border: 1px solid rgba(34, 211, 238, 0.5);
+}
+
 /* Brand Vector Logos & Icons (Steam, Xbox, PlayStation, Switch, Game Pass) */
 .brand-icon {
   display: inline-block;
@@ -806,8 +822,17 @@ textarea:focus {
   transition: color 0.15s ease;
 }
 
+.brand-icon-xpa {
+  color: #06b6d4;
+  transition: color 0.15s ease;
+}
+
 .btn-chip-gp[aria-pressed="true"] .brand-icon-gp {
   color: #86efac;
+}
+
+.btn-chip-xpa[aria-pressed="true"] .brand-icon-xpa {
+  color: #67e8f9;
 }
 
 .platform-brand-icons {
@@ -882,6 +907,21 @@ textarea:focus {
   inline-size: 0.9rem;
   block-size: 0.9rem;
   color: #86efac;
+}
+
+.edit-header-badge.xpa {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background-color: rgba(6, 182, 212, 0.92);
+  color: #ecfeff;
+  border: 1px solid rgba(34, 211, 238, 0.55);
+}
+
+.edit-header-badge.xpa .brand-icon {
+  inline-size: 0.9rem;
+  block-size: 0.9rem;
+  color: #ecfeff;
 }
 
 #triage-plat {
@@ -1041,6 +1081,21 @@ textarea:focus {
   color: #86efac;
   background-color: rgba(16, 124, 16, 0.2);
   border: 1px solid rgba(74, 222, 128, 0.3);
+  border-radius: 3px;
+  padding-block: 0.05rem;
+  padding-inline: 0.35rem;
+  line-height: 1.2;
+}
+
+.card-xpa-indicator {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: #67e8f9;
+  background-color: rgba(6, 182, 212, 0.2);
+  border: 1px solid rgba(34, 211, 238, 0.35);
   border-radius: 3px;
   padding-block: 0.05rem;
   padding-inline: 0.35rem;
