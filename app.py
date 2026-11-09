@@ -22,7 +22,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 from zoneinfo import ZoneInfo
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -60,19 +64,25 @@ from db import (
     DEFAULT_DB_PATH,
     USERS_DB_DIR,
     add_manual_game,
+    backfill_historical_sessions_from_achievements,
+    commit_session_to_database,
     delete_game,
     dismiss_reconcile_group,
+    get_active_sessions,
     get_game_achievements,
     get_game_by_id,
     get_habits_analytics,
     get_library_stats,
     get_pending_playtime_prompts,
     get_reconcile_candidates,
+    get_sessions_analytics,
     init_db,
     query_games,
     reconcile_games,
+    record_reconciled_session,
     reset_reconcile_dismissals,
     resolve_playtime_prompt,
+    start_session,
     unlink_game,
     update_game,
 )
@@ -85,7 +95,6 @@ from sync_engine import (
     sync_xbox,
 )
 
-load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -184,6 +193,97 @@ async def _periodic_wishlist_sync_loop() -> None:
         except Exception as exc:
             logger.error("Error in scheduled wishlist sync loop: %s", exc)
         await asyncio.sleep(max(WISHLIST_SYNC_INTERVAL_HOURS, 1.0) * 3600)
+
+
+_user_telemetry_monitors: Dict[str, Any] = {}
+_user_rta_tasks: Dict[str, asyncio.Task] = {}
+
+
+async def _periodic_telemetry_loop() -> None:
+    """Mode B / Mode A heartbeat loop checking presence every 15 mins (or 45m quiet hours)."""
+    await asyncio.sleep(5)
+    while True:
+        try:
+            active_uids = system_db.list_active_user_ids()
+            if not active_uids:
+                default_user = get_auth_username()
+                active_uids = [default_user]
+            for uid in active_uids:
+                try:
+                    conn = system_db.get_user_connections(uid)
+                    api_key = conn.get("xbl_api_key") or os.environ.get("XBL_API_KEY", "")
+                    xuid = conn.get("xbox_xuid")
+                    if not xuid and conn.get("xbox_gamertag") and api_key:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
+                            gt_data = await resolve_xbox_gamertag(client, api_key, conn["xbox_gamertag"])
+                            if gt_data and gt_data.get("xuid"):
+                                xuid = gt_data["xuid"]
+                                system_db.set_user_connections(uid, xbox_xuid=xuid)
+                    if api_key and xuid:
+                        user_db_path = str(_get_active_user_db_path(uid))
+                        tz_settings = system_db.get_user_timezone_settings(uid) or {}
+                        tz = tz_settings.get("timezone") or "auto"
+                        eras = tz_settings.get("timezone_eras") or []
+
+                        monitor = _user_telemetry_monitors.get(uid)
+                        if not monitor:
+                            from telemetry_engine import XboxSessionMonitor
+                            monitor = XboxSessionMonitor(
+                                api_key=api_key,
+                                target_xuid=str(xuid),
+                                db_path=user_db_path,
+                                user_timezone=tz,
+                                user_timezone_eras=eras,
+                            )
+                            _user_telemetry_monitors[uid] = monitor
+
+                        watcher_key = conn.get("xbl_watcher_api_key")
+                        if watcher_key and uid not in _user_rta_tasks:
+                            from telemetry_engine import XboxRtaWebSocketClient
+                            client = XboxRtaWebSocketClient(watcher_key, str(xuid), monitor)
+                            task = asyncio.create_task(client.run())
+                            _user_rta_tasks[uid] = task
+
+                        await monitor.poll_presence_heartbeat()
+                except Exception as user_exc:
+                    logger.debug("Telemetry heartbeat check failed for %s: %s", uid, user_exc)
+        except Exception as exc:
+            logger.error("Error in periodic telemetry loop: %s", exc)
+
+        await asyncio.sleep(15 * 60)
+
+
+async def _periodic_daily_sweep_loop() -> None:
+    """Mode C: Daily 4:00 AM Reconciliation Sweep for handheld/offline play."""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            active_uids = system_db.list_active_user_ids()
+            if not active_uids:
+                default_user = get_auth_username()
+                active_uids = [default_user]
+            for uid in active_uids:
+                try:
+                    conn = system_db.get_user_connections(uid)
+                    api_key = conn.get("xbl_api_key") or os.environ.get("XBL_API_KEY", "")
+                    xuid = conn.get("xbox_xuid")
+                    if api_key and xuid:
+                        user_db_path = str(_get_active_user_db_path(uid))
+                        tz_settings = system_db.get_user_timezone_settings(uid) or {}
+                        tz = tz_settings.get("timezone") or "auto"
+                        from telemetry_engine import run_daily_reconciliation_sweep
+                        await run_daily_reconciliation_sweep(
+                            api_key=api_key,
+                            target_xuid=str(xuid),
+                            db_path=user_db_path,
+                            user_timezone=tz,
+                        )
+                except Exception as sweep_err:
+                    logger.debug("Daily sweep error for %s: %s", uid, sweep_err)
+        except Exception as exc:
+            logger.error("Error in daily reconciliation sweep loop: %s", exc)
+
+        await asyncio.sleep(24 * 3600)
 
 
 def get_allowed_mcp_hosts() -> List[str]:
@@ -455,13 +555,23 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Could not seed default user database: %s", e)
     clean_unconfigured_subaccount_libraries(default_user)
+    try:
+        backfill_historical_sessions_from_achievements(str(default_user_db))
+    except Exception as e:
+        logger.warning("Could not backfill historical sessions: %s", e)
     sync_task = asyncio.create_task(_periodic_sync_loop())
     wishlist_task = asyncio.create_task(_periodic_wishlist_sync_loop())
+    telemetry_task = asyncio.create_task(_periodic_telemetry_loop())
+    sweep_task = asyncio.create_task(_periodic_daily_sweep_loop())
     mcp_task = asyncio.create_task(_run_mcp_http_server("0.0.0.0", MCP_PORT))
     logger.info("Started MCP Streamable HTTP server on port %s with CORS & OAuth discovery", MCP_PORT)
     yield
     sync_task.cancel()
     wishlist_task.cancel()
+    telemetry_task.cancel()
+    sweep_task.cancel()
+    for rta_task in _user_rta_tasks.values():
+        rta_task.cancel()
     mcp_task.cancel()
 
 
@@ -538,7 +648,7 @@ def is_allowed_host(host_header: str) -> bool:
 
 
 _CSRF_PROTECTED_METHODS = ("POST", "PUT", "PATCH", "DELETE")
-_CSRF_EXEMPT_PATHS = ("/billing/webhook",)
+_CSRF_EXEMPT_PATHS = ("/billing/webhook", "/api/webhooks/session-transition")
 
 
 def _is_cross_site_request(request: Request) -> bool:
@@ -731,6 +841,21 @@ class UserConnectionsUpdateRequest(BaseModel):
     xbl_api_key: Optional[str] = None
     xbox_gamertag: Optional[str] = None
     psn_npsso: Optional[str] = None
+    xbl_watcher_api_key: Optional[str] = None
+
+
+class SessionTransitionRequest(BaseModel):
+    source: str = Field(default="webhook")
+    external_id: Optional[str] = None
+    event: str = Field(..., pattern="^(start|stop|record)$")
+    title: Optional[str] = None
+    platform: Optional[str] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    wall_clock_minutes: Optional[int] = None
+    active_minutes: Optional[int] = None
+    idle_minutes: Optional[int] = None
+    achievements_unlocked: Optional[int] = 0
 
 
 class ConnectionTestRequest(BaseModel):
@@ -1111,6 +1236,148 @@ async def api_get_analytics(
         user_timezone=tz,
         user_timezone_eras=eras,
     )
+
+
+@app.get("/api/analytics/sessions")
+async def api_get_sessions_analytics(
+    request: Request,
+    days: int = Query(default=365, ge=1, le=730),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    title: Optional[str] = Query(default=None),
+    platform: Optional[str] = Query(default=None),
+    client_timezone: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    tz = "auto"
+    eras = []
+    if user_id:
+        try:
+            tz_settings = system_db.get_user_timezone_settings(user_id)
+            tz = tz_settings.get("timezone") or "auto"
+            eras = tz_settings.get("timezone_eras") or []
+        except Exception:
+            pass
+
+    if tz == "auto" and client_timezone:
+        tz = client_timezone.strip()
+
+    user_db_path = str(_get_active_user_db_path(user_id))
+    return get_sessions_analytics(
+        db_path=user_db_path,
+        days=days,
+        limit=limit,
+        offset=offset,
+        title=title,
+        platform=platform,
+        user_timezone=tz,
+        user_timezone_eras=eras,
+    )
+
+
+@app.post("/api/webhooks/session-transition")
+async def api_session_transition(
+    payload: SessionTransitionRequest, request: Request
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    user_db_path = str(_get_active_user_db_path(user_id))
+
+    # Resolve game if title or external_id is given
+    game_id = None
+    if payload.title:
+        with db.get_connection(user_db_path) as conn:
+            if payload.platform:
+                row = conn.execute(
+                    "SELECT id FROM games WHERE LOWER(title) = LOWER(?) AND LOWER(platform) = LOWER(?) ORDER BY id ASC LIMIT 1",
+                    (payload.title.strip(), payload.platform.strip()),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT id FROM games WHERE LOWER(title) = LOWER(?) ORDER BY id ASC LIMIT 1",
+                    (payload.title.strip(),),
+                ).fetchone()
+            if row:
+                game_id = row["id"]
+        if not game_id:
+            new_game = db.add_manual_game(
+                title=payload.title.strip(),
+                platform=payload.platform.strip() if payload.platform else "PC",
+                completion_status="Playing",
+                db_path=user_db_path,
+            )
+            game_id = new_game["id"]
+
+    ev = payload.event.lower()
+    if ev == "start":
+        sess = start_session(
+            game_id=game_id,
+            external_title_id=payload.external_id or "",
+            started_at=payload.started_at,
+            detection_method=payload.source,
+            source=payload.source,
+            platform=payload.platform,
+            db_path=user_db_path,
+        )
+        return {"status": "started", "session_id": sess["id"]}
+
+    elif ev == "stop":
+        active_sessions = get_active_sessions(db_path=user_db_path)
+        matching = None
+        for s in active_sessions:
+            if payload.external_id and str(s.get("external_title_id")) == str(payload.external_id):
+                matching = s
+                break
+            if game_id and s.get("game_id") == game_id:
+                matching = s
+                break
+
+        if matching:
+            ended_at = payload.ended_at or datetime.now(timezone.utc).isoformat()
+            started_dt = db.parse_iso_datetime(matching.get("started_at"))
+            ended_dt = db.parse_iso_datetime(ended_at)
+            calc_wall = round((ended_dt - started_dt).total_seconds() / 60, 2) if (started_dt and ended_dt) else 0.0
+            wall_mins = float(payload.wall_clock_minutes) if payload.wall_clock_minutes is not None else calc_wall
+            act_mins = float(payload.active_minutes) if payload.active_minutes is not None else wall_mins
+            idle_mins = float(payload.idle_minutes) if payload.idle_minutes is not None else max(0.0, wall_mins - act_mins)
+
+            commit_session_to_database(
+                session_id=matching["id"],
+                ended_at=ended_at,
+                wall_clock_minutes=wall_mins,
+                active_minutes=act_mins,
+                idle_minutes=idle_mins,
+                achievements_earned=payload.achievements_unlocked or 0,
+                status="completed",
+                db_path=user_db_path,
+            )
+            return {"status": "committed", "session_id": matching["id"], "active_minutes": act_mins}
+        else:
+            delta = float(payload.active_minutes or payload.wall_clock_minutes or 0)
+            end_iso = payload.ended_at or datetime.now(timezone.utc).isoformat()
+            rec = record_reconciled_session(
+                game_id=game_id,
+                delta_minutes=delta,
+                last_time_played_iso=end_iso,
+                detection_method=payload.source,
+                achievements_earned=payload.achievements_unlocked or 0,
+                db_path=user_db_path,
+            )
+            return {"status": "recorded", "session_id": rec["id"] if rec else None}
+
+    elif ev == "record":
+        delta = float(payload.active_minutes or payload.wall_clock_minutes or 0)
+        end_iso = payload.ended_at or datetime.now(timezone.utc).isoformat()
+        rec = record_reconciled_session(
+            game_id=game_id,
+            delta_minutes=delta,
+            last_time_played_iso=end_iso,
+            detection_method=payload.source,
+            achievements_earned=payload.achievements_unlocked or 0,
+            db_path=user_db_path,
+        )
+        return {"status": "recorded", "session_id": rec["id"] if rec else None}
+
+    return {"status": "ignored"}
 
 
 @app.post("/api/games")
@@ -1875,6 +2142,7 @@ async def api_update_user_connections(
                 xbl = cleaned_xbl
 
     psn = "" if payload.psn_npsso == "__CLEAR__" else (clean_psn_token(payload.psn_npsso) if payload.psn_npsso else None)
+    xbl_watcher = "" if payload.xbl_watcher_api_key == "__CLEAR__" else (clean_xbl_key(payload.xbl_watcher_api_key) if payload.xbl_watcher_api_key else None)
 
     # Attempt to resolve xuid immediately if gamertag is configured and server has key
     resolved_xuid = None
@@ -1895,6 +2163,7 @@ async def api_update_user_connections(
         xbox_gamertag=xbox_gt,
         xbox_xuid=resolved_xuid,
         psn_npsso=psn,
+        xbl_watcher_api_key=xbl_watcher,
     )
     return {
         "status": "ok",
@@ -1905,6 +2174,7 @@ async def api_update_user_connections(
             "xbox_gamertag": updated.get("xbox_gamertag", ""),
             "xbox_xuid": updated.get("xbox_xuid", ""),
             "has_psn_npsso": bool(updated.get("psn_npsso")),
+            "has_xbl_watcher_api_key": bool(updated.get("xbl_watcher_api_key")),
             "onboarding_completed": bool(updated.get("onboarding_completed", False)),
         },
     }
