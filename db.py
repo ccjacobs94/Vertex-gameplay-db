@@ -10,6 +10,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
 
 from context import current_user_id
 
@@ -2002,6 +2003,8 @@ def get_habits_analytics(
     is_game_pass: Optional[bool] = None,
     is_play_anywhere: Optional[bool] = None,
     favorite_only: bool = False,
+    user_timezone: Optional[str] = None,
+    user_timezone_eras: Optional[List[Dict[str, Any]]] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -2241,6 +2244,20 @@ def get_habits_analytics(
     total_rhythm_events = 0
     time_buckets = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
 
+    # Resolve user base timezone & historical eras
+    base_tz_str = (user_timezone or "").strip()
+    base_tz = None
+    if base_tz_str and base_tz_str.lower() != "auto":
+        try:
+            base_tz = ZoneInfo(base_tz_str)
+        except Exception:
+            base_tz = None
+    if base_tz is None:
+        try:
+            base_tz = datetime.now().astimezone().tzinfo or timezone.utc
+        except Exception:
+            base_tz = timezone.utc
+
     def _parse_ts(val: Any) -> Optional[datetime]:
         if not val or not isinstance(val, str):
             return None
@@ -2250,15 +2267,49 @@ def get_habits_analytics(
         if v.endswith("Z"):
             v = v[:-1] + "+00:00"
         try:
-            return datetime.fromisoformat(v)
+            dt = datetime.fromisoformat(v)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except Exception:
             pass
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
             try:
-                return datetime.strptime(v, fmt)
+                dt = datetime.strptime(v, fmt)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
             except Exception:
                 continue
         return None
+
+    valid_eras: List[Dict[str, Any]] = []
+    for era in (user_timezone_eras or []):
+        if not isinstance(era, dict):
+            continue
+        e_tz_str = (era.get("timezone") or "").strip()
+        e_until = era.get("until")
+        if not e_tz_str or not e_until:
+            continue
+        try:
+            e_tz = ZoneInfo(e_tz_str)
+            e_until_dt = _parse_ts(e_until)
+            if e_until_dt:
+                valid_eras.append({
+                    "tz": e_tz,
+                    "tz_name": e_tz_str,
+                    "until": e_until_dt,
+                    "label": era.get("label") or e_tz_str,
+                })
+        except Exception:
+            continue
+    valid_eras.sort(key=lambda x: x["until"])
+
+    def _resolve_event_tz(dt_utc: datetime):
+        for ve in valid_eras:
+            if dt_utc < ve["until"]:
+                return ve["tz"]
+        return base_tz
 
     achievement_times: List[str] = []
     prompt_times: List[str] = []
@@ -2290,8 +2341,13 @@ def get_habits_analytics(
     for ts_str in all_timestamps:
         dt = _parse_ts(ts_str)
         if dt:
-            w = dt.weekday()
-            h = dt.hour
+            ev_tz = _resolve_event_tz(dt)
+            try:
+                dt_local = dt.astimezone(ev_tz)
+            except Exception:
+                dt_local = dt
+            w = dt_local.weekday()
+            h = dt_local.hour
             circadian_grid[w][h] += 1
             total_rhythm_events += 1
             if 0 <= h < 6:
@@ -2337,6 +2393,7 @@ def get_habits_analytics(
     else:
         rhythm_archetype = "Afternoon Tactician"
 
+    tz_display = base_tz_str if (base_tz_str and base_tz_str.lower() != "auto") else (getattr(base_tz, "key", None) or str(base_tz))
     circadian_rhythm = {
         "grid": circadian_grid,
         "max_count": max_cell_count,
@@ -2348,6 +2405,8 @@ def get_habits_analytics(
         "day_totals": day_totals,
         "hour_totals": hour_totals,
         "time_buckets": time_buckets,
+        "timezone": tz_display,
+        "eras_count": len(valid_eras),
     }
 
     # 2. The Quit Curve (Drop Distribution & Survival / Retention)

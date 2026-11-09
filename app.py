@@ -20,6 +20,7 @@ import sqlite3
 import tempfile
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, quote, urlencode, urlparse
+from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
@@ -737,6 +738,11 @@ class ConnectionTestRequest(BaseModel):
     credential: str
 
 
+class TimezoneUpdateRequest(BaseModel):
+    timezone: Optional[str] = "auto"
+    timezone_eras: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
+
+
 class CreateTokenRequest(BaseModel):
     label: Optional[str] = Field(default="Personal Access Token")
 
@@ -1066,6 +1072,7 @@ async def api_get_stats(request: Request = None) -> Dict[str, Any]:
 
 @app.get("/api/analytics")
 async def api_get_analytics(
+    request: Request,
     search: Optional[str] = Query(default=None),
     platform: Optional[str] = Query(default=None),
     status: Optional[str] = Query(default=None),
@@ -1075,7 +1082,22 @@ async def api_get_analytics(
     is_game_pass: Optional[bool] = Query(default=None),
     is_play_anywhere: Optional[bool] = Query(default=None),
     favorite_only: bool = Query(default=False),
+    client_timezone: Optional[str] = Query(default=None),
 ) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    tz = "auto"
+    eras = []
+    if user_id:
+        try:
+            tz_settings = system_db.get_user_timezone_settings(user_id)
+            tz = tz_settings.get("timezone") or "auto"
+            eras = tz_settings.get("timezone_eras") or []
+        except Exception:
+            pass
+
+    if tz == "auto" and client_timezone:
+        tz = client_timezone.strip()
+
     return get_habits_analytics(
         search=search,
         platform=platform,
@@ -1086,6 +1108,8 @@ async def api_get_analytics(
         is_game_pass=is_game_pass,
         is_play_anywhere=is_play_anywhere,
         favorite_only=favorite_only,
+        user_timezone=tz,
+        user_timezone_eras=eras,
     )
 
 
@@ -1270,6 +1294,7 @@ async def api_get_account(request: Request) -> Dict[str, Any]:
     reg_policy = system_db.get_setting(
         "registration_policy", os.environ.get("VERTEX_REGISTRATION", "disabled")
     )
+    tz_settings = system_db.get_user_timezone_settings(user_id)
     return {
         "user_id": user["id"],
         "username": user["username"],
@@ -1281,7 +1306,47 @@ async def api_get_account(request: Request) -> Dict[str, Any]:
         "last_login_at": user.get("last_login_at"),
         "edition": edition,
         "registration_policy": reg_policy,
+        "timezone": tz_settings.get("timezone", "auto"),
+        "timezone_eras": tz_settings.get("timezone_eras", []),
     }
+
+
+@app.patch("/api/account/timezone")
+async def api_update_timezone(payload: TimezoneUpdateRequest, request: Request) -> Dict[str, Any]:
+    user_id, username = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user = system_db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    tz = (payload.timezone or "auto").strip()
+    if tz.lower() != "auto":
+        try:
+            ZoneInfo(tz)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid IANA timezone: '{tz}'")
+
+    cleaned_eras: List[Dict[str, Any]] = []
+    for era in (payload.timezone_eras or []):
+        if not isinstance(era, dict):
+            continue
+        e_tz = (era.get("timezone") or "").strip()
+        e_until = (era.get("until") or "").strip()
+        if not e_tz or not e_until:
+            continue
+        try:
+            ZoneInfo(e_tz)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Invalid era IANA timezone: '{e_tz}'")
+        cleaned_eras.append({
+            "timezone": e_tz,
+            "until": e_until,
+            "label": str(era.get("label") or "").strip(),
+        })
+
+    res = system_db.update_user_timezone_settings(user_id, tz_name=tz, timezone_eras=cleaned_eras)
+    return {"status": "ok", "settings": res}
 
 
 @app.post("/api/account/password")

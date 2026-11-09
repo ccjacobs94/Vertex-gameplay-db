@@ -5,6 +5,7 @@ and the shared cross-user game catalog metadata cache.
 """
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -235,6 +236,10 @@ def init_system_db(db_path: Optional[str] = None) -> None:
             conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
         if "last_login_at" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+        if "timezone" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN timezone TEXT DEFAULT 'auto'")
+        if "timezone_eras" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN timezone_eras TEXT DEFAULT '[]'")
 
         # Additive migration for web_sessions table
         sess_cols = {r["name"] for r in conn.execute("PRAGMA table_info(web_sessions)")}
@@ -357,6 +362,38 @@ def get_user_by_username(username: str, db_path: Optional[str] = None) -> Option
             "SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (username.strip(),)
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_user_timezone_settings(user_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    user = get_user(user_id, db_path=db_path)
+    if not user:
+        return {"timezone": "auto", "timezone_eras": []}
+    tz = user.get("timezone") or "auto"
+    eras_raw = user.get("timezone_eras") or "[]"
+    try:
+        eras = json.loads(eras_raw) if isinstance(eras_raw, str) else (eras_raw or [])
+    except Exception:
+        eras = []
+    return {"timezone": tz, "timezone_eras": eras}
+
+
+def update_user_timezone_settings(
+    user_id: str,
+    tz_name: str,
+    timezone_eras: List[Dict[str, Any]],
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    tz_val = (tz_name or "auto").strip()
+    eras_json = json.dumps(timezone_eras or [])
+    now = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            "UPDATE users SET timezone = ?, timezone_eras = ?, updated_at = ? WHERE id = ?",
+            (tz_val, eras_json, now, user_id),
+        )
+    return {"timezone": tz_val, "timezone_eras": timezone_eras or []}
 
 
 def validate_username(username: str) -> None:

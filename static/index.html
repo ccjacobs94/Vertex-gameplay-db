@@ -447,6 +447,7 @@
             <div class="circadian-badges">
               <span class="badge-subtle badge-accent" id="circadian-archetype-pill">Flexible Gamer</span>
               <span class="badge-subtle" id="circadian-peak-pill">Peak: —</span>
+              <span class="badge-subtle" id="circadian-tz-pill" title="Timezone used for active hours">Local Time</span>
             </div>
           </div>
 
@@ -1520,6 +1521,67 @@
               <span>Sign Out</span>
             </a>
           </div>
+        </div>
+
+        <!-- Timezone & Regional History Card -->
+        <div class="account-timezone-card" style="margin-top: 1.25rem; background: var(--bg-card-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; flex-wrap: wrap;">
+            <div>
+              <h4 style="margin: 0; font-size: 0.98rem; display: flex; align-items: center; gap: 0.4rem;">
+                <span>🌐</span> Timezone &amp; Regional History
+              </h4>
+              <p class="settings-panel-desc" style="margin: 0.25rem 0 0.75rem 0; font-size: 0.8rem;">
+                Accurately aligns your Circadian Rhythm and play habits to your real-life wall clock, including historical relocations.
+              </p>
+            </div>
+            <span class="badge-subtle badge-purple" id="tz-current-detected-badge">Auto-Detect</span>
+          </div>
+
+          <form id="form-timezone-settings" onsubmit="return false;" style="margin-top: 0.5rem;">
+            <div class="form-group" style="margin-bottom: 0.85rem;">
+              <label for="select-user-timezone" style="font-size: 0.85rem; font-weight: 500;">Current / Base Timezone</label>
+              <select id="select-user-timezone" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-primary); border-radius: 6px; padding: 0.45rem 0.65rem; font-size: 0.85rem;">
+                <option value="auto">Auto-Detect from Browser</option>
+                <option value="America/New_York">America/New_York (US Eastern Time)</option>
+                <option value="America/Chicago">America/Chicago (US Central Time)</option>
+                <option value="America/Denver">America/Denver (US Mountain Time)</option>
+                <option value="America/Los_Angeles">America/Los_Angeles (US Pacific Time)</option>
+                <option value="America/Anchorage">America/Anchorage (Alaska Time)</option>
+                <option value="Pacific/Honolulu">Pacific/Honolulu (Hawaii Time)</option>
+                <option value="Europe/London">Europe/London (GMT / BST)</option>
+                <option value="Europe/Paris">Europe/Paris (CET / CEST)</option>
+                <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                <option value="Australia/Sydney">Australia/Sydney (AEST)</option>
+                <option value="UTC">UTC (Universal Time)</option>
+              </select>
+              <small class="form-help" id="detected-tz-help" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; display: block;">
+                Browser detected: <span id="detected-tz-name">—</span>
+              </small>
+            </div>
+
+            <div class="timezone-eras-section" style="margin-top: 1rem; border-top: 1px solid var(--border-subtle); padding-top: 0.85rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+                <div>
+                  <strong style="font-size: 0.85rem;">Historical Relocation Eras (Optional)</strong>
+                  <p style="margin: 0.15rem 0 0 0; font-size: 0.75rem; color: var(--text-muted);">
+                    Map activity before a move to where you lived previously.
+                  </p>
+                </div>
+                <button type="button" id="btn-add-tz-era" class="btn btn-secondary btn-sm" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;">
+                  + Add Earlier Era
+                </button>
+              </div>
+
+              <div id="tz-eras-list" class="tz-eras-list" style="display: flex; flex-direction: column; gap: 0.6rem;">
+                <!-- Era rows rendered dynamically -->
+              </div>
+            </div>
+
+            <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+              <button type="button" id="btn-save-timezone" class="btn btn-primary btn-sm">Save Timezone Preferences</button>
+              <div id="timezone-status-msg" class="connections-status-msg" aria-live="polite" style="font-size: 0.8rem;"></div>
+            </div>
+          </form>
         </div>
 
         <form id="form-change-password" class="settings-form" onsubmit="return false;">

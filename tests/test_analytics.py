@@ -274,9 +274,9 @@ class TestHabitsAnalytics(unittest.TestCase):
             db_path=self.db_path,
         )
 
-        stats = db.get_habits_analytics(db_path=self.db_path)
+        stats = db.get_habits_analytics(user_timezone="UTC", db_path=self.db_path)
 
-        # Circadian rhythm: Saturday 2026-10-24 had 4 events (21h, 21h, 22h, 23h)
+        # Circadian rhythm: Saturday 2026-10-24 had 4 events (21h, 21h, 22h, 23h in UTC)
         cr = stats["circadian_rhythm"]
         self.assertEqual(cr["total_events"], 4)
         self.assertEqual(cr["peak_day"], "Saturday")
@@ -328,6 +328,47 @@ class TestHabitsAnalytics(unittest.TestCase):
         turn_based = next(t for t in dna["tags"] if t["tag"] == "Turn-Based")
         self.assertLessEqual(turn_based["drop_rate"], 100.0)
         self.assertEqual(turn_based["drop_rate"], 100.0)
+
+    def test_circadian_rhythm_timezone_and_eras(self):
+        # 1. Insert a game with two achievements in UTC
+        g = db.add_manual_game(
+            title="Timezone Test Game",
+            platform="Steam",
+            completion_status="Playing",
+            playtime_hours=10.0,
+            db_path=self.db_path,
+        )
+        # 2014-06-12 01:30 UTC: In UTC is Thu 1:30 AM (night).
+        # In America/New_York (EDT, UTC-4), it is Wed 2014-06-11 21:30 (9:30 PM, evening).
+        # 2022-10-15 02:00 UTC: In UTC is Sat 2:00 AM (night).
+        # In America/Chicago (CDT, UTC-5), it is Fri 2022-10-14 21:00 (9:00 PM, evening).
+        achievements = [
+            {"external_ach_id": "ach_ny", "name": "East Coast Era", "unlocked": True, "unlock_time": "2014-06-12T01:30:00Z"},
+            {"external_ach_id": "ach_tx", "name": "Texas Era", "unlocked": True, "unlock_time": "2022-10-15T02:00:00Z"},
+        ]
+        db.upsert_game_achievements(
+            g["id"],
+            source="Steam",
+            platform="Steam",
+            achievements=achievements,
+            db_path=self.db_path,
+        )
+
+        # Query with base timezone America/Chicago and historical era America/New_York until 2017-09-01
+        stats = db.get_habits_analytics(
+            user_timezone="America/Chicago",
+            user_timezone_eras=[{"timezone": "America/New_York", "until": "2017-09-01T00:00:00Z"}],
+            db_path=self.db_path,
+        )
+        cr = stats["circadian_rhythm"]
+        # Both events should land in evening (6p-12a), 0 in night
+        self.assertEqual(cr["time_buckets"]["evening"], 2)
+        self.assertEqual(cr["time_buckets"]["night"], 0)
+        # Wednesday is index 2, 21:00 (9 PM)
+        self.assertEqual(cr["grid"][2][21], 1)
+        # Friday is index 4, 21:00 (9 PM)
+        self.assertEqual(cr["grid"][4][21], 1)
+        self.assertEqual(cr["eras_count"], 1)
 
 
 if __name__ == "__main__":
