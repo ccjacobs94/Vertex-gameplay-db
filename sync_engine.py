@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import httpx
 
 import system_db
+import db
 from context import current_user_id
 from db import (
     DEFAULT_DB_PATH,
@@ -1445,6 +1446,42 @@ async def _find_steam_appid_by_title(
     return None
 
 
+def pick_best_cover_art(candidates: List[Dict[str, Any]], target_title: str) -> Optional[str]:
+    """
+    Select the best cover art URL from external metadata search candidates.
+    Matches normalized exact title first (case and punctuation insensitive);
+    if both Steam and RAWG match, prefers the Steam library_600x900.jpg 2:3 vertical capsule;
+    otherwise falls back to the first candidate with valid art.
+    """
+    def _is_valid_url(val: Any) -> bool:
+        if not isinstance(val, str):
+            return False
+        s = val.strip()
+        return s.startswith("http://") or s.startswith("https://")
+
+    valid_candidates = [c for c in candidates if _is_valid_url(c.get("cover_url"))]
+    if not valid_candidates:
+        return None
+
+    def _norm(t: str) -> str:
+        return " ".join(re.sub(r"[^\w\s]", "", (t or "").lower()).split())
+
+    target_norm = _norm(target_title)
+    exact_matches = [c for c in valid_candidates if _norm(c.get("title", "")) == target_norm]
+
+    if exact_matches:
+        # If both a Steam result and a RAWG result match, prefer Steam library_600x900.jpg vertical art
+        steam_match = next(
+            (c for c in exact_matches if "library_600x900.jpg" in str(c.get("cover_url", "")) or c.get("provider") == "Steam Catalog"),
+            None,
+        )
+        if steam_match:
+            return str(steam_match["cover_url"]).strip()
+        return str(exact_matches[0]["cover_url"]).strip()
+
+    return str(valid_candidates[0]["cover_url"]).strip()
+
+
 async def enrich_missing_metadata(
     db_path: Optional[str] = None,
     limit: int = 500,
@@ -1495,179 +1532,236 @@ async def enrich_missing_metadata(
         if force or not g_list:
             targets.append(r)
 
-    if not targets:
+    # Filter rows needing cover art backfill (fill-only, never overwrite)
+    cover_targets: List[Dict[str, Any]] = [
+        r for r in all_rows
+        if not (r.get("cover_url") and str(r.get("cover_url")).strip())
+    ]
+
+    if not targets and not cover_targets:
         return {
             "source": "Metadata Enricher",
             "status": "success",
             "games_enriched": 0,
+            "covers_filled": 0,
+            "covers_not_found": 0,
             "remaining": 0,
-            "message": "All games already have genre metadata",
+            "message": "All games already have genre and cover metadata",
         }
 
-    # Process Steam games first so their appdetails populate norm_to_meta for Xbox/console siblings
-    targets.sort(
-        key=lambda r: (
-            1 if str(r.get("external_id", "")).startswith("steam:") else 0,
-            float(r.get("playtime_hours") or 0.0),
-        ),
-        reverse=True,
-    )
-    batch = targets[:limit]
     enriched_count = 0
     now = datetime.now(timezone.utc).isoformat()
 
-    async with _make_async_client(timeout=15.0) as client:
-        for row in batch:
-            game_id = row["id"]
-            title = row["title"]
-            ext_id = str(row.get("external_id") or "")
-            norm = normalize_game_title(title)
+    if targets:
+        # Process Steam games first so their appdetails populate norm_to_meta for Xbox/console siblings
+        targets.sort(
+            key=lambda r: (
+                1 if str(r.get("external_id", "")).startswith("steam:") else 0,
+                float(r.get("playtime_hours") or 0.0),
+            ),
+            reverse=True,
+        )
+        batch = targets[:limit]
 
-            meta: Optional[Dict[str, Any]] = None
-            resolved_steam_appid: Optional[str] = None
-            from_catalog_cache = False
+        async with _make_async_client(timeout=15.0) as client:
+            for row in batch:
+                game_id = row["id"]
+                title = row["title"]
+                ext_id = str(row.get("external_id") or "")
+                norm = normalize_game_title(title)
 
-            if ext_id.startswith("steam:"):
-                appid_part = ext_id.split(":", 1)[1]
-                if appid_part.isdigit():
-                    resolved_steam_appid = appid_part
+                meta: Optional[Dict[str, Any]] = None
+                resolved_steam_appid: Optional[str] = None
+                from_catalog_cache = False
 
-            # 0. Check shared catalog_cache in system.db first (unless force=True)
-            if norm and not force:
-                try:
-                    cached = system_db.get_catalog_cache_entry(norm, db_path=system_db_path)
-                    if cached:
-                        cached_genres = json.loads(cached.get("genres_json") or "[]")
-                        if cached_genres:
-                            meta = {
-                                "genres": cached_genres,
-                                "release_year": cached.get("release_year"),
-                                "critic_score": cached.get("critic_score"),
-                                "cover_url": cached.get("cover_url"),
-                            }
-                            if cached.get("steam_appid"):
-                                resolved_steam_appid = str(cached["steam_appid"])
-                            from_catalog_cache = True
-                except Exception as exc:
-                    logger.debug("Catalog cache read error for '%s': %s", norm, exc)
+                if ext_id.startswith("steam:"):
+                    appid_part = ext_id.split(":", 1)[1]
+                    if appid_part.isdigit():
+                        resolved_steam_appid = appid_part
 
-            # 1. Reuse already-discovered metadata for the same normalized title in-memory
-            if not meta and norm and norm in norm_to_meta:
-                meta = norm_to_meta[norm]
+                # 0. Check shared catalog_cache in system.db first (unless force=True)
+                if norm and not force:
+                    try:
+                        cached = system_db.get_catalog_cache_entry(norm, db_path=system_db_path)
+                        if cached:
+                            cached_genres = json.loads(cached.get("genres_json") or "[]")
+                            if cached_genres:
+                                meta = {
+                                    "genres": cached_genres,
+                                    "release_year": cached.get("release_year"),
+                                    "critic_score": cached.get("critic_score"),
+                                    "cover_url": cached.get("cover_url"),
+                                }
+                                if cached.get("steam_appid"):
+                                    resolved_steam_appid = str(cached["steam_appid"])
+                                from_catalog_cache = True
+                    except Exception as exc:
+                        logger.debug("Catalog cache read error for '%s': %s", norm, exc)
 
-            # 2. Direct Steam appid lookup
-            if not meta and ext_id.startswith("steam:"):
-                appid_str = ext_id.split(":", 1)[1]
-                if appid_str.isdigit():
-                    appid = int(appid_str)
-                    resolved_steam_appid = appid_str
-                    if appid in steam_appid_cache:
-                        meta = steam_appid_cache[appid]
-                    else:
-                        meta = await fetch_steam_app_details(client, appid)
-                        if meta and meta.get("genres"):
-                            steam_appid_cache[appid] = meta
-                        await asyncio.sleep(0.18)
+                # 1. Reuse already-discovered metadata for the same normalized title in-memory
+                if not meta and norm and norm in norm_to_meta:
+                    meta = norm_to_meta[norm]
 
-            # 3. Search Steam catalog by title for Xbox / PlayStation / Switch games
-            if (not meta or not meta.get("genres")) and not ext_id.startswith("steam:"):
-                matched_appid = await _find_steam_appid_by_title(client, title)
-                if matched_appid:
-                    resolved_steam_appid = str(matched_appid)
-                    if matched_appid in steam_appid_cache:
-                        meta = steam_appid_cache[matched_appid]
-                    else:
-                        meta = await fetch_steam_app_details(client, matched_appid)
-                        if meta and meta.get("genres"):
-                            steam_appid_cache[matched_appid] = meta
-                        await asyncio.sleep(0.18)
+                # 2. Direct Steam appid lookup
+                if not meta and ext_id.startswith("steam:"):
+                    appid_str = ext_id.split(":", 1)[1]
+                    if appid_str.isdigit():
+                        appid = int(appid_str)
+                        resolved_steam_appid = appid_str
+                        if appid in steam_appid_cache:
+                            meta = steam_appid_cache[appid]
+                        else:
+                            meta = await fetch_steam_app_details(client, appid)
+                            if meta and meta.get("genres"):
+                                steam_appid_cache[appid] = meta
+                            await asyncio.sleep(0.18)
 
-            # 4. Fallback to Wikidata (P136 genres) + Wikipedia description
-            if not meta or not meta.get("genres"):
-                meta = await fetch_wikidata_metadata(client, title)
-                await asyncio.sleep(0.1)
+                # 3. Search Steam catalog by title for Xbox / PlayStation / Switch games
+                if (not meta or not meta.get("genres")) and not ext_id.startswith("steam:"):
+                    matched_appid = await _find_steam_appid_by_title(client, title)
+                    if matched_appid:
+                        resolved_steam_appid = str(matched_appid)
+                        if matched_appid in steam_appid_cache:
+                            meta = steam_appid_cache[matched_appid]
+                        else:
+                            meta = await fetch_steam_app_details(client, matched_appid)
+                            if meta and meta.get("genres"):
+                                steam_appid_cache[matched_appid] = meta
+                            await asyncio.sleep(0.18)
 
-            if meta and meta.get("genres"):
-                # Validate against the controlled taxonomy first: Steam
-                # and Wikidata can return labels that are not genres
-                # ("Free To Play", "Casual") or that this library does
-                # not use. Unknown/retired labels are dropped, never
-                # written. See taxonomy.py.
-                discovered = validate_genres(meta["genres"])
-                if not discovered:
-                    continue
-                rel_year = meta.get("release_year")
-                c_score = meta.get("critic_score")
-                if norm:
-                    norm_to_meta[norm] = {
-                        "genres": discovered,
-                        "release_year": rel_year,
-                        "critic_score": c_score,
-                        "cover_url": meta.get("cover_url") or row.get("cover_url"),
-                    }
-                    if not from_catalog_cache:
-                        try:
-                            cover_for_cache = meta.get("cover_url") or row.get("cover_url")
-                            if not cover_for_cache and resolved_steam_appid:
-                                cover_for_cache = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{resolved_steam_appid}/library_600x900.jpg"
-                            system_db.upsert_catalog_cache_entry(
-                                normalized_title=norm,
-                                steam_appid=resolved_steam_appid,
-                                genres_json=json.dumps(discovered),
-                                release_year=rel_year,
-                                critic_score=c_score,
-                                cover_url=cover_for_cache,
-                                updated_at=now,
-                                db_path=system_db_path,
+                # 4. Fallback to Wikidata (P136 genres) + Wikipedia description
+                if not meta or not meta.get("genres"):
+                    meta = await fetch_wikidata_metadata(client, title)
+                    await asyncio.sleep(0.1)
+
+                if meta and meta.get("genres"):
+                    # Validate against the controlled taxonomy first: Steam
+                    # and Wikidata can return labels that are not genres
+                    # ("Free To Play", "Casual") or that this library does
+                    # not use. Unknown/retired labels are dropped, never
+                    # written. See taxonomy.py.
+                    discovered = validate_genres(meta["genres"])
+                    if not discovered:
+                        continue
+                    rel_year = meta.get("release_year")
+                    c_score = meta.get("critic_score")
+                    if norm:
+                        norm_to_meta[norm] = {
+                            "genres": discovered,
+                            "release_year": rel_year,
+                            "critic_score": c_score,
+                            "cover_url": meta.get("cover_url") or row.get("cover_url"),
+                        }
+                        if not from_catalog_cache:
+                            try:
+                                cover_for_cache = meta.get("cover_url") or row.get("cover_url")
+                                if not cover_for_cache and resolved_steam_appid:
+                                    cover_for_cache = f"https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/{resolved_steam_appid}/library_600x900.jpg"
+                                system_db.upsert_catalog_cache_entry(
+                                    normalized_title=norm,
+                                    steam_appid=resolved_steam_appid,
+                                    genres_json=json.dumps(discovered),
+                                    release_year=rel_year,
+                                    critic_score=c_score,
+                                    cover_url=cover_for_cache,
+                                    updated_at=now,
+                                    db_path=system_db_path,
+                                )
+                            except Exception as exc:
+                                logger.debug("Catalog cache write error for '%s': %s", norm, exc)
+
+                    # Merge, never replace. The discovered genres are added
+                    # to whatever the game already has; existing genres are
+                    # never dropped. This is the fix for the 2026-10-27
+                    # audit, where a force run replaced Portal 2's
+                    # Platformer/Puzzle and Blacklist's Stealth with
+                    # Steam's coarse Action/Adventure list.
+                    with get_connection(db_path) as conn:
+                        cid = row.get("canonical_id")
+                        if cid is not None:
+                            group_rows = conn.execute(
+                                "SELECT id, genres, release_year, critic_score FROM games WHERE canonical_id = ?",
+                                (cid,),
+                            ).fetchall()
+                        else:
+                            group_rows = [
+                                conn.execute(
+                                    "SELECT id, genres, release_year, critic_score FROM games WHERE id = ?",
+                                    (game_id,),
+                                ).fetchone()
+                            ]
+                        for grow in group_rows:
+                            try:
+                                existing_genres = json.loads(grow["genres"] or "[]")
+                            except Exception:
+                                existing_genres = []
+                            merged = merge_lists(existing_genres, discovered)
+                            changed = (
+                                merged != existing_genres
+                                or (rel_year is not None and grow["release_year"] is None)
+                                or (c_score is not None and grow["critic_score"] is None)
                             )
-                        except Exception as exc:
-                            logger.debug("Catalog cache write error for '%s': %s", norm, exc)
-
-                # Merge, never replace. The discovered genres are added
-                # to whatever the game already has; existing genres are
-                # never dropped. This is the fix for the 2026-10-27
-                # audit, where a force run replaced Portal 2's
-                # Platformer/Puzzle and Blacklist's Stealth with
-                # Steam's coarse Action/Adventure list.
-                with get_connection(db_path) as conn:
-                    cid = row.get("canonical_id")
-                    if cid is not None:
-                        group_rows = conn.execute(
-                            "SELECT id, genres, release_year, critic_score FROM games WHERE canonical_id = ?",
-                            (cid,),
-                        ).fetchall()
-                    else:
-                        group_rows = [
+                            if not changed:
+                                continue
                             conn.execute(
-                                "SELECT id, genres, release_year, critic_score FROM games WHERE id = ?",
-                                (game_id,),
-                            ).fetchone()
-                        ]
-                    for grow in group_rows:
-                        try:
-                            existing_genres = json.loads(grow["genres"] or "[]")
-                        except Exception:
-                            existing_genres = []
-                        merged = merge_lists(existing_genres, discovered)
-                        changed = (
-                            merged != existing_genres
-                            or (rel_year is not None and grow["release_year"] is None)
-                            or (c_score is not None and grow["critic_score"] is None)
-                        )
-                        if not changed:
-                            continue
-                        conn.execute(
-                            """
-                            UPDATE games SET
-                                genres = ?,
-                                release_year = COALESCE(release_year, ?),
-                                critic_score = COALESCE(critic_score, ?),
-                                updated_at = ?
-                            WHERE id = ?
-                            """,
-                            (json.dumps(merged), rel_year, c_score, now, grow["id"]),
-                        )
-                        enriched_count += 1
+                                """
+                                UPDATE games SET
+                                    genres = ?,
+                                    release_year = COALESCE(release_year, ?),
+                                    critic_score = COALESCE(critic_score, ?),
+                                    updated_at = ?
+                                WHERE id = ?
+                                """,
+                                (json.dumps(merged), rel_year, c_score, now, grow["id"]),
+                            )
+                            enriched_count += 1
+
+    # Cover art backfill pass (honoring limit)
+    covers_filled = 0
+    covers_not_found = 0
+    cover_batch = cover_targets[:limit]
+
+    for row in cover_batch:
+        game_id = row["id"]
+        title = row["title"]
+        with get_connection(db_path) as conn:
+            cur = conn.execute("SELECT cover_url FROM games WHERE id = ?", (game_id,)).fetchone()
+            if cur and cur["cover_url"] and str(cur["cover_url"]).strip():
+                continue
+
+        try:
+            candidates = await search_external_metadata(title)
+            best_cover = pick_best_cover_art(candidates, title)
+        except Exception as exc:
+            logger.debug("Cover search error for '%s': %s", title, exc)
+            best_cover = None
+
+        if best_cover:
+            with get_connection(db_path) as conn:
+                cid = row.get("canonical_id")
+                if cid is not None:
+                    conn.execute(
+                        """
+                        UPDATE games SET
+                            cover_url = ?,
+                            updated_at = ?
+                        WHERE canonical_id = ? AND (cover_url IS NULL OR cover_url = '')
+                        """,
+                        (best_cover, now, cid),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        UPDATE games SET
+                            cover_url = ?,
+                            updated_at = ?
+                        WHERE id = ? AND (cover_url IS NULL OR cover_url = '')
+                        """,
+                        (best_cover, now, game_id),
+                    )
+            covers_filled += 1
+        else:
+            covers_not_found += 1
 
     with get_connection(db_path) as conn:
         rem_row = conn.execute(
@@ -1675,12 +1769,14 @@ async def enrich_missing_metadata(
         ).fetchone()
         remaining = int(rem_row["cnt"]) if rem_row else 0
 
-    msg = f"Enriched genres for {enriched_count} games ({remaining} remaining without genres)"
-    log_sync_event("Metadata Enricher", "success", enriched_count, msg, db_path=db_path)
+    msg = f"Enriched genres for {enriched_count} games ({remaining} remaining without genres); filled covers for {covers_filled} games ({covers_not_found} not found)"
+    log_sync_event("Metadata Enricher", "success", enriched_count + covers_filled, msg, db_path=db_path)
     return {
         "source": "Metadata Enricher",
         "status": "success",
         "games_enriched": enriched_count,
+        "covers_filled": covers_filled,
+        "covers_not_found": covers_not_found,
         "remaining": remaining,
         "message": msg,
     }
