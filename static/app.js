@@ -1260,10 +1260,23 @@ function renderGames() {
     const body = document.createElement("div");
     body.className = "card-body";
 
+    const titleRow = document.createElement("div");
+    titleRow.className = "card-title-row";
+
     const h3 = document.createElement("h3");
     h3.className = "card-title";
     h3.textContent = game.title;
-    body.appendChild(h3);
+    titleRow.appendChild(h3);
+
+    if (game.favorite) {
+      const favSpan = document.createElement("span");
+      favSpan.className = "card-fav-indicator";
+      favSpan.innerHTML = LUCIDE_ICONS.starFilled;
+      favSpan.title = "Favorited";
+      titleRow.appendChild(favSpan);
+    }
+
+    body.appendChild(titleRow);
 
     const ownStatus = game.ownership_status || "Owned";
     const metaRow = document.createElement("div");
@@ -1325,14 +1338,6 @@ function renderGames() {
       }
     });
     statusLeft.appendChild(statusSelect);
-
-    if (game.favorite) {
-      const favSpan = document.createElement("span");
-      favSpan.className = "card-fav-indicator";
-      favSpan.innerHTML = LUCIDE_ICONS.starFilled;
-      favSpan.title = "Favorited";
-      statusLeft.appendChild(favSpan);
-    }
     statusRow.appendChild(statusLeft);
 
     if (game.playtime_hours > 0) {
