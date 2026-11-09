@@ -185,7 +185,7 @@ class TestHabitsAnalytics(unittest.TestCase):
             completion_status="Playing",
             playtime_hours=12.0,
             critic_score=96,
-            user_rating=5,  # 5/5 -> 100/100
+            user_rating=10,  # 10/10 -> 100/100
             release_year=2007,
             genres=["FPS", "Action"],
             tags=["Story-Rich", "Sci-Fi", "Stealth"],
@@ -229,7 +229,7 @@ class TestHabitsAnalytics(unittest.TestCase):
             completion_status="Dropped",
             playtime_hours=0.5,
             critic_score=85,
-            user_rating=1,  # 1/5 -> 20/100 (Overhyped miss!)
+            user_rating=2,  # 2/10 -> 20/100 (Overhyped miss!)
             is_game_pass=1,
             ownership_status="Subscription",
             genres=["Action"],
@@ -244,7 +244,7 @@ class TestHabitsAnalytics(unittest.TestCase):
             completion_status="Completed",
             playtime_hours=40.0,
             critic_score=93,
-            user_rating=5,
+            user_rating=9,
             genres=["Roguelike", "Action"],
             tags=["Indie", "Story-Rich"],
             db_path=self.db_path,
@@ -262,6 +262,17 @@ class TestHabitsAnalytics(unittest.TestCase):
             db_path=self.db_path,
         )
         db.update_game(g4["id"], {"canonical_id": 999}, db_path=self.db_path)
+
+        # 4. Add a Dropped game with 0 hours to test Mechanic & Theme DNA drop rate bounds
+        g5 = db.add_manual_game(
+            title="Zero Hour Flop",
+            platform="Steam",
+            completion_status="Dropped",
+            playtime_hours=0.0,
+            genres=["Strategy"],
+            tags=["Turn-Based"],
+            db_path=self.db_path,
+        )
 
         stats = db.get_habits_analytics(db_path=self.db_path)
 
@@ -287,16 +298,20 @@ class TestHabitsAnalytics(unittest.TestCase):
         self.assertEqual(ap[0]["remaining"], 1)
         self.assertEqual(ap[0]["pct"], 75.0)
 
-        # Contrarian index: Game Pass Sample has critic 85 and user rating 1 (norm 20) -> overhyped miss!
+        # Contrarian index: BioShock (user 10 -> norm 100 vs critic 96), Game Pass Sample (user 2 -> norm 20 vs critic 85)
         ci = stats["contrarian_index"]
         overhyped_titles = [m["title"] for m in ci["overhyped_misses"]]
         self.assertIn("Game Pass Sample", overhyped_titles)
+        bioshock_entry = next(r for r in ci["scatter_points"] if r["title"] == "BioShock")
+        self.assertEqual(bioshock_entry["user_rating"], 10)
+        self.assertEqual(bioshock_entry["user_score_norm"], 100)
+        self.assertEqual(bioshock_entry["delta"], 4.0)
 
         # Subscription ROI: Game Pass Sample is a tourist game (< 1h)
         sub_roi = stats["subscription_roi"]
         self.assertEqual(sub_roi["subscription"]["tourist_count"], 1)
         self.assertEqual(sub_roi["subscription"]["tourist_rate"], 100.0)
-        self.assertEqual(sub_roi["owned"]["count"], 3)
+        self.assertEqual(sub_roi["owned"]["count"], 4)
 
         # Cross-platform double-dipping: Hades is on PC and Xbox
         cp = stats["cross_platform"]
@@ -304,11 +319,15 @@ class TestHabitsAnalytics(unittest.TestCase):
         self.assertEqual(cp["top_titles"][0]["title"], "Hades")
         self.assertEqual(cp["double_dipped_hours"], 55.0)
 
-        # Mechanic & Theme DNA
+        # Mechanic & Theme DNA: Turn-Based game dropped with 0h must not exceed 100% drop rate
         dna = stats["mechanic_dna"]
         tag_names = [t["tag"] for t in dna["tags"]]
         self.assertIn("Story-Rich", tag_names)
         self.assertIn("Open World", tag_names)
+        self.assertIn("Turn-Based", tag_names)
+        turn_based = next(t for t in dna["tags"] if t["tag"] == "Turn-Based")
+        self.assertLessEqual(turn_based["drop_rate"], 100.0)
+        self.assertEqual(turn_based["drop_rate"], 100.0)
 
 
 if __name__ == "__main__":
