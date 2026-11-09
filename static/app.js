@@ -1292,13 +1292,6 @@ function renderGames() {
       metaRow.appendChild(ownSpan);
     }
 
-    if (game.is_play_anywhere) {
-      const xpaSpan = document.createElement("span");
-      xpaSpan.className = "card-xpa-indicator";
-      xpaSpan.textContent = "Play Anywhere";
-      metaRow.appendChild(xpaSpan);
-    }
-
     if (game.playtime_hours > 0) {
       const hoursSpan = document.createElement("span");
       hoursSpan.className = "card-time-indicator";
