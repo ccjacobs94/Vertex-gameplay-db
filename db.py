@@ -4494,9 +4494,9 @@ def record_reconciled_session(
 
 
 def backfill_historical_sessions_from_achievements(
+    db_path: Optional[str] = None,
     user_timezone: str = "auto",
     user_timezone_eras: Optional[List[Dict[str, Any]]] = None,
-    db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Historical Backfill Engine (Section 4).
