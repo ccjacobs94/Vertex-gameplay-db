@@ -2461,7 +2461,7 @@ def get_habits_analytics(
         cs = g.get("critic_score")
         if ur is not None and cs is not None:
             ur_float = float(ur)
-            norm_user = ur_float * 20.0 if ur_float <= 5.0 else ur_float * 10.0
+            norm_user = round(ur_float * 10.0, 1)
             diff = round(norm_user - float(cs), 1)
             rated_both.append({
                 "id": g["id"],
@@ -2469,7 +2469,7 @@ def get_habits_analytics(
                 "platform": g["platform"],
                 "cover_url": g.get("cover_url"),
                 "user_rating": ur,
-                "user_score_norm": int(norm_user),
+                "user_score_norm": int(round(norm_user)),
                 "critic_score": int(cs),
                 "delta": diff,
                 "status": g.get("completion_status"),
@@ -2526,6 +2526,7 @@ def get_habits_analytics(
         st = g.get("completion_status") or "Not Played"
         fav = bool(g.get("favorite"))
         h = float(g.get("playtime_hours") or 0.0)
+        is_started = h > 0 or st in ("Playing", "Beaten", "Completed", "Dropped")
         for tag in (g.get("tags") or []):
             if tag not in tag_counts:
                 tag_counts[tag] = {
@@ -2542,7 +2543,7 @@ def get_habits_analytics(
             tc["hours"] = round(tc["hours"] + h, 1)
             if fav:
                 tc["favorite_count"] += 1
-            if h > 0:
+            if is_started:
                 tc["played_count"] += 1
             if st in ("Beaten", "Completed"):
                 tc["beaten_count"] += 1
@@ -2551,9 +2552,9 @@ def get_habits_analytics(
 
     tag_list = []
     for tc in tag_counts.values():
-        p_cnt = max(tc["played_count"], 1)
-        tc["finish_rate"] = round((tc["beaten_count"] / p_cnt) * 100, 1) if tc["played_count"] > 0 else 0.0
-        tc["drop_rate"] = round((tc["dropped_count"] / p_cnt) * 100, 1) if tc["played_count"] > 0 else 0.0
+        p_cnt = max(tc["played_count"], tc["beaten_count"] + tc["dropped_count"], 1)
+        tc["finish_rate"] = min(100.0, round((tc["beaten_count"] / p_cnt) * 100, 1)) if tc["played_count"] > 0 else 0.0
+        tc["drop_rate"] = min(100.0, round((tc["dropped_count"] / p_cnt) * 100, 1)) if tc["played_count"] > 0 else 0.0
         tag_list.append(tc)
 
     tag_list.sort(key=lambda x: (x["hours"], x["count"]), reverse=True)
@@ -2576,19 +2577,22 @@ def get_habits_analytics(
     def _calc_cohort_stats(cohort: List[Dict[str, Any]]) -> Dict[str, Any]:
         c_count = len(cohort)
         c_hours = round(sum(float(g.get("playtime_hours") or 0.0) for g in cohort), 1)
-        c_played = [g for g in cohort if float(g.get("playtime_hours") or 0.0) > 0]
-        c_p_count = len(c_played)
+        c_played = [
+            g for g in cohort
+            if float(g.get("playtime_hours") or 0.0) > 0 or g.get("completion_status") in ("Playing", "Beaten", "Completed", "Dropped")
+        ]
         c_beaten = sum(1 for g in cohort if g.get("completion_status") in ("Beaten", "Completed"))
         c_dropped = sum(1 for g in cohort if g.get("completion_status") == "Dropped")
         c_tourist = sum(1 for g in cohort if 0 < float(g.get("playtime_hours") or 0.0) < 1.0)
+        c_p_count = max(len(c_played), c_beaten + c_dropped)
         return {
             "count": c_count,
             "hours": c_hours,
             "played_count": c_p_count,
             "avg_hours": round(c_hours / max(c_count, 1), 1),
-            "completion_rate": round((c_beaten / max(c_p_count, 1)) * 100, 1) if c_p_count > 0 else 0.0,
-            "drop_rate": round((c_dropped / max(c_p_count, 1)) * 100, 1) if c_p_count > 0 else 0.0,
-            "tourist_rate": round((c_tourist / max(c_p_count, 1)) * 100, 1) if c_p_count > 0 else 0.0,
+            "completion_rate": min(100.0, round((c_beaten / max(c_p_count, 1)) * 100, 1)) if c_p_count > 0 else 0.0,
+            "drop_rate": min(100.0, round((c_dropped / max(c_p_count, 1)) * 100, 1)) if c_p_count > 0 else 0.0,
+            "tourist_rate": min(100.0, round((c_tourist / max(c_p_count, 1)) * 100, 1)) if c_p_count > 0 else 0.0,
             "tourist_count": c_tourist,
         }
 

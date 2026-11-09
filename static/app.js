@@ -1063,7 +1063,7 @@ function renderHabitsDashboard(data) {
               <span class="contrarian-delta-pill ${deltaClass}">${deltaText} Δ</span>
             </div>
             <div class="contrarian-scores-row">
-              <span class="contrarian-user-score">★ You: ${g.user_rating}/5 (${g.user_score_norm})</span>
+              <span class="contrarian-user-score">★ You: ${g.user_rating}/10 (${g.user_score_norm})</span>
               <span class="contrarian-critic-score">⭐ Critics: ${g.critic_score}</span>
             </div>
           </div>
