@@ -455,6 +455,10 @@ function renderHabitsDashboard(data) {
   if (!data || !data.summary) return;
   const s = data.summary;
 
+  if (data.session_telemetry) {
+    renderSessionTelemetry(data.session_telemetry);
+  }
+
   // 1. KPI Pulse Strip
   const elHours = document.getElementById("hkpi-hours");
   if (elHours) elHours.textContent = `${s.total_hours.toLocaleString()} hrs`;
@@ -1400,6 +1404,297 @@ function renderHabitsDashboard(data) {
       });
     }
   }
+}
+
+function renderSessionTelemetry(st) {
+  if (!st) return;
+
+  // 1. 2x2 Nerd KPIs
+  if (st.kpis) {
+    const k = st.kpis;
+    if (k.play_streak) {
+      const el = document.getElementById("skpi-streak");
+      const sub = document.getElementById("skpi-streak-detail");
+      if (el) el.textContent = `${k.play_streak.current} Days Active`;
+      if (sub) {
+        const todayNote = k.play_streak.active_today ? "Active today" : "Rest day";
+        sub.textContent = `${todayNote} | Record: ${k.play_streak.longest} Days`;
+      }
+    }
+    if (k.sweet_spot) {
+      const el = document.getElementById("skpi-sweet-spot");
+      const sub = document.getElementById("skpi-sweet-spot-detail");
+      if (el) el.textContent = `${k.sweet_spot.formatted || "0m"} avg session`;
+      if (sub) sub.textContent = `${k.sweet_spot.sessions_per_week || 0} sessions/week`;
+    }
+    if (k.focus_score_30d) {
+      const el = document.getElementById("skpi-focus");
+      const sub = document.getElementById("skpi-focus-detail");
+      if (el) el.textContent = `${k.focus_score_30d.percentage || 0}%`;
+      if (sub) {
+        const topG = k.focus_score_30d.top_game ? ` (${k.focus_score_30d.top_game})` : "";
+        sub.textContent = `${k.focus_score_30d.archetype || "Channel Surfer"}${topG}`;
+      }
+    }
+    if (k.afk_menu_tax_ratio) {
+      const el = document.getElementById("skpi-afk");
+      const sub = document.getElementById("skpi-afk-detail");
+      if (el) el.textContent = `${k.afk_menu_tax_ratio.percentage || 0}%`;
+      if (sub) {
+        sub.textContent = `${k.afk_menu_tax_ratio.idle_minutes || 0}m idle / ${k.afk_menu_tax_ratio.wall_clock_minutes || 0}m total`;
+      }
+    }
+  }
+
+  // 2. 365-Day Contribution Heatmap
+  if (st.heatmap_365) {
+    renderContributionHeatmap(st.heatmap_365);
+  }
+
+  // 3. Circadian 24-Hour Distribution
+  if (st.circadian) {
+    renderCircadianBars(st.circadian);
+  }
+
+  // 4. Session Commitment Histogram (Snack vs. Binge)
+  if (st.session_histogram) {
+    renderSnackBingeHistogram(st.session_histogram);
+  }
+
+  // 5. 30-Day Rotation Gantt
+  if (st.rotation_gantt) {
+    renderRotationGantt(st.rotation_gantt);
+  }
+}
+
+function renderContributionHeatmap(heatmapDays) {
+  const container = document.getElementById("contribution-heatmap-container");
+  if (!container || !Array.isArray(heatmapDays) || heatmapDays.length === 0) return;
+
+  const totalMins = heatmapDays.reduce((acc, d) => acc + (d.active_minutes || 0), 0);
+  const pill = document.getElementById("heatmap-total-active-pill");
+  if (pill) {
+    pill.textContent = `${(totalMins / 60).toFixed(1)} hrs active this year`;
+  }
+
+  const weeks = [];
+  let currentWeek = [];
+
+  const firstDate = new Date(heatmapDays[0].date + "T00:00:00");
+  const firstDayOfWeek = (firstDate.getDay() + 6) % 7; // 0=Mon .. 6=Sun
+  for (let i = 0; i < firstDayOfWeek; i++) {
+    currentWeek.push(null);
+  }
+
+  const monthPositions = [];
+  let lastMonth = -1;
+
+  heatmapDays.forEach((day) => {
+    const dObj = new Date(day.date + "T00:00:00");
+    const m = dObj.getMonth();
+    if (m !== lastMonth) {
+      monthPositions.push({
+        monthName: dObj.toLocaleString("default", { month: "short" }),
+        weekIndex: weeks.length,
+      });
+      lastMonth = m;
+    }
+
+    currentWeek.push(day);
+    if (currentWeek.length === 7) {
+      weeks.push(currentWeek);
+      currentWeek = [];
+    }
+  });
+
+  if (currentWeek.length > 0) {
+    while (currentWeek.length < 7) {
+      currentWeek.push(null);
+    }
+    weeks.push(currentWeek);
+  }
+
+  let monthsHtml = '<div class="heatmap-months-row">';
+  monthPositions.forEach((mp) => {
+    const leftPx = 28 + mp.weekIndex * 16;
+    monthsHtml += `<span class="heatmap-month-label" style="left: ${leftPx}px;">${mp.monthName}</span>`;
+  });
+  monthsHtml += '</div>';
+
+  let bodyHtml = '<div class="heatmap-body-row">';
+  bodyHtml += '<div class="heatmap-days-col"><span>Mon</span><span>Wed</span><span>Fri</span></div>';
+  bodyHtml += '<div class="heatmap-weeks-container">';
+
+  weeks.forEach((week) => {
+    bodyHtml += '<div class="heatmap-week-col">';
+    week.forEach((day) => {
+      if (!day) {
+        bodyHtml += '<div class="heatmap-day-cell" style="visibility: hidden;"></div>';
+      } else {
+        const mins = day.active_minutes || 0;
+        let lvl = 0;
+        if (mins > 0) {
+          if (mins < 60) lvl = 1;
+          else if (mins < 180) lvl = 2;
+          else if (mins < 300) lvl = 3;
+          else lvl = 4;
+        }
+        const hrs = (mins / 60).toFixed(1);
+        const gamesStr = day.games_played && day.games_played.length ? day.games_played.join(", ") : "None";
+        const tip = `${day.date}: ${mins}m (${hrs}h) · ${day.session_count || 0} sessions · ${day.achievements_unlocked || 0} unlocks · Games: ${gamesStr}`;
+        bodyHtml += `<div class="heatmap-day-cell" data-level="${lvl}" title="${escapeHtml(tip)}" tabindex="0" role="img" aria-label="${escapeHtml(tip)}"></div>`;
+      }
+    });
+    bodyHtml += '</div>';
+  });
+
+  bodyHtml += '</div></div>';
+
+  container.innerHTML = `<div class="heatmap-grid-wrapper" style="position: relative;">${monthsHtml}${bodyHtml}</div>`;
+}
+
+function renderCircadianBars(circadian) {
+  const container = document.getElementById("circadian-polar-bars");
+  if (!container || !circadian) return;
+
+  const archetypeBadge = document.getElementById("heatmap-archetype-badge");
+  if (archetypeBadge) {
+    archetypeBadge.textContent = circadian.archetype || "Flexible Gamer";
+  }
+
+  const hours = circadian.hours || [];
+  const windows = [
+    { label: "12a–4a", name: "Late Night", icon: "🌙", hours: [0, 1, 2, 3] },
+    { label: "4a–8a", name: "Early Morning", icon: "🌅", hours: [4, 5, 6, 7] },
+    { label: "8a–12p", name: "Morning", icon: "☕", hours: [8, 9, 10, 11] },
+    { label: "12p–4p", name: "Afternoon", icon: "☀️", hours: [12, 13, 14, 15] },
+    { label: "4p–8p", name: "Evening", icon: "🌆", hours: [16, 17, 18, 19] },
+    { label: "8p–12a", name: "Night", icon: "🎮", hours: [20, 21, 22, 23] },
+  ];
+
+  const windowData = windows.map((w) => {
+    const total = w.hours.reduce((acc, h) => acc + (hours[h] || 0), 0);
+    return { ...w, total };
+  });
+
+  const maxTotal = Math.max(...windowData.map((w) => w.total), 1);
+  const totalAll = Math.max(windowData.reduce((acc, w) => acc + w.total, 0), 1);
+
+  container.innerHTML = windowData
+    .map((w) => {
+      const pct = Math.round((w.total / totalAll) * 100);
+      const fillPct = Math.min(100, Math.max(w.total > 0 ? 4 : 0, (w.total / maxTotal) * 100));
+      return `
+      <div class="circadian-polar-bar-row" title="${w.name}: ${w.total} events (${pct}%)">
+        <span class="circadian-bar-hour-label">${w.icon} ${w.label}</span>
+        <div class="circadian-bar-track">
+          <div class="circadian-bar-fill" style="inline-size: ${fillPct}%;"></div>
+        </div>
+        <span class="circadian-bar-count-label">${pct}%</span>
+      </div>
+    `;
+    })
+    .join("");
+}
+
+function renderSnackBingeHistogram(histogram) {
+  const container = document.getElementById("snack-binge-bars");
+  if (!container || !histogram) return;
+
+  const tiers = [
+    { label: "Quick Check-ins (< 30m)", key: "quick_checkins", sub: "Testing settings, daily logins, bouncing off titles" },
+    { label: "Standard Runs (30–90m)", key: "standard_runs", sub: "Weeknight core sessions" },
+    { label: "Deep Sessions (1.5–3h)", key: "deep_sessions", sub: "Progression blocks and boss fights" },
+    { label: "Binge Marathons (3h+)", key: "binge_marathons", sub: "High-immersion marathon blocks" },
+  ];
+
+  container.innerHTML = tiers
+    .map((t) => {
+      const data = histogram[t.key] || { count: 0, pct: 0 };
+      const fillPct = Math.min(100, Math.max(data.count > 0 ? 3 : 0, data.pct || 0));
+      return `
+      <div class="tier-item-card">
+        <div class="tier-item-header">
+          <span class="tier-item-label">${escapeHtml(t.label)}</span>
+          <span class="tier-item-stats">${data.count} sessions (${data.pct || 0}%)</span>
+        </div>
+        <div class="meter-track" style="margin-block: 4px;" title="${data.count} sessions">
+          <div class="meter-fill" style="inline-size: ${fillPct}%; background: linear-gradient(90deg, #38bdf8, #0284c7);"></div>
+        </div>
+        <span class="habits-kpi-sub" style="font-size: 0.73rem;">${escapeHtml(t.sub)}</span>
+      </div>
+    `;
+    })
+    .join("");
+
+  const lm = histogram.longest_marathon;
+  const marathonCard = document.getElementById("longest-marathon-badge");
+  if (marathonCard && lm && lm.hours > 0) {
+    const headline = document.getElementById("marathon-callout-headline");
+    const sub = document.getElementById("marathon-callout-sub");
+    if (headline) {
+      headline.textContent = `Longest Marathon: ${lm.hours} hrs on ${lm.game || "Game"}`;
+    }
+    if (sub) {
+      sub.textContent = `Recorded on ${lm.date || "recent session"}`;
+    }
+  }
+}
+
+function renderRotationGantt(rotationGames) {
+  const container = document.getElementById("rotation-gantt-container");
+  if (!container) return;
+
+  if (!Array.isArray(rotationGames) || rotationGames.length === 0) {
+    container.innerHTML = '<p class="empty-state" style="padding: 1.5rem; text-align: center; color: #94a3b8;">No game activity recorded in the last 30 days.</p>';
+    return;
+  }
+
+  let html = '<div class="gantt-table">';
+  html += '<div class="gantt-header-row">';
+  html += '<span class="gantt-game-col-header">Game &amp; Platform</span>';
+  html += '<div class="gantt-timeline-header-days">';
+  html += '<span>30 Days Ago</span>';
+  html += '<span>15 Days Ago</span>';
+  html += '<span>Today</span>';
+  html += '</div></div>';
+
+  rotationGames.forEach((g) => {
+    let statusClass = "gantt-status-playing";
+    let statusIcon = "▶";
+    const st = (g.status || "").toLowerCase();
+    if (st.includes("complete") || st.includes("beat")) {
+      statusClass = "gantt-status-completed";
+      statusIcon = "✓";
+    } else if (st.includes("drop")) {
+      statusClass = "gantt-status-dropped";
+      statusIcon = "✕";
+    }
+
+    const totalHours = ((g.total_30d_minutes || 0) / 60).toFixed(1);
+
+    html += '<div class="gantt-row">';
+    html += '<div class="gantt-game-info">';
+    html += `<div class="gantt-game-title" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</div>`;
+    html += '<div class="gantt-game-meta">';
+    html += `<span class="gantt-status-badge ${statusClass}">${statusIcon} ${escapeHtml(g.status || "Active")}</span>`;
+    html += `<span>${totalHours}h (30d)</span>`;
+    html += '</div></div>';
+
+    html += '<div class="gantt-timeline-cells">';
+    const days = g.days || [];
+    days.forEach((d) => {
+      const isActive = d.active || (d.minutes && d.minutes > 0);
+      const activeClass = isActive ? "active-day" : "";
+      const mins = d.minutes || 0;
+      const tip = `${g.title} (${d.date}): ${mins}m logged`;
+      html += `<div class="gantt-day-tick ${activeClass}" title="${escapeHtml(tip)}"></div>`;
+    });
+    html += '</div></div>';
+  });
+
+  html += '</div>';
+  container.innerHTML = html;
 }
 
 function applyViewMode(mode) {

@@ -7213,6 +7213,439 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   }
 }
 
+/* ==========================================================================
+   Session & Pacing Telemetry Engine (Heatmap, Gantt, Histogram, 2x2 KPIs)
+   ========================================================================== */
+
+.session-telemetry-header {
+  margin-block-start: 1.5rem;
+  margin-block-end: 0.75rem;
+}
+
+.session-section-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.session-kpis-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-block-end: 1.5rem;
+}
+
+.session-kpi-card {
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1.15rem;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.session-kpi-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(56, 189, 248, 0.4);
+}
+
+.session-kpi-card::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 0;
+  block-size: 3px;
+  background: linear-gradient(90deg, #38bdf8, #0284c7);
+  opacity: 0.85;
+}
+
+.session-heatmap-panel {
+  background-color: #0f172a !important;
+  border: 1px solid rgba(56, 189, 248, 0.15) !important;
+}
+
+.heatmap-circadian-layout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+  margin-block-start: 1rem;
+}
+
+.heatmap-side-col {
+  flex: 1;
+  min-inline-size: 0;
+}
+
+.circadian-side-col {
+  inline-size: 280px;
+  min-inline-size: 260px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+}
+
+.circadian-side-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 0.75rem 0;
+}
+
+.heatmap-scroll-container {
+  overflow-x: auto;
+  padding-block-end: 0.5rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.3) transparent;
+}
+
+.heatmap-scroll-container::-webkit-scrollbar {
+  block-size: 6px;
+}
+
+.heatmap-scroll-container::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.3);
+  border-radius: 3px;
+}
+
+.heatmap-grid-wrapper {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 4px;
+  user-select: none;
+}
+
+.heatmap-months-row {
+  display: flex;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  height: 16px;
+  padding-inline-start: 28px;
+}
+
+.heatmap-month-label {
+  position: absolute;
+}
+
+.heatmap-body-row {
+  display: flex;
+  gap: 3px;
+}
+
+.heatmap-days-col {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  inline-size: 25px;
+  font-size: 0.68rem;
+  color: #64748b;
+  padding-block: 2px;
+}
+
+.heatmap-weeks-container {
+  display: flex;
+  gap: 3px;
+}
+
+.heatmap-week-col {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.heatmap-day-cell {
+  inline-size: 13px;
+  block-size: 13px;
+  border-radius: 2px;
+  background-color: #1e293b;
+  cursor: pointer;
+  transition: transform 0.15s ease, outline-color 0.15s ease;
+  outline: 1px solid transparent;
+}
+
+.heatmap-day-cell:hover,
+.heatmap-day-cell:focus {
+  transform: scale(1.3);
+  z-index: 2;
+  outline: 1px solid #38bdf8;
+}
+
+.heatmap-day-cell[data-level="0"] {
+  background-color: #1e293b;
+}
+
+.heatmap-day-cell[data-level="1"] {
+  background-color: #0c4a6e; /* < 1h */
+}
+
+.heatmap-day-cell[data-level="2"] {
+  background-color: #0284c7; /* 1h - 3h */
+}
+
+.heatmap-day-cell[data-level="3"] {
+  background-color: #38bdf8; /* 3h - 5h */
+  box-shadow: 0 0 3px rgba(56, 189, 248, 0.4);
+}
+
+.heatmap-day-cell[data-level="4"] {
+  background-color: #a5f3fc; /* 5h+ Marathon */
+  box-shadow: 0 0 7px rgba(165, 243, 252, 0.6);
+}
+
+.heatmap-legend-strip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  margin-block-start: 0.75rem;
+  justify-content: flex-end;
+}
+
+.heatmap-legend-box {
+  inline-size: 12px;
+  block-size: 12px;
+  border-radius: 2px;
+}
+
+.heatmap-legend-box[data-level="0"] { background-color: #1e293b; }
+.heatmap-legend-box[data-level="1"] { background-color: #0c4a6e; }
+.heatmap-legend-box[data-level="2"] { background-color: #0284c7; }
+.heatmap-legend-box[data-level="3"] { background-color: #38bdf8; }
+.heatmap-legend-box[data-level="4"] { background-color: #a5f3fc; }
+
+.circadian-polar-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.circadian-polar-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+}
+
+.circadian-bar-hour-label {
+  inline-size: 45px;
+  color: #94a3b8;
+  font-weight: 600;
+  text-align: end;
+}
+
+.circadian-bar-track {
+  flex: 1;
+  block-size: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.circadian-bar-fill {
+  block-size: 100%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #0284c7, #38bdf8);
+}
+
+.circadian-bar-count-label {
+  inline-size: 28px;
+  font-weight: 700;
+  color: #f1f5f9;
+  text-align: end;
+}
+
+.marathon-callout-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  margin-block-start: 1rem;
+}
+
+.marathon-callout-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+}
+
+.marathon-callout-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.marathon-callout-text strong {
+  font-size: 0.95rem;
+  color: #f8fafc;
+}
+
+.marathon-callout-text span {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+/* 30-Day Rotation Gantt Timeline */
+.session-rotation-gantt-panel {
+  background-color: var(--bg-surface);
+}
+
+.gantt-scroll-container {
+  overflow-x: auto;
+  padding-block: 0.5rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.3) transparent;
+}
+
+.gantt-table {
+  inline-size: 100%;
+  min-inline-size: 780px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.gantt-header-row {
+  display: flex;
+  align-items: center;
+  padding-block-end: 0.4rem;
+  border-block-end: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.gantt-game-col-header {
+  inline-size: 220px;
+  min-inline-size: 220px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.gantt-timeline-header-days {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  padding-inline: 4px;
+}
+
+.gantt-row {
+  display: flex;
+  align-items: center;
+  padding-block: 0.4rem;
+  border-block-end: 1px solid rgba(255, 255, 255, 0.04);
+  transition: background-color 0.15s ease;
+}
+
+.gantt-row:hover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.gantt-game-info {
+  inline-size: 220px;
+  min-inline-size: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  overflow: hidden;
+  padding-inline-end: 0.75rem;
+}
+
+.gantt-game-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gantt-game-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.gantt-timeline-cells {
+  flex: 1;
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.gantt-day-tick {
+  flex: 1;
+  block-size: 22px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 3px;
+  position: relative;
+  transition: transform 0.1s ease;
+}
+
+.gantt-day-tick.active-day {
+  background: linear-gradient(135deg, #0284c7, #38bdf8);
+  box-shadow: 0 0 5px rgba(56, 189, 248, 0.4);
+}
+
+.gantt-day-tick:hover {
+  transform: scale(1.15);
+  z-index: 2;
+}
+
+.gantt-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.gantt-status-completed {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.gantt-status-playing {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.gantt-status-dropped {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+@media (max-width: 900px) {
+  .heatmap-circadian-layout {
+    flex-direction: column;
+  }
+
+  .circadian-side-col {
+    inline-size: 100%;
+    min-inline-size: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .session-kpis-grid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+}
+
 
 
 

@@ -10,10 +10,10 @@
   <meta name="apple-mobile-web-app-title" content="Vertex">
   <title>Vertex | Unified Game Nexus</title>
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png?v=50">
-  <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg?v=50">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=50">
-  <link rel="stylesheet" href="/static/styles.css?v=50">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png?v=56">
+  <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg?v=56">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=56">
+  <link rel="stylesheet" href="/static/styles.css?v=56">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -35,7 +35,7 @@
   <header class="site-header">
     <div class="header-inner">
       <div class="brand-group">
-        <img src="/static/vertex_logo.png?v=50" alt="Vertex Logo" class="brand-logo" width="36" height="36">
+        <img src="/static/vertex_logo.png?v=56" alt="Vertex Logo" class="brand-logo" width="36" height="36">
         <div class="brand-text">
           <h1>Vertex</h1>
           <p class="subtitle" id="sync-badge">Unified Game Library</p>
@@ -326,8 +326,116 @@
         </article>
       </div>
 
+      <!-- Section & Pacing Intelligence Header & 2x2 Nerd-Stats KPI Grid -->
+      <div class="session-telemetry-header">
+        <div class="panel-header" style="margin-block-end: 0.85rem;">
+          <div>
+            <h3 id="session-telemetry-title" class="session-section-title">Session &amp; Pacing Intelligence</h3>
+            <p class="panel-sub">Live telemetry tracking, 365-day play heatmap, commitment histogram, and 30-day rotation timeline</p>
+          </div>
+          <span class="badge-subtle badge-accent" id="telemetry-live-badge">⚡ Real-Time Engine</span>
+        </div>
+      </div>
+
+      <div class="session-kpis-grid" id="session-kpis-grid" aria-label="Live session and daily telemetry metrics">
+        <article class="habits-kpi-card session-kpi-card" id="kpi-card-streak">
+          <span class="habits-kpi-label">Play Streak</span>
+          <strong class="habits-kpi-value text-accent" id="skpi-streak">0 Days Active</strong>
+          <span class="habits-kpi-sub" id="skpi-streak-detail">Record: 0 Days</span>
+        </article>
+        <article class="habits-kpi-card session-kpi-card" id="kpi-card-sweet-spot">
+          <span class="habits-kpi-label">Median Session Length ("Sweet Spot")</span>
+          <strong class="habits-kpi-value text-emerald" id="skpi-sweet-spot">0m avg session</strong>
+          <span class="habits-kpi-sub" id="skpi-sweet-spot-detail">0.0 sessions/week</span>
+        </article>
+        <article class="habits-kpi-card session-kpi-card" id="kpi-card-focus">
+          <span class="habits-kpi-label">Focus Score (Rotation Index)</span>
+          <strong class="habits-kpi-value text-purple" id="skpi-focus">0%</strong>
+          <span class="habits-kpi-sub" id="skpi-focus-detail">30-day focus ratio</span>
+        </article>
+        <article class="habits-kpi-card session-kpi-card" id="kpi-card-afk">
+          <span class="habits-kpi-label">AFK / Menu Tax Ratio</span>
+          <strong class="habits-kpi-value text-amber" id="skpi-afk">0.0%</strong>
+          <span class="habits-kpi-sub" id="skpi-afk-detail">Idle / pause overhead</span>
+        </article>
+      </div>
+
       <!-- Habits Detailed Sections Grid -->
       <div class="habits-main-grid">
+        <!-- Visual Component 1: 365-Day Activity Heatmap & Circadian Rhythm Clock -->
+        <article class="habits-panel habits-full-width session-heatmap-panel" aria-labelledby="heatmap-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="heatmap-panel-title">365-Day Gaming Contribution Heatmap &amp; Circadian Rhythm</h3>
+              <p class="panel-sub">Daily playtime intensity, session counts, achievements, and 24-hour play rhythm</p>
+            </div>
+            <div class="circadian-badges">
+              <span class="badge-subtle badge-accent" id="heatmap-archetype-badge">Night Owl</span>
+              <span class="badge-subtle" id="heatmap-total-active-pill">0 hrs active this year</span>
+            </div>
+          </div>
+
+          <div class="heatmap-circadian-layout">
+            <div class="heatmap-side-col">
+              <div class="heatmap-scroll-container" id="contribution-heatmap-container">
+                <!-- 52-week x 7-day grid rendered dynamically -->
+              </div>
+              <div class="heatmap-legend-strip">
+                <span class="heatmap-legend-label">Less</span>
+                <span class="heatmap-legend-box" data-level="0" title="0m logged"></span>
+                <span class="heatmap-legend-box" data-level="1" title="< 1h (< 60m)"></span>
+                <span class="heatmap-legend-box" data-level="2" title="1h – 3h (60–180m)"></span>
+                <span class="heatmap-legend-box" data-level="3" title="3h – 5h (180–300m)"></span>
+                <span class="heatmap-legend-box" data-level="4" title="5h+ Marathon (300m+)"></span>
+                <span class="heatmap-legend-label">More</span>
+              </div>
+            </div>
+
+            <div class="circadian-side-col">
+              <h4 class="circadian-side-title">24-Hour Distribution</h4>
+              <div class="circadian-polar-bars" id="circadian-polar-bars">
+                <!-- Rendered dynamically -->
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Visual Component 2: Session Commitment Distribution ("Snack vs. Binge" Histogram) -->
+        <article class="habits-panel session-histogram-panel" aria-labelledby="histogram-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="histogram-panel-title">Session Commitment Distribution ("Snack vs. Binge")</h3>
+              <p class="panel-sub">Quick check-ins, standard runs, deep sessions, and binge marathons</p>
+            </div>
+          </div>
+
+          <div id="snack-binge-bars" class="commitments-list">
+            <!-- Rendered dynamically -->
+          </div>
+
+          <div id="longest-marathon-badge" class="marathon-callout-card">
+            <div class="marathon-callout-icon">🏆</div>
+            <div class="marathon-callout-text">
+              <strong id="marathon-callout-headline">Longest Marathon: —</strong>
+              <span id="marathon-callout-sub">Single longest recorded session</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- Visual Component 3: 30-Day Rotation Timeline (Gantt Strip) -->
+        <article class="habits-panel habits-full-width session-rotation-gantt-panel" aria-labelledby="gantt-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="gantt-panel-title">30-Day Rotation Timeline (Swimlane Gantt)</h3>
+              <p class="panel-sub">Recent play activity across titles over the last 30 days, status transitions, and game hopping</p>
+            </div>
+            <span class="badge-subtle badge-purple" id="rotation-status-badge">Last 30 Days</span>
+          </div>
+
+          <div class="gantt-scroll-container" id="rotation-gantt-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
         <!-- Systems & Ecosystem Usage -->
         <article class="habits-panel habits-panel-systems" aria-labelledby="systems-panel-title">
           <div class="panel-header">
@@ -2187,6 +2295,6 @@
     <button type="button" id="mnav-add"></button>
   </div>
 
-  <script src="/static/app.js?v=50"></script>
+  <script src="/static/app.js?v=56"></script>
 </body>
 </html>
