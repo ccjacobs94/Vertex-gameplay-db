@@ -206,8 +206,47 @@ def get_allowed_mcp_hosts() -> List[str]:
     return allowed_mcp_hosts
 
 
-async def _run_mcp_http_server(host: str, port: int) -> None:
-    import uvicorn
+# Browser-based MCP clients send an Origin header; the mcp library rejects any Origin
+# not listed here (exact match or ":*" port wildcard only). Requests without Origin
+# (server-side agents) are unaffected.
+KNOWN_MCP_CLIENT_ORIGINS = ("https://claude.ai", "https://chatgpt.com", "https://gemini.google.com")
+
+
+def get_allowed_mcp_origins() -> List[str]:
+    origins = [
+        "http://localhost", "http://127.0.0.1", "http://[::1]",
+        "http://localhost:*", "http://127.0.0.1:*", "http://[::1]:*",
+    ]
+
+    def _add(origin: str) -> None:
+        if origin and origin not in origins:
+            origins.append(origin)
+
+    for env_key in ("MCP_PUBLIC_DOMAIN", "PUBLIC_BASE_URL", "VERTEX_ALLOWED_HOSTS"):
+        for item in os.environ.get(env_key, "").split(","):
+            raw = item.strip()
+            if not raw or "*" in raw:
+                continue
+            parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+            host = (parsed.hostname or "").strip().lower()
+            if host:
+                _add(f"https://{host}")
+    for origin in KNOWN_MCP_CLIENT_ORIGINS:
+        _add(origin)
+    for item in os.environ.get("MCP_ALLOWED_ORIGINS", "").split(","):
+        _add(item.strip().rstrip("/"))
+    return origins
+
+
+def _host_matches_patterns(host_header: str, patterns: List[str]) -> bool:
+    """Same semantics as the mcp library: exact match or 'host:*' port wildcard."""
+    if host_header in patterns:
+        return True
+    return any(p.endswith(":*") and host_header.startswith(p[:-2] + ":") for p in patterns)
+
+
+def build_mcp_app(host: str = "0.0.0.0"):
+    """Build the MCP Starlette app (Streamable HTTP + SSE + OAuth/login routes)."""
     from starlette.middleware.cors import CORSMiddleware
     from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.responses import JSONResponse
@@ -219,6 +258,7 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
     sec = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=allowed_mcp_hosts,
+        allowed_origins=get_allowed_mcp_origins(),
     )
     # Stateless: each request runs in its own context so current_user_id (set per bearer token)
     # can never leak across tenants through a long-lived shared MCP session.
@@ -301,6 +341,20 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
         allow_headers=["*"],
     )
 
+    class McpHostValidationMiddleware(BaseHTTPMiddleware):
+        """Validate Host on every MCP-port path (the OAuth/login/root/.well-known routes
+        bypass the mcp library's TransportSecurityMiddleware)."""
+
+        async def dispatch(self, request, call_next):
+            host_header = request.headers.get("host", "").strip().lower()
+            if not (_host_matches_patterns(host_header, allowed_mcp_hosts) or is_allowed_host(host_header)):
+                logger.warning("<-- MCP HOST REJECTED (400): %s %s", request.method, request.url.path)
+                return Response("Invalid Host header", status_code=400)
+            return await call_next(request)
+
+    # Added last so it is the outermost middleware
+    mcp_app.add_middleware(McpHostValidationMiddleware)
+
     async def root_handler(request):
         # If client connects to root with SSE headers, delegate to SSE handler
         accept = request.headers.get("accept", "")
@@ -324,7 +378,13 @@ async def _run_mcp_http_server(host: str, port: int) -> None:
     mcp_app.routes.insert(0, Route("/login", handle_login_post, methods=["POST"]))
 
     mcp_app.routes.insert(0, Route("/", root_handler, methods=["GET", "HEAD", "OPTIONS"]))
+    return mcp_app
 
+
+async def _run_mcp_http_server(host: str, port: int) -> None:
+    import uvicorn
+
+    mcp_app = build_mcp_app(host)
     config = uvicorn.Config(
         mcp_app,
         host=host,
@@ -376,6 +436,11 @@ def clean_unconfigured_subaccount_libraries(default_user: str, db_path: Optional
 async def lifespan(app: FastAPI):
     init_db(DEFAULT_DB_PATH)
     system_db.init_system_db()
+    system_db.warn_if_secret_key_missing()
+    try:
+        system_db.migrate_secrets_at_rest()
+    except Exception as exc:
+        logger.error("Secrets-at-rest migration failed: %s", type(exc).__name__)
     default_user = get_auth_username()
     system_db.ensure_bootstrap_admin(default_user)
     # If the default user's library doesn't exist yet, seed it from DEFAULT_DB_PATH
@@ -403,16 +468,39 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Unified Game Library Hub",
     description="Cross-platform game library & metrics tracker across Xbox, PC, PS4, and Nintendo Switch",
-    version="1.7.1",
+    version="1.16.1",
     lifespan=lifespan,
 )
+
+def _parse_host_header(host_header: str) -> str:
+    """Return the lowercased hostname from a Host header, handling bracketed IPv6."""
+    h = (host_header or "").strip().lower()
+    if h.startswith("["):
+        end = h.find("]")
+        if end == -1:
+            return ""
+        rest = h[end + 1:]
+        if rest and not (rest.startswith(":") and rest[1:].isdigit()):
+            return ""
+        return h[1:end]
+    if h.count(":") > 1:
+        return h  # bare IPv6 literal without port
+    return h.split(":")[0].strip()
+
 
 def is_allowed_host(host_header: str) -> bool:
     if not host_header:
         return False
-    h = host_header.split(":")[0].strip().lower()
+    h = _parse_host_header(host_header)
     if not h:
         return False
+    if h.count(":") > 1 or host_header.strip().startswith("["):
+        # IPv6 literals are only accepted if they parse as real IP addresses
+        try:
+            ipaddress.ip_address(h)
+            return True
+        except ValueError:
+            return False
     if h in ("localhost", "127.0.0.1", "::1", "testserver", "game-hub", "game-hub-qa"):
         return True
     if h.endswith(".local") or h.endswith(".ts.net"):
@@ -448,6 +536,43 @@ def is_allowed_host(host_header: str) -> bool:
     return False
 
 
+_CSRF_PROTECTED_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+_CSRF_EXEMPT_PATHS = ("/billing/webhook",)
+
+
+def _is_cross_site_request(request: Request) -> bool:
+    """CSRF check for cookie-authenticated state-changing requests.
+
+    Uses Sec-Fetch-Site when the browser sends it, otherwise falls back to Origin.
+    Requests with neither header (non-browser clients) are allowed.
+    """
+    fetch_site = request.headers.get("sec-fetch-site", "").strip().lower()
+    if fetch_site:
+        return fetch_site not in ("same-origin", "none")
+    origin = request.headers.get("origin")
+    if origin is None:
+        return False
+    parsed = urlparse(origin.strip())
+    if not parsed.scheme or not parsed.netloc:
+        return True  # "null" or malformed Origin
+    return not is_allowed_host(parsed.netloc)
+
+
+def _resolve_bearer_user(request: Request) -> Optional[Dict[str, Any]]:
+    """Return the active user bound to the request's Bearer token (OAuth / PAT), if any."""
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.lower().startswith("bearer "):
+        return None
+    from oauth_provider import verify_bearer_token
+    uid = verify_bearer_token(auth_header[7:].strip())
+    if not uid:
+        return None
+    user = system_db.get_user(uid)
+    if not user or user.get("status") != "active":
+        return None
+    return user
+
+
 class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         host = request.headers.get("host", "")
@@ -455,6 +580,24 @@ class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
             return Response("Invalid Host header", status_code=400)
 
         path = request.url.path
+        # CSRF only applies to ambient credentials (session cookie, local bypass); requests
+        # authenticated purely by an Authorization: Bearer header are exempt.
+        bearer_only = (
+            request.headers.get("authorization", "").lower().startswith("bearer ")
+            and not request.cookies.get(SESSION_COOKIE_NAME)
+        )
+        if (
+            request.method in _CSRF_PROTECTED_METHODS
+            and path not in _CSRF_EXEMPT_PATHS
+            and not bearer_only
+            and _is_cross_site_request(request)
+        ):
+            logger.warning("CSRF check rejected cross-site %s %s", request.method, path)
+            return JSONResponse(
+                {"error": "forbidden", "detail": "Cross-site request rejected"},
+                status_code=403,
+            )
+
         if request.method != "OPTIONS" and not is_public_path(path):
             if not is_request_authenticated(request):
                 if path.startswith("/api/"):
@@ -470,11 +613,18 @@ class WebAuthAndCacheMiddleware(BaseHTTPMiddleware):
         # Scope authenticated requests to the user's games.db
         session_id = request.cookies.get(SESSION_COOKIE_NAME)
         username = verify_web_session(session_id)
+        user = None
+        if not username:
+            # REST clients authenticated by OAuth / PAT bearer token (inactive users rejected)
+            user = _resolve_bearer_user(request)
+            if user:
+                username = user.get("username")
         if not username and is_local_bypass_enabled() and _is_direct_local_or_tailscale_request(request):
             username = get_auth_username()
         if not username and not is_web_auth_enabled():
             username = get_auth_username()
-        user = system_db.get_user_by_username(username) if username else None
+        if user is None:
+            user = system_db.get_user_by_username(username) if username else None
         user_id = user["id"] if user else None
 
         if user and user.get("status") != "active":
@@ -625,6 +775,10 @@ def _get_active_user(request: Request) -> Tuple[Optional[str], Optional[str]]:
     """Return (user_id, username) for the active request."""
     session_id = request.cookies.get(SESSION_COOKIE_NAME)
     username = verify_web_session(session_id)
+    if not username:
+        bearer_user = _resolve_bearer_user(request)
+        if bearer_user:
+            return bearer_user["id"], bearer_user.get("username")
     if not username and is_local_bypass_enabled() and _is_direct_local_or_tailscale_request(request):
         username = get_auth_username()
     if not username and not is_web_auth_enabled():

@@ -77,6 +77,7 @@ If you want cloud AI clients (such as Google Gemini Web or Claude Web) to connec
    python3 -c "import secrets; print('gh_sec_' + secrets.token_urlsafe(24))"
    ```
 2. Set `MCP_PUBLIC_DOMAIN=https://your-mcp-domain.example.com` and `MCP_CLIENT_SECRET=<your-secret>` in `.env`.
+   Browser-based clients send an `Origin` header; `https://claude.ai`, `https://chatgpt.com`, `https://gemini.google.com`, and your configured public hosts are allowed by default. Add others via `MCP_ALLOWED_ORIGINS` (comma-separated). Requests with any other `Origin` get `403`, and every MCP-port path rejects unknown `Host` headers with `400`.
 3. *(Optional)* To run the bundled `cloudflared` tunnel container, set `COMPOSE_PROFILES=tunnel` and `TUNNEL_TOKEN=<your-cloudflare-tunnel-token>` in `.env`, and point your Cloudflare Tunnel public hostname to `http://game-hub:8096`.
 
 ---
