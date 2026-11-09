@@ -5,6 +5,7 @@ and backlog across PC (Steam), Xbox, PlayStation, and Nintendo Switch.
 """
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 
 try:
@@ -56,9 +57,12 @@ from taxonomy import (
 
 from sync_engine import (
     enrich_missing_metadata,
+    pick_best_cover_art,
     search_external_metadata,
     sync_game_achievements_on_demand,
 )
+
+logger = logging.getLogger("gamehub.mcp")
 
 try:
     init_db(DEFAULT_DB_PATH)
@@ -361,11 +365,12 @@ def update_game_progress(
     user_rating: Optional[int] = None,
     notes: Optional[str] = None,
     favorite: Optional[bool] = None,
+    cover_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Update a game's completion status ('Not Played', 'Plan to Play', 'Playing', 'Beaten', 'Completed', 'Dropped'),
     ownership_status ('Owned', 'Subscription', 'Borrowed', 'None'),
-    is_game_pass (true/false), is_play_anywhere (true/false), user rating (1-10), personal notes, or favorite flag by matching its title.
+    is_game_pass (true/false), is_play_anywhere (true/false), user rating (1-10), personal notes, favorite flag, or cover art URL by matching its title.
     """
     matches = query_games(search=title, limit=5)
     if not matches:
@@ -388,6 +393,10 @@ def update_game_progress(
         updates["notes"] = notes
     if favorite is not None:
         updates["favorite"] = favorite
+    if cover_url is not None:
+        trimmed_cover = cover_url.strip()
+        if trimmed_cover.startswith("http://") or trimmed_cover.startswith("https://"):
+            updates["cover_url"] = trimmed_cover
 
     updated = update_game(target["id"], updates)
     return {"status": "updated", "game": updated}
@@ -495,7 +504,7 @@ def update_game_ownership(
 
 
 @mcp.tool()
-def add_game_to_library(
+async def add_game_to_library(
     title: str,
     platform: str = "Nintendo Switch",
     completion_status: str = "Plan to Play",
@@ -507,12 +516,14 @@ def add_game_to_library(
     genres: Optional[List[str]] = None,
     tags: Optional[List[str]] = None,
     notes: str = "",
+    cover_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Add a new game (such as a Nintendo Switch, PS4, Xbox, or PC title) to the library.
     - ownership_status: 'Owned', 'Subscription', 'Borrowed', or 'None'
     - is_game_pass: boolean flag for Xbox Game Pass availability
     - is_play_anywhere: boolean flag for Xbox Play Anywhere capability
+    - cover_url: optional http(s) URL for cover art; auto-fills from external search if omitted
     """
     ignored: List[str] = []
     for label in genres or []:
@@ -521,6 +532,20 @@ def add_game_to_library(
     for label in tags or []:
         if not validate_tags([label]):
             ignored.append(label)
+
+    valid_cover_url: Optional[str] = None
+    if cover_url is not None:
+        trimmed = cover_url.strip()
+        if trimmed and (trimmed.startswith("http://") or trimmed.startswith("https://")):
+            valid_cover_url = trimmed
+
+    if valid_cover_url is None and (cover_url is None or not cover_url.strip()):
+        try:
+            candidates = await search_external_metadata(title)
+            valid_cover_url = pick_best_cover_art(candidates, title)
+        except Exception as exc:
+            logger.debug("Auto-fill cover search failed for '%s': %s", title, exc)
+            valid_cover_url = None
 
     game = add_manual_game(
         title=title,
@@ -533,6 +558,7 @@ def add_game_to_library(
         user_rating=user_rating,
         genres=validate_genres(genres),
         tags=validate_tags(tags),
+        cover_url=valid_cover_url,
         notes=notes,
     )
     res: Dict[str, Any] = {"status": "added", "game": game}
@@ -631,37 +657,40 @@ async def search_game_candidates(query: str, include_editions: bool = True) -> D
     candidates: List[Dict[str, Any]] = []
 
     # 1. Search local canonical games
-    with get_connection(db_path) as conn:
-        local_rows = conn.execute(
-            """
-            SELECT * FROM canonical_games
-            WHERE title LIKE ? OR normalized_title LIKE ?
-            LIMIT 5
-            """,
-            (f"%{q}%", f"%{q}%"),
-        ).fetchall()
-        for r in local_rows:
-            norm = r["normalized_title"]
-            if norm not in seen_norm:
-                seen_norm.add(norm)
-                c_dict = dict(r)
-                c_dict["genres"] = json.loads(c_dict.get("genres") or "[]")
-                editions = list_game_editions(c_dict["id"], db_path=db_path) if include_editions else []
-                conflict = check_library_ownership_conflicts(c_dict["title"], canonical_game_id=c_dict["id"], db_path=db_path)
-                candidates.append({
-                    "title": c_dict["title"],
-                    "normalized_title": norm,
-                    "release_year": c_dict.get("release_year"),
-                    "developer": c_dict.get("developer") or "",
-                    "publisher": c_dict.get("publisher") or "",
-                    "cover_url": c_dict.get("cover_url"),
-                    "genres": c_dict.get("genres", []),
-                    "critic_score": c_dict.get("critic_score"),
-                    "editions": editions,
-                    "available_platforms": ["PC", "Xbox", "PlayStation"],
-                    "ownership_conflict": conflict,
-                    "source": "local_catalog",
-                })
+    try:
+        with get_connection(db_path) as conn:
+            local_rows = conn.execute(
+                """
+                SELECT * FROM canonical_games
+                WHERE title LIKE ? OR normalized_title LIKE ?
+                LIMIT 5
+                """,
+                (f"%{q}%", f"%{q}%"),
+            ).fetchall()
+            for r in local_rows:
+                norm = r["normalized_title"]
+                if norm not in seen_norm:
+                    seen_norm.add(norm)
+                    c_dict = dict(r)
+                    c_dict["genres"] = json.loads(c_dict.get("genres") or "[]")
+                    editions = list_game_editions(c_dict["id"], db_path=db_path) if include_editions else []
+                    conflict = check_library_ownership_conflicts(c_dict["title"], canonical_game_id=c_dict["id"], db_path=db_path)
+                    candidates.append({
+                        "title": c_dict["title"],
+                        "normalized_title": norm,
+                        "release_year": c_dict.get("release_year"),
+                        "developer": c_dict.get("developer") or "",
+                        "publisher": c_dict.get("publisher") or "",
+                        "cover_url": c_dict.get("cover_url"),
+                        "genres": c_dict.get("genres", []),
+                        "critic_score": c_dict.get("critic_score"),
+                        "editions": editions,
+                        "available_platforms": ["PC", "Xbox", "PlayStation"],
+                        "ownership_conflict": conflict,
+                        "source": "local_catalog",
+                    })
+    except Exception as exc:
+        logger.debug("Local canonical games search error: %s", exc)
 
     # 2. Search external metadata
     try:
@@ -696,7 +725,7 @@ async def search_game_candidates(query: str, include_editions: bool = True) -> D
                     "source": ext.get("provider", "external"),
                 })
     except Exception as exc:
-        pass
+        logger.warning("External metadata search failed for query '%s': %s", q, exc)
 
     return _sanitize_output({"query": q, "candidates": candidates[:10]})
 
