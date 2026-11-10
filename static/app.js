@@ -7746,6 +7746,21 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
   }
+  // Auto-close session achievement dropdown on outside click
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".session-ach-dropdown")) {
+      document.querySelectorAll(".session-ach-dropdown[open]").forEach((d) => d.removeAttribute("open"));
+    }
+  });
+
+  // Ensure only one session achievement dropdown is open at a time
+  document.addEventListener("toggle", (e) => {
+    if (e.target.classList && e.target.classList.contains("session-ach-dropdown") && e.target.open) {
+      document.querySelectorAll(".session-ach-dropdown[open]").forEach((d) => {
+        if (d !== e.target) d.removeAttribute("open");
+      });
+    }
+  }, true);
 });
 
 // --- Play Sessions Activity Feed & Modal History ---
@@ -7842,6 +7857,41 @@ function getRelativeTime(isoStr) {
   }
 }
 
+function renderSessionAchievementsDropdown(sess, labelSuffix = "unlocked") {
+  const achCount = sess.achievements_unlocked || 0;
+  if (achCount <= 0) return "";
+  const achs = Array.isArray(sess.achievements) ? sess.achievements : [];
+
+  if (achs.length === 0) {
+    return `<span class="session-badge session-badge-ach" title="Achievements unlocked">🏆 ${achCount} ${labelSuffix}</span>`;
+  }
+
+  return `
+    <details class="session-ach-dropdown">
+      <summary class="session-badge session-badge-ach session-ach-summary" title="Click to view achievements unlocked in this session">
+        <span>🏆 ${achCount} ${labelSuffix}</span>
+        <span class="session-ach-chevron" aria-hidden="true">▾</span>
+      </summary>
+      <div class="session-ach-dropdown-menu" role="region" aria-label="Unlocked Achievements">
+        <div class="session-ach-dropdown-header">
+          <strong>Achievements (${achs.length})</strong>
+        </div>
+        <ul class="session-ach-dropdown-list">
+          ${achs.map(a => `
+            <li class="session-ach-item">
+              ${a.icon_url ? `<img src="${escapeHtml(a.icon_url)}" alt="" class="session-ach-icon" width="28" height="28" loading="lazy">` : '<span class="session-ach-fallback-icon" aria-hidden="true">🏆</span>'}
+              <div class="session-ach-info">
+                <span class="session-ach-name">${escapeHtml(a.name || 'Achievement')}</span>
+                <span class="session-ach-desc">${escapeHtml(a.description || 'Achievement unlocked.')}</span>
+              </div>
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    </details>
+  `;
+}
+
 function renderSessionsFeed(sessions) {
   const listEl = document.getElementById("sessions-list");
   const emptyEl = document.getElementById("sessions-empty");
@@ -7876,7 +7926,7 @@ function renderSessionsFeed(sessions) {
               <div class="session-card-badges">
                 <span class="session-badge session-badge-platform">${escapeHtml(sess.platform)}</span>
                 <span class="session-badge session-badge-duration">${durStr}</span>
-                ${achCount > 0 ? `<span class="session-badge session-badge-ach">🏆 ${achCount} unlocked</span>` : ""}
+                ${renderSessionAchievementsDropdown(sess, "unlocked")}
                 ${isLocked ? `<span class="session-badge session-badge-locked" title="User edited session (locked)">🔒 Edited</span>` : ""}
               </div>
             </div>
@@ -8005,7 +8055,7 @@ async function loadGameSessionHistory(gameId) {
           <div class="session-modal-card-top">
             <span class="session-badge session-badge-platform">${escapeHtml(sess.platform)}</span>
             <span class="session-badge session-badge-duration">${durStr}</span>
-            ${achCount > 0 ? `<span class="session-badge session-badge-ach">🏆 ${achCount} ach</span>` : ''}
+            ${renderSessionAchievementsDropdown(sess, "ach")}
             ${isLocked ? `<span class="session-badge session-badge-locked">🔒 Edited</span>` : ''}
             <span class="session-modal-date">${escapeHtml(startDate)} — ${escapeHtml(endDate)}</span>
           </div>
