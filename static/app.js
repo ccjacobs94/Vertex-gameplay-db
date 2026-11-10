@@ -408,6 +408,10 @@ async function fetchHabitsAnalytics() {
   if (state.genre) params.set("genre", state.genre);
   if (state.tag) params.set("tag", state.tag);
   if (state.favoriteOnly) params.set("favorite_only", "true");
+  try {
+    const clientTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (clientTz) params.set("client_timezone", clientTz);
+  } catch (_) {}
 
   try {
     const res = await fetch(`/api/analytics?${params.toString()}`);
@@ -450,6 +454,10 @@ async function openGameById(gameId) {
 function renderHabitsDashboard(data) {
   if (!data || !data.summary) return;
   const s = data.summary;
+
+  if (data.session_telemetry) {
+    renderSessionTelemetry(data.session_telemetry);
+  }
 
   // 1. KPI Pulse Strip
   const elHours = document.getElementById("hkpi-hours");
@@ -558,10 +566,17 @@ function renderHabitsDashboard(data) {
         card.setAttribute("tabindex", "0");
         card.setAttribute("title", `Click to filter by ${plat.name}`);
 
+        let topGameImgHtml = "";
+        if (plat.top_game) {
+          const fallback = makeFallbackCover(plat.top_game.title, plat.name);
+          const coverSrc = plat.top_game.cover_url || fallback;
+          topGameImgHtml = `<img src="${escapeHtml(coverSrc)}" alt="" class="system-top-game-img" loading="lazy" onerror="this.onerror=null; this.src='${fallback}'">`;
+        }
+
         const topGameSnippet = plat.top_game
           ? `
             <div class="system-top-game-snippet">
-              ${plat.top_game.cover_url ? `<img src="${escapeHtml(plat.top_game.cover_url)}" alt="" class="system-top-game-img" loading="lazy">` : ""}
+              ${topGameImgHtml}
               <span>#1 Most Played: <strong>${escapeHtml(plat.top_game.title)}</strong> (${plat.top_game.hours}h)</span>
             </div>
           `
@@ -845,6 +860,848 @@ function renderHabitsDashboard(data) {
       });
     }
   }
+
+  // 10. Circadian Gaming Rhythm
+  const circadianContainer = document.getElementById("circadian-heatmap-container");
+  const circadianBuckets = document.getElementById("circadian-time-buckets");
+  const cr = data.circadian_rhythm;
+  if (circadianContainer && cr) {
+    const archPill = document.getElementById("circadian-archetype-pill");
+    if (archPill) archPill.textContent = cr.archetype || "Flexible Gamer";
+    const peakPill = document.getElementById("circadian-peak-pill");
+    if (peakPill) peakPill.textContent = `Peak: ${cr.peak_day || "—"} at ${cr.peak_hour || "—"}`;
+    const tzPill = document.getElementById("circadian-tz-pill");
+    if (tzPill) {
+      const tzName = cr.timezone || "Local Time";
+      const eraNote = cr.eras_count > 0 ? ` (${cr.eras_count} era${cr.eras_count > 1 ? "s" : ""})` : "";
+      tzPill.textContent = `📍 ${tzName}${eraNote}`;
+    }
+
+    const maxVal = Math.max(cr.max_count || 0, 1);
+    const dayLabels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+    let html = '<div class="circadian-grid-wrap"><div class="circadian-header-row"><span class="circadian-day-col-hdr"></span>';
+    for (let h = 0; h < 24; h++) {
+      const ampm = h < 12 ? "a" : "p";
+      const h12 = h % 12 === 0 ? 12 : h % 12;
+      const label = (h % 3 === 0) ? `${h12}${ampm}` : "";
+      html += `<span class="circadian-hour-hdr">${label}</span>`;
+    }
+    html += '</div>';
+
+    for (let d = 0; d < 7; d++) {
+      html += `<div class="circadian-day-row"><span class="circadian-day-label">${dayLabels[d]}</span>`;
+      for (let h = 0; h < 24; h++) {
+        const val = (cr.grid && cr.grid[d] && cr.grid[d][h]) || 0;
+        let lvl = 0;
+        if (val > 0) {
+          const ratio = val / maxVal;
+          if (ratio <= 0.25) lvl = 1;
+          else if (ratio <= 0.5) lvl = 2;
+          else if (ratio <= 0.75) lvl = 3;
+          else lvl = 4;
+        }
+        const ampm = h < 12 ? "AM" : "PM";
+        const h12 = h % 12 === 0 ? 12 : h % 12;
+        const tip = `${dayLabels[d]} ${h12}:00 ${ampm}: ${val} session/achievement events`;
+        html += `<div class="circadian-cell" data-level="${lvl}" title="${escapeHtml(tip)}" tabindex="0" role="img" aria-label="${escapeHtml(tip)}"></div>`;
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    circadianContainer.innerHTML = html;
+
+    if (circadianBuckets && cr.time_buckets) {
+      const tb = cr.time_buckets;
+      const tot = Math.max(cr.total_events || 0, 1);
+      const bItems = [
+        { label: "Night (12a–6a)", count: tb.night || 0, icon: "🌙" },
+        { label: "Morning (6a–12p)", count: tb.morning || 0, icon: "🌅" },
+        { label: "Afternoon (12p–6p)", count: tb.afternoon || 0, icon: "☀️" },
+        { label: "Evening (6p–12a)", count: tb.evening || 0, icon: "🌆" },
+      ];
+      circadianBuckets.innerHTML = bItems.map(b => {
+        const pct = Math.round((b.count / tot) * 100);
+        return `
+          <div class="circadian-bucket-card">
+            <div class="circadian-bucket-header">
+              <span>${b.icon} ${escapeHtml(b.label)}</span>
+              <strong>${pct}%</strong>
+            </div>
+            <div class="meter-track" style="block-size: 6px;">
+              <div class="meter-fill" style="inline-size: ${Math.max(2, pct)}%; background: linear-gradient(90deg, #38bdf8, #a855f7);"></div>
+            </div>
+            <span class="circadian-bucket-sub">${b.count} events</span>
+          </div>
+        `;
+      }).join("");
+    }
+  }
+
+  // 11. The Quit Curve & Survival Retention
+  const quitContainer = document.getElementById("quit-curve-container");
+  const qc = data.quit_curve;
+  if (quitContainer && qc) {
+    const bailoutBadge = document.getElementById("median-bailout-badge");
+    if (bailoutBadge) bailoutBadge.textContent = `Median Bailout: ${qc.median_drop_hours}h`;
+
+    const intervals = qc.intervals || [];
+    let svgPath = "";
+    let svgArea = "";
+    let dots = "";
+    const w = 500;
+    const h = 140;
+    const padL = 40;
+    const padR = 20;
+    const padT = 20;
+    const padB = 30;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
+
+    if (intervals.length > 0) {
+      const pts = intervals.map((pt, i) => {
+        const x = padL + (i / (intervals.length - 1)) * plotW;
+        const y = padT + (1 - (pt.rate / 100)) * plotH;
+        return { x: Math.round(x), y: Math.round(y), ...pt };
+      });
+
+      svgPath = `M ${pts[0].x} ${pts[0].y} ` + pts.slice(1).map(p => `L ${p.x} ${p.y}`).join(" ");
+      svgArea = `${svgPath} L ${pts[pts.length - 1].x} ${padT + plotH} L ${pts[0].x} ${padT + plotH} Z`;
+
+      dots = pts.map(p => `
+        <circle cx="${p.x}" cy="${p.y}" r="4.5" fill="#38bdf8" stroke="#0f172a" stroke-width="2" />
+        <text x="${p.x}" y="${p.y - 8}" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="700">${p.rate}%</text>
+        <text x="${p.x}" y="${padT + plotH + 18}" text-anchor="middle" fill="#64748b" font-size="10">${p.hours}h</text>
+      `).join("");
+    }
+
+    let medianMarker = "";
+    if (qc.median_drop_hours > 0 && intervals.length > 0) {
+      const medRatio = Math.min(1, Math.max(0, qc.median_drop_hours / 20));
+      const medX = padL + medRatio * plotW * 0.75;
+      medianMarker = `
+        <line x1="${medX}" y1="${padT}" x2="${medX}" y2="${padT + plotH}" stroke="#f43f5e" stroke-width="2" stroke-dasharray="4 3" />
+        <text x="${medX + 4}" y="${padT + 12}" fill="#f43f5e" font-size="10" font-weight="700">Drop Median (${qc.median_drop_hours}h)</text>
+      `;
+    }
+
+    const dropBinsHtml = (qc.drop_bins || []).map(b => `
+      <div class="quit-bin-item">
+        <div class="quit-bin-label">
+          <span>${escapeHtml(b.label)}</span>
+          <strong>${b.count} (${b.pct}%)</strong>
+        </div>
+        <div class="meter-track" style="block-size: 5px;">
+          <div class="meter-fill" style="inline-size: ${Math.max(2, b.pct)}%; background: #f43f5e;"></div>
+        </div>
+      </div>
+    `).join("");
+
+    quitContainer.innerHTML = `
+      <div class="quit-chart-wrap">
+        <svg viewBox="0 0 ${w} ${h}" class="quit-curve-svg" preserveAspectRatio="none" role="img" aria-label="Game survival curve">
+          <defs>
+            <linearGradient id="survivalGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.0"/>
+            </linearGradient>
+          </defs>
+          <line x1="${padL}" y1="${padT + plotH}" x2="${padL + plotW}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+          <path d="${svgArea}" fill="url(#survivalGrad)"/>
+          <path d="${svgPath}" fill="none" stroke="#38bdf8" stroke-width="3" stroke-linecap="round"/>
+          ${medianMarker}
+          ${dots}
+        </svg>
+      </div>
+      <div class="quit-bins-grid">
+        <span class="quit-bins-title">Drop Timing Distribution (${qc.dropped_count} total dropped)</span>
+        <div class="quit-bins-list">${dropBinsHtml}</div>
+      </div>
+    `;
+  }
+
+  // 12. Rotation Focus vs. Game Hopping
+  const rotContainer = document.getElementById("rotation-focus-container");
+  const rf = data.rotation_focus;
+  if (rotContainer && rf) {
+    const archBadge = document.getElementById("rotation-archetype-badge");
+    if (archBadge) archBadge.textContent = rf.archetype || "Balanced Juggler";
+
+    const gamesHtml = (rf.recent_games || []).map(g => {
+      const fallback = makeFallbackCover(g.title, g.platform);
+      const coverSrc = g.cover_url || fallback;
+      return `
+        <div class="rot-game-row" role="button" tabindex="0" onclick="openGameById(${g.id})">
+          <img src="${escapeHtml(coverSrc)}" alt="" class="rot-game-thumb" loading="lazy" onerror="this.src='${fallback}'">
+          <div class="rot-game-info">
+            <div class="rot-game-title-row">
+              <span class="rot-game-name">${escapeHtml(g.title)}</span>
+              <span class="rot-game-hours">${g.hours}h (${g.share_pct}%)</span>
+            </div>
+            <div class="meter-track" style="block-size: 6px;">
+              <div class="meter-fill" style="inline-size: ${Math.max(3, g.share_pct)}%; background: linear-gradient(90deg, #a855f7, #38bdf8);"></div>
+            </div>
+          </div>
+        </div>
+      `;
+    }).join("");
+
+    rotContainer.innerHTML = `
+      <div class="rot-score-layout">
+        <div class="rot-score-badge-card">
+          <div class="rot-score-circle">
+            <span class="rot-score-num">${rf.focus_score}%</span>
+            <span class="rot-score-lbl">Focus Score</span>
+          </div>
+          <p class="rot-desc">${escapeHtml(rf.description || "")}</p>
+        </div>
+        <div class="rot-recent-list">
+          <span class="rot-recent-heading">Active Rotation Games</span>
+          ${gamesHtml || '<p class="empty-state">No active playtime logs.</p>'}
+        </div>
+      </div>
+    `;
+  }
+
+  // 13. Contrarian Index: Taste vs. Critics
+  const contrarianContainer = document.getElementById("contrarian-container");
+  const ci = data.contrarian_index;
+  if (contrarianContainer && ci) {
+    const scoreBadge = document.getElementById("contrarian-score-badge");
+    if (scoreBadge) scoreBadge.textContent = `Divergence: ±${ci.contrarian_score} pts`;
+
+    const renderCard = (g, isPositive) => {
+      const fallback = makeFallbackCover(g.title, g.platform);
+      const coverSrc = g.cover_url || fallback;
+      const deltaText = isPositive ? `+${g.delta}` : `${g.delta}`;
+      const deltaClass = isPositive ? "delta-positive" : "delta-negative";
+      return `
+        <div class="contrarian-item-card" role="button" tabindex="0" onclick="openGameById(${g.id})">
+          <img src="${escapeHtml(coverSrc)}" alt="" class="contrarian-thumb" loading="lazy" onerror="this.src='${fallback}'">
+          <div class="contrarian-details">
+            <div class="contrarian-title-row">
+              <span class="contrarian-game-title">${escapeHtml(g.title)}</span>
+              <span class="contrarian-delta-pill ${deltaClass}">${deltaText} Δ</span>
+            </div>
+            <div class="contrarian-scores-row">
+              <span class="contrarian-user-score">★ You: ${g.user_rating}/10 (${g.user_score_norm})</span>
+              <span class="contrarian-critic-score">⭐ Critics: ${g.critic_score}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    };
+
+    const guiltyHtml = (ci.guilty_pleasures || []).length > 0
+      ? ci.guilty_pleasures.map(g => renderCard(g, true)).join("")
+      : '<p class="empty-state">No guilty pleasures found in current filter.</p>';
+
+    const missesHtml = (ci.overhyped_misses || []).length > 0
+      ? ci.overhyped_misses.map(g => renderCard(g, false)).join("")
+      : '<p class="empty-state">No overhyped misses found in current filter.</p>';
+
+    contrarianContainer.innerHTML = `
+      <div class="contrarian-columns-grid">
+        <div class="contrarian-column">
+          <div class="contrarian-col-header text-emerald">
+            <span>✨ Personal Gems &amp; Guilty Pleasures</span>
+            <small>Rated higher than critics</small>
+          </div>
+          <div class="contrarian-cards-stack">${guiltyHtml}</div>
+        </div>
+        <div class="contrarian-column">
+          <div class="contrarian-col-header text-rose">
+            <span>📉 Overhyped Misses &amp; Dropouts</span>
+            <small>Acclaimed by critics, skipped/dropped by you</small>
+          </div>
+          <div class="contrarian-cards-stack">${missesHtml}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 14. Mechanic & Theme DNA
+  const dnaContainer = document.getElementById("mechanic-dna-container");
+  const dna = data.mechanic_dna;
+  if (dnaContainer && dna) {
+    const tagsHtml = (dna.tags || []).map(t => `
+      <div class="dna-tag-row" role="button" tabindex="0" onclick="state.tag='${escapeHtml(t.tag)}'; syncFilterInputs(); refreshActiveView();">
+        <div class="dna-tag-header">
+          <span class="dna-tag-name">🏷️ ${escapeHtml(t.tag)}</span>
+          <span class="dna-tag-meta">${t.count} games &bull; ${t.hours}h</span>
+        </div>
+        <div class="dna-bars-dual">
+          <div class="dna-meter-block">
+            <span class="dna-meter-lbl text-emerald">✓ ${t.finish_rate}% Finish</span>
+            <div class="meter-track" style="block-size: 6px;">
+              <div class="meter-fill" style="inline-size: ${Math.max(2, t.finish_rate)}%; background: #10b981;"></div>
+            </div>
+          </div>
+          <div class="dna-meter-block">
+            <span class="dna-meter-lbl text-rose">✕ ${t.drop_rate}% Drop</span>
+            <div class="meter-track" style="block-size: 6px;">
+              <div class="meter-fill" style="inline-size: ${Math.max(2, t.drop_rate)}%; background: #ef4444;"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `).join("");
+
+    dnaContainer.innerHTML = `
+      <div class="dna-list-layout">
+        ${(dna.best_finished_tag || dna.worst_dropped_tag) ? `
+          <div class="dna-insight-banner">
+            ${dna.best_finished_tag ? `<span><strong>Highest Finish:</strong> ${escapeHtml(dna.best_finished_tag.tag)} (${dna.best_finished_tag.finish_rate}%)</span>` : ""}
+            ${dna.worst_dropped_tag ? `<span><strong>Most Dropped:</strong> ${escapeHtml(dna.worst_dropped_tag.tag)} (${dna.worst_dropped_tag.drop_rate}%)</span>` : ""}
+          </div>
+        ` : ""}
+        <div class="dna-tags-grid">${tagsHtml || '<p class="empty-state">No tag metadata available.</p>'}</div>
+      </div>
+    `;
+  }
+
+  // 15. Genre Time Sink vs Finish Rate Bubble Matrix
+  const matrixContainer = document.getElementById("genre-matrix-container");
+  const gm = data.genre_matrix;
+  if (matrixContainer && gm) {
+    const w = 700;
+    const h = 320;
+    const padL = 60;
+    const padR = 40;
+    const padT = 30;
+    const padB = 40;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
+
+    const maxHours = Math.max(...gm.map(g => g.hours), 50);
+    const maxCount = Math.max(...gm.map(g => g.count), 5);
+
+    const catColors = {
+      "Dedicated Mastery": "#38bdf8",
+      "High Execution": "#10b981",
+      "Comfort Sinks": "#a855f7",
+      "Casual Testing": "#64748b",
+    };
+
+    const bubblesSvg = gm.map(g => {
+      const x = Math.round(padL + Math.min(1, g.hours / maxHours) * plotW);
+      const y = Math.round(padT + (1 - (g.completion_rate / 100)) * plotH);
+      const r = Math.round(8 + (g.count / maxCount) * 16);
+      const col = catColors[g.category] || "#38bdf8";
+      const tip = `${g.genre}: ${g.hours}h, ${g.completion_rate}% finish rate, ${g.count} games (${g.category})`;
+
+      return `
+        <g class="matrix-bubble-group" tabindex="0" role="img" aria-label="${escapeHtml(tip)}" onclick="state.genre='${escapeHtml(g.genre)}'; syncFilterInputs(); refreshActiveView();">
+          <circle cx="${x}" cy="${y}" r="${r}" fill="${col}" fill-opacity="0.4" stroke="${col}" stroke-width="2" class="matrix-bubble-node">
+            <title>${escapeHtml(tip)}</title>
+          </circle>
+          <text x="${x}" y="${y - r - 4}" text-anchor="middle" fill="#f8fafc" font-size="10" font-weight="700" pointer-events="none">${escapeHtml(g.genre)}</text>
+        </g>
+      `;
+    }).join("");
+
+    matrixContainer.innerHTML = `
+      <div class="matrix-svg-wrap">
+        <svg viewBox="0 0 ${w} ${h}" class="genre-matrix-svg" preserveAspectRatio="none">
+          <rect x="${padL}" y="${padT}" width="${plotW / 2}" height="${plotH / 2}" fill="rgba(16, 185, 129, 0.04)" />
+          <rect x="${padL + plotW / 2}" y="${padT}" width="${plotW / 2}" height="${plotH / 2}" fill="rgba(56, 189, 248, 0.04)" />
+          <rect x="${padL}" y="${padT + plotH / 2}" width="${plotW / 2}" height="${plotH / 2}" fill="rgba(100, 116, 139, 0.04)" />
+          <rect x="${padL + plotW / 2}" y="${padT + plotH / 2}" width="${plotW / 2}" height="${plotH / 2}" fill="rgba(168, 85, 247, 0.04)" />
+
+          <line x1="${padL}" y1="${padT + plotH}" x2="${padL + plotW}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+          <line x1="${padL}" y1="${padT}" x2="${padL}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.15)" stroke-width="1"/>
+
+          <line x1="${padL + plotW / 2}" y1="${padT}" x2="${padL + plotW / 2}" y2="${padT + plotH}" stroke="rgba(255,255,255,0.08)" stroke-dasharray="4 4"/>
+          <line x1="${padL}" y1="${padT + plotH / 2}" x2="${padL + plotW}" y2="${padT + plotH / 2}" stroke="rgba(255,255,255,0.08)" stroke-dasharray="4 4"/>
+
+          <text x="${padL + plotW / 2}" y="${padT + plotH + 30}" text-anchor="middle" fill="#94a3b8" font-size="11" font-weight="600">Total Playtime Hours →</text>
+          <text x="${padL - 10}" y="${padT + 12}" text-anchor="end" fill="#94a3b8" font-size="10">100%</text>
+          <text x="${padL - 10}" y="${padT + plotH / 2 + 4}" text-anchor="end" fill="#94a3b8" font-size="10">50%</text>
+          <text x="${padL - 10}" y="${padT + plotH}" text-anchor="end" fill="#94a3b8" font-size="10">0%</text>
+
+          <text x="${padL + 12}" y="${padT + 20}" fill="rgba(16, 185, 129, 0.45)" font-size="11" font-weight="700">High Execution</text>
+          <text x="${padL + plotW - 12}" y="${padT + 20}" text-anchor="end" fill="rgba(56, 189, 248, 0.45)" font-size="11" font-weight="700">Dedicated Mastery</text>
+          <text x="${padL + 12}" y="${padT + plotH - 12}" fill="rgba(148, 163, 184, 0.45)" font-size="11" font-weight="700">Casual Testing</text>
+          <text x="${padL + plotW - 12}" y="${padT + plotH - 12}" text-anchor="end" fill="rgba(168, 85, 247, 0.45)" font-size="11" font-weight="700">Comfort Sinks</text>
+
+          ${bubblesSvg}
+        </svg>
+      </div>
+    `;
+  }
+
+  // 16. Subscription / Game Pass ROI
+  const subContainer = document.getElementById("subscription-roi-container");
+  const sub = data.subscription_roi;
+  if (subContainer && sub) {
+    const o = sub.owned || {};
+    const s = sub.subscription || {};
+
+    subContainer.innerHTML = `
+      <div class="sub-roi-grid">
+        <div class="sub-cohort-card sub-cohort-owned">
+          <div class="sub-cohort-hdr">
+            <span class="sub-cohort-title">📦 Owned Purchases</span>
+            <span class="badge-subtle">${o.count || 0} games</span>
+          </div>
+          <div class="sub-metrics-list">
+            <div class="sub-metric-row">
+              <span>Avg Playtime:</span>
+              <strong>${o.avg_hours || 0} hrs</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Finish Rate:</span>
+              <strong class="text-emerald">${o.completion_rate || 0}%</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Drop Rate:</span>
+              <strong class="text-rose">${o.drop_rate || 0}%</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Tourist (&lt;1h):</span>
+              <strong>${o.tourist_rate || 0}%</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="sub-cohort-card sub-cohort-subscription">
+          <div class="sub-cohort-hdr">
+            <span class="sub-cohort-title">🎮 Game Pass / Subscriptions</span>
+            <span class="badge-subtle">${s.count || 0} games</span>
+          </div>
+          <div class="sub-metrics-list">
+            <div class="sub-metric-row">
+              <span>Avg Playtime:</span>
+              <strong>${s.avg_hours || 0} hrs</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Finish Rate:</span>
+              <strong class="text-emerald">${s.completion_rate || 0}%</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Drop Rate:</span>
+              <strong class="text-rose">${s.drop_rate || 0}%</strong>
+            </div>
+            <div class="sub-metric-row">
+              <span>Tourist (&lt;1h):</span>
+              <strong class="text-amber">${s.tourist_rate || 0}%</strong>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 17. Multi-Platform Ecosystem Mobility
+  const crossContainer = document.getElementById("cross-platform-container");
+  const cp = data.cross_platform;
+  if (crossContainer && cp) {
+    const pairsHtml = (cp.pairs || []).map(p => `
+      <span class="badge-subtle badge-accent">${escapeHtml(p.pair)} (${p.count})</span>
+    `).join("");
+
+    const titlesHtml = (cp.top_titles || []).map(t => `
+      <div class="cross-title-item">
+        <div class="cross-title-name">${escapeHtml(t.title)}</div>
+        <div class="cross-title-plats">
+          ${t.platform_hours.map(ph => `<span>${escapeHtml(ph.platform)}: <strong>${ph.hours}h</strong></span>`).join(" &bull; ")}
+        </div>
+      </div>
+    `).join("");
+
+    crossContainer.innerHTML = `
+      <div class="cross-plat-layout">
+        <div class="cross-kpi-pair">
+          <div class="cross-kpi-box">
+            <span class="cross-kpi-num">${cp.double_dipped_count || 0}</span>
+            <span class="cross-kpi-label">Double-Dipped Titles</span>
+          </div>
+          <div class="cross-kpi-box">
+            <span class="cross-kpi-num">${cp.double_dipped_hours || 0}h</span>
+            <span class="cross-kpi-label">Multi-Platform Hours</span>
+          </div>
+        </div>
+        ${pairsHtml ? `<div class="cross-pairs-wrap"><span class="cross-pairs-lbl">Storefront Overlaps:</span> ${pairsHtml}</div>` : ""}
+        <div class="cross-titles-stack">${titlesHtml || '<p class="empty-state">No cross-platform titles detected.</p>'}</div>
+      </div>
+    `;
+  }
+
+  // 18. Trophy Hunter & Rarity Pyramid
+  const pyrContainer = document.getElementById("trophy-pyramid-container");
+  const tp = data.trophy_pyramid;
+  if (pyrContainer && tp) {
+    pyrContainer.innerHTML = `
+      <div class="trophy-pyramid-layout">
+        <div class="pyramid-tier tier-ultra-rare">
+          <div class="pyramid-tier-hdr">
+            <span class="tier-badge-pill pill-gold">🥇 Ultra Rare (&lt; 5%)</span>
+            <strong>${tp.ultra_rare.unlocked} / ${tp.ultra_rare.total} (${tp.ultra_rare.pct}%)</strong>
+          </div>
+          <div class="meter-track" style="block-size: 8px;">
+            <div class="meter-fill" style="inline-size: ${Math.max(2, tp.ultra_rare.pct)}%; background: linear-gradient(90deg, #f59e0b, #fbbf24);"></div>
+          </div>
+        </div>
+
+        <div class="pyramid-tier tier-rare">
+          <div class="pyramid-tier-hdr">
+            <span class="tier-badge-pill pill-purple">🥈 Rare (5% – 20%)</span>
+            <strong>${tp.rare.unlocked} / ${tp.rare.total} (${tp.rare.pct}%)</strong>
+          </div>
+          <div class="meter-track" style="block-size: 8px;">
+            <div class="meter-fill" style="inline-size: ${Math.max(2, tp.rare.pct)}%; background: linear-gradient(90deg, #8b5cf6, #c084fc);"></div>
+          </div>
+        </div>
+
+        <div class="pyramid-tier tier-common">
+          <div class="pyramid-tier-hdr">
+            <span class="tier-badge-pill pill-blue">🥉 Common (&gt; 20%)</span>
+            <strong>${tp.common.unlocked} / ${tp.common.total} (${tp.common.pct}%)</strong>
+          </div>
+          <div class="meter-track" style="block-size: 8px;">
+            <div class="meter-fill" style="inline-size: ${Math.max(2, tp.common.pct)}%; background: linear-gradient(90deg, #2563eb, #38bdf8);"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // 19. Almost Perfect (Closest to 100% Mastery)
+  const apContainer = document.getElementById("almost-perfect-container");
+  const ap = data.almost_perfect;
+  if (apContainer && ap) {
+    apContainer.innerHTML = "";
+    if (ap.length === 0) {
+      apContainer.innerHTML = '<p class="empty-state">No games currently between 70% and 99% achievement completion.</p>';
+    } else {
+      ap.forEach(g => {
+        const card = document.createElement("div");
+        card.className = "hof-game-card";
+        card.setAttribute("role", "button");
+        card.setAttribute("tabindex", "0");
+        card.setAttribute("title", `Inspect ${g.title}`);
+
+        const fallback = makeFallbackCover(g.title, g.platform);
+        const coverSrc = g.cover_url || fallback;
+
+        card.innerHTML = `
+          <div class="hof-poster-wrap">
+            <span class="hof-rank-badge" style="color: #38bdf8;">${g.pct}%</span>
+            <img src="${escapeHtml(coverSrc)}" alt="${escapeHtml(g.title)}" class="hof-poster-img" loading="lazy" onerror="this.src='${fallback}'">
+          </div>
+          <div class="hof-card-body">
+            <div class="hof-card-title">${escapeHtml(g.title)}</div>
+            <div class="meter-track" style="block-size: 6px; margin: 4px 0;">
+              <div class="meter-fill" style="inline-size: ${g.pct}%; background: linear-gradient(90deg, #38bdf8, #10b981);"></div>
+            </div>
+            <div class="hof-card-meta">
+              <span class="system-pill-badge system-pill-other" style="font-size: 0.68rem; padding: 0.1rem 0.4rem;">${escapeHtml(g.platform)}</span>
+              <span style="color: #38bdf8; font-weight: 700; font-size: 0.74rem;">${g.remaining} to 100%!</span>
+            </div>
+          </div>
+        `;
+        card.addEventListener("click", () => openGameById(g.id));
+        card.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openGameById(g.id);
+          }
+        });
+        apContainer.appendChild(card);
+      });
+    }
+  }
+}
+
+function renderSessionTelemetry(st) {
+  if (!st) return;
+
+  // 1. 2x2 Nerd KPIs
+  if (st.kpis) {
+    const k = st.kpis;
+    if (k.play_streak) {
+      const el = document.getElementById("skpi-streak");
+      const sub = document.getElementById("skpi-streak-detail");
+      if (el) el.textContent = `${k.play_streak.current} Days Active`;
+      if (sub) {
+        const todayNote = k.play_streak.active_today ? "Active today" : "Rest day";
+        sub.textContent = `${todayNote} | Record: ${k.play_streak.longest} Days`;
+      }
+    }
+    if (k.sweet_spot) {
+      const el = document.getElementById("skpi-sweet-spot");
+      const sub = document.getElementById("skpi-sweet-spot-detail");
+      if (el) el.textContent = `${k.sweet_spot.formatted || "0m"} avg session`;
+      if (sub) sub.textContent = `${k.sweet_spot.sessions_per_week || 0} sessions/week`;
+    }
+    if (k.focus_score_30d) {
+      const el = document.getElementById("skpi-focus");
+      const sub = document.getElementById("skpi-focus-detail");
+      if (el) el.textContent = `${k.focus_score_30d.percentage || 0}%`;
+      if (sub) {
+        const topG = k.focus_score_30d.top_game ? ` (${k.focus_score_30d.top_game})` : "";
+        sub.textContent = `${k.focus_score_30d.archetype || "Channel Surfer"}${topG}`;
+      }
+    }
+    if (k.afk_menu_tax_ratio) {
+      const el = document.getElementById("skpi-afk");
+      const sub = document.getElementById("skpi-afk-detail");
+      if (el) el.textContent = `${k.afk_menu_tax_ratio.percentage || 0}%`;
+      if (sub) {
+        sub.textContent = `${k.afk_menu_tax_ratio.idle_minutes || 0}m idle / ${k.afk_menu_tax_ratio.wall_clock_minutes || 0}m total`;
+      }
+    }
+  }
+
+  // 2. 365-Day Contribution Heatmap
+  if (st.heatmap_365) {
+    renderContributionHeatmap(st.heatmap_365);
+  }
+
+  // 3. Circadian 24-Hour Distribution
+  if (st.circadian) {
+    renderCircadianBars(st.circadian);
+  }
+
+  // 4. Session Commitment Histogram (Snack vs. Binge)
+  if (st.session_histogram) {
+    renderSnackBingeHistogram(st.session_histogram);
+  }
+
+  // 5. 30-Day Rotation Gantt
+  if (st.rotation_gantt) {
+    renderRotationGantt(st.rotation_gantt);
+  }
+}
+
+function renderContributionHeatmap(heatmapDays) {
+  const container = document.getElementById("contribution-heatmap-container");
+  if (!container || !Array.isArray(heatmapDays) || heatmapDays.length === 0) return;
+
+  const totalMins = heatmapDays.reduce((acc, d) => acc + (d.active_minutes || 0), 0);
+  const pill = document.getElementById("heatmap-total-active-pill");
+  if (pill) {
+    pill.textContent = `${(totalMins / 60).toFixed(1)} hrs active this year`;
+  }
+
+  const weeks = [];
+  let currentWeek = [];
+
+  const firstDate = new Date(heatmapDays[0].date + "T00:00:00");
+  const firstDayOfWeek = (firstDate.getDay() + 6) % 7; // 0=Mon .. 6=Sun
+  for (let i = 0; i < firstDayOfWeek; i++) {
+    currentWeek.push(null);
+  }
+
+  const monthPositions = [];
+  let lastMonth = -1;
+
+  heatmapDays.forEach((day) => {
+    const dObj = new Date(day.date + "T00:00:00");
+    const m = dObj.getMonth();
+    if (m !== lastMonth) {
+      monthPositions.push({
+        monthName: dObj.toLocaleString("default", { month: "short" }),
+        weekIndex: weeks.length,
+      });
+      lastMonth = m;
+    }
+
+    currentWeek.push(day);
+    if (currentWeek.length === 7) {
+      weeks.push(currentWeek);
+      currentWeek = [];
+    }
+  });
+
+  if (currentWeek.length > 0) {
+    while (currentWeek.length < 7) {
+      currentWeek.push(null);
+    }
+    weeks.push(currentWeek);
+  }
+
+  let monthsHtml = '<div class="heatmap-months-row">';
+  monthPositions.forEach((mp) => {
+    const leftPx = 28 + mp.weekIndex * 16;
+    monthsHtml += `<span class="heatmap-month-label" style="left: ${leftPx}px;">${mp.monthName}</span>`;
+  });
+  monthsHtml += '</div>';
+
+  let bodyHtml = '<div class="heatmap-body-row">';
+  bodyHtml += '<div class="heatmap-days-col"><span>Mon</span><span>Wed</span><span>Fri</span></div>';
+  bodyHtml += '<div class="heatmap-weeks-container">';
+
+  weeks.forEach((week) => {
+    bodyHtml += '<div class="heatmap-week-col">';
+    week.forEach((day) => {
+      if (!day) {
+        bodyHtml += '<div class="heatmap-day-cell" style="visibility: hidden;"></div>';
+      } else {
+        const mins = day.active_minutes || 0;
+        let lvl = 0;
+        if (mins > 0) {
+          if (mins < 60) lvl = 1;
+          else if (mins < 180) lvl = 2;
+          else if (mins < 300) lvl = 3;
+          else lvl = 4;
+        }
+        const hrs = (mins / 60).toFixed(1);
+        const gamesStr = day.games_played && day.games_played.length ? day.games_played.join(", ") : "None";
+        const tip = `${day.date}: ${mins}m (${hrs}h) · ${day.session_count || 0} sessions · ${day.achievements_unlocked || 0} unlocks · Games: ${gamesStr}`;
+        bodyHtml += `<div class="heatmap-day-cell" data-level="${lvl}" title="${escapeHtml(tip)}" tabindex="0" role="img" aria-label="${escapeHtml(tip)}"></div>`;
+      }
+    });
+    bodyHtml += '</div>';
+  });
+
+  bodyHtml += '</div></div>';
+
+  container.innerHTML = `<div class="heatmap-grid-wrapper" style="position: relative;">${monthsHtml}${bodyHtml}</div>`;
+}
+
+function renderCircadianBars(circadian) {
+  const container = document.getElementById("circadian-polar-bars");
+  if (!container || !circadian) return;
+
+  const archetypeBadge = document.getElementById("heatmap-archetype-badge");
+  if (archetypeBadge) {
+    archetypeBadge.textContent = circadian.archetype || "Flexible Gamer";
+  }
+
+  const hours = circadian.hours || [];
+  const windows = [
+    { label: "12a–4a", name: "Late Night", icon: "🌙", hours: [0, 1, 2, 3] },
+    { label: "4a–8a", name: "Early Morning", icon: "🌅", hours: [4, 5, 6, 7] },
+    { label: "8a–12p", name: "Morning", icon: "☕", hours: [8, 9, 10, 11] },
+    { label: "12p–4p", name: "Afternoon", icon: "☀️", hours: [12, 13, 14, 15] },
+    { label: "4p–8p", name: "Evening", icon: "🌆", hours: [16, 17, 18, 19] },
+    { label: "8p–12a", name: "Night", icon: "🎮", hours: [20, 21, 22, 23] },
+  ];
+
+  const windowData = windows.map((w) => {
+    const total = w.hours.reduce((acc, h) => acc + (hours[h] || 0), 0);
+    return { ...w, total };
+  });
+
+  const maxTotal = Math.max(...windowData.map((w) => w.total), 1);
+  const totalAll = Math.max(windowData.reduce((acc, w) => acc + w.total, 0), 1);
+
+  container.innerHTML = windowData
+    .map((w) => {
+      const pct = Math.round((w.total / totalAll) * 100);
+      const fillPct = Math.min(100, Math.max(w.total > 0 ? 4 : 0, (w.total / maxTotal) * 100));
+      return `
+      <div class="circadian-polar-bar-row" title="${w.name}: ${w.total} events (${pct}%)">
+        <span class="circadian-bar-hour-label">${w.icon} ${w.label}</span>
+        <div class="circadian-bar-track">
+          <div class="circadian-bar-fill" style="inline-size: ${fillPct}%;"></div>
+        </div>
+        <span class="circadian-bar-count-label">${pct}%</span>
+      </div>
+    `;
+    })
+    .join("");
+}
+
+function renderSnackBingeHistogram(histogram) {
+  const container = document.getElementById("snack-binge-bars");
+  if (!container || !histogram) return;
+
+  const tiers = [
+    { label: "Quick Check-ins (< 30m)", key: "quick_checkins", sub: "Testing settings, daily logins, bouncing off titles" },
+    { label: "Standard Runs (30–90m)", key: "standard_runs", sub: "Weeknight core sessions" },
+    { label: "Deep Sessions (1.5–3h)", key: "deep_sessions", sub: "Progression blocks and boss fights" },
+    { label: "Binge Marathons (3h+)", key: "binge_marathons", sub: "High-immersion marathon blocks" },
+  ];
+
+  container.innerHTML = tiers
+    .map((t) => {
+      const data = histogram[t.key] || { count: 0, pct: 0 };
+      const fillPct = Math.min(100, Math.max(data.count > 0 ? 3 : 0, data.pct || 0));
+      return `
+      <div class="tier-item-card">
+        <div class="tier-item-header">
+          <span class="tier-item-label">${escapeHtml(t.label)}</span>
+          <span class="tier-item-stats">${data.count} sessions (${data.pct || 0}%)</span>
+        </div>
+        <div class="meter-track" style="margin-block: 4px;" title="${data.count} sessions">
+          <div class="meter-fill" style="inline-size: ${fillPct}%; background: linear-gradient(90deg, #38bdf8, #0284c7);"></div>
+        </div>
+        <span class="habits-kpi-sub" style="font-size: 0.73rem;">${escapeHtml(t.sub)}</span>
+      </div>
+    `;
+    })
+    .join("");
+
+  const lm = histogram.longest_marathon;
+  const marathonCard = document.getElementById("longest-marathon-badge");
+  if (marathonCard && lm && lm.hours > 0) {
+    const headline = document.getElementById("marathon-callout-headline");
+    const sub = document.getElementById("marathon-callout-sub");
+    if (headline) {
+      headline.textContent = `Longest Marathon: ${lm.hours} hrs on ${lm.game || "Game"}`;
+    }
+    if (sub) {
+      sub.textContent = `Recorded on ${lm.date || "recent session"}`;
+    }
+  }
+}
+
+function renderRotationGantt(rotationGames) {
+  const container = document.getElementById("rotation-gantt-container");
+  if (!container) return;
+
+  if (!Array.isArray(rotationGames) || rotationGames.length === 0) {
+    container.innerHTML = '<p class="empty-state" style="padding: 1.5rem; text-align: center; color: #94a3b8;">No game activity recorded in the last 30 days.</p>';
+    return;
+  }
+
+  let html = '<div class="gantt-table">';
+  html += '<div class="gantt-header-row">';
+  html += '<span class="gantt-game-col-header">Game &amp; Platform</span>';
+  html += '<div class="gantt-timeline-header-days">';
+  html += '<span>30 Days Ago</span>';
+  html += '<span>15 Days Ago</span>';
+  html += '<span>Today</span>';
+  html += '</div></div>';
+
+  rotationGames.forEach((g) => {
+    let statusClass = "gantt-status-playing";
+    let statusIcon = "▶";
+    const st = (g.status || "").toLowerCase();
+    if (st.includes("complete") || st.includes("beat")) {
+      statusClass = "gantt-status-completed";
+      statusIcon = "✓";
+    } else if (st.includes("drop")) {
+      statusClass = "gantt-status-dropped";
+      statusIcon = "✕";
+    }
+
+    const totalHours = ((g.total_30d_minutes || 0) / 60).toFixed(1);
+
+    html += '<div class="gantt-row">';
+    html += '<div class="gantt-game-info">';
+    html += `<div class="gantt-game-title" title="${escapeHtml(g.title)}">${escapeHtml(g.title)}</div>`;
+    html += '<div class="gantt-game-meta">';
+    html += `<span class="gantt-status-badge ${statusClass}">${statusIcon} ${escapeHtml(g.status || "Active")}</span>`;
+    html += `<span>${totalHours}h (30d)</span>`;
+    html += '</div></div>';
+
+    html += '<div class="gantt-timeline-cells">';
+    const days = g.days || [];
+    days.forEach((d) => {
+      const isActive = d.active || (d.minutes && d.minutes > 0);
+      const activeClass = isActive ? "active-day" : "";
+      const mins = d.minutes || 0;
+      const tip = `${g.title} (${d.date}): ${mins}m logged`;
+      html += `<div class="gantt-day-tick ${activeClass}" title="${escapeHtml(tip)}"></div>`;
+    });
+    html += '</div></div>';
+  });
+
+  html += '</div>';
+  container.innerHTML = html;
 }
 
 function applyViewMode(mode) {
@@ -3086,8 +3943,161 @@ async function loadAccountInfo() {
     if (adminTab) {
       adminTab.hidden = data.role !== "admin";
     }
+
+    // Timezone & Regional History
+    const tzSelect = document.getElementById("select-user-timezone");
+    const detectedTzSpan = document.getElementById("detected-tz-name");
+    const detectedBadge = document.getElementById("tz-current-detected-badge");
+    const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+    if (detectedTzSpan) detectedTzSpan.textContent = detectedTz;
+    if (tzSelect) {
+      tzSelect.value = data.timezone || "auto";
+    }
+    if (detectedBadge) {
+      const activeTz = (data.timezone && data.timezone !== "auto") ? data.timezone : `Auto (${detectedTz})`;
+      detectedBadge.textContent = activeTz;
+    }
+
+    renderTimezoneEras(data.timezone_eras || []);
   } catch (err) {
     console.error("Failed to load account info:", err);
+  }
+}
+
+const COMMON_TIMEZONES = [
+  { value: "America/New_York", label: "America/New_York (US Eastern Time)" },
+  { value: "America/Chicago", label: "America/Chicago (US Central Time)" },
+  { value: "America/Denver", label: "America/Denver (US Mountain Time)" },
+  { value: "America/Los_Angeles", label: "America/Los_Angeles (US Pacific Time)" },
+  { value: "America/Anchorage", label: "America/Anchorage (Alaska Time)" },
+  { value: "Pacific/Honolulu", label: "Pacific/Honolulu (Hawaii Time)" },
+  { value: "Europe/London", label: "Europe/London (GMT / BST)" },
+  { value: "Europe/Paris", label: "Europe/Paris (CET / CEST)" },
+  { value: "Asia/Tokyo", label: "Asia/Tokyo (JST)" },
+  { value: "Australia/Sydney", label: "Australia/Sydney (AEST)" },
+  { value: "UTC", label: "UTC (Universal Time)" },
+];
+
+function renderTimezoneEras(eras) {
+  const container = document.getElementById("tz-eras-list");
+  if (!container) return;
+  container.innerHTML = "";
+  if (!eras || eras.length === 0) {
+    container.innerHTML = `<p class="empty-state" style="margin: 0.25rem 0; font-size: 0.78rem; color: var(--text-muted); font-style: italic;">No previous timezone eras added. All past activity will use your current/detected timezone.</p>`;
+    return;
+  }
+  eras.forEach((era, idx) => {
+    addTimezoneEraRow(era, idx);
+  });
+}
+
+function addTimezoneEraRow(initialData = {}) {
+  const container = document.getElementById("tz-eras-list");
+  if (!container) return;
+  const emptyState = container.querySelector(".empty-state");
+  if (emptyState) emptyState.remove();
+
+  const row = document.createElement("div");
+  row.className = "tz-era-item";
+  row.style.cssText = "background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: 6px; padding: 0.65rem 0.75rem; display: flex; flex-direction: column; gap: 0.4rem;";
+
+  const currentTz = initialData.timezone || "America/New_York";
+  const currentUntil = initialData.until ? String(initialData.until).slice(0, 10) : "";
+  const currentLabel = initialData.label || "";
+
+  const optionsHtml = COMMON_TIMEZONES.map(t =>
+    `<option value="${t.value}" ${t.value === currentTz ? "selected" : ""}>${t.label}</option>`
+  ).join("");
+
+  row.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <input type="text" class="tz-era-label" placeholder="Era name (e.g. East Coast Era)" value="${escapeHtml(currentLabel)}" style="flex: 1; max-width: 240px; background: transparent; border: none; border-bottom: 1px dashed var(--border-subtle); color: var(--text-primary); font-size: 0.8rem; padding: 2px 0;" />
+      <button type="button" class="btn-icon tz-era-remove-btn" title="Remove era" style="color: var(--text-muted); font-size: 0.9rem; padding: 2px 6px;">✕</button>
+    </div>
+    <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+      <div style="flex: 1; min-width: 180px;">
+        <label style="font-size: 0.72rem; color: var(--text-muted); display: block;">Timezone</label>
+        <select class="tz-era-select" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-primary); border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.78rem;">
+          ${optionsHtml}
+        </select>
+      </div>
+      <div style="flex: 1; min-width: 140px;">
+        <label style="font-size: 0.72rem; color: var(--text-muted); display: block;">Active Until (Move Date)</label>
+        <input type="date" class="tz-era-until" value="${escapeHtml(currentUntil)}" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-primary); border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.78rem;" />
+      </div>
+    </div>
+  `;
+
+  row.querySelector(".tz-era-remove-btn").addEventListener("click", () => {
+    row.remove();
+    if (container.querySelectorAll(".tz-era-item").length === 0) {
+      container.innerHTML = `<p class="empty-state" style="margin: 0.25rem 0; font-size: 0.78rem; color: var(--text-muted); font-style: italic;">No previous timezone eras added. All past activity will use your current/detected timezone.</p>`;
+    }
+  });
+
+  container.appendChild(row);
+}
+
+async function saveTimezonePreferences() {
+  const tzSelect = document.getElementById("select-user-timezone");
+  const msgEl = document.getElementById("timezone-status-msg");
+  const container = document.getElementById("tz-eras-list");
+  if (!tzSelect || !msgEl) return;
+
+  msgEl.className = "connections-status-msg";
+  msgEl.textContent = "Saving...";
+
+  const selectedTz = tzSelect.value || "auto";
+  const eraRows = container ? container.querySelectorAll(".tz-era-item") : [];
+  const eras = [];
+
+  for (const r of eraRows) {
+    const sel = r.querySelector(".tz-era-select");
+    const until = r.querySelector(".tz-era-until");
+    const lbl = r.querySelector(".tz-era-label");
+    if (sel && until && until.value) {
+      eras.push({
+        timezone: sel.value,
+        until: until.value,
+        label: lbl ? lbl.value.trim() : "",
+      });
+    }
+  }
+
+  try {
+    const res = await fetch("/api/account/timezone", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        timezone: selectedTz,
+        timezone_eras: eras,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      msgEl.className = "connections-status-msg success";
+      msgEl.textContent = "Timezone preferences saved!";
+      const detectedBadge = document.getElementById("tz-current-detected-badge");
+      if (detectedBadge) {
+        const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+        detectedBadge.textContent = selectedTz !== "auto" ? selectedTz : `Auto (${detectedTz})`;
+      }
+      setTimeout(() => {
+        if (msgEl.textContent === "Timezone preferences saved!") msgEl.textContent = "";
+      }, 4000);
+
+      // Immediately refresh habits analytics
+      if (typeof fetchHabitsAnalytics === "function") {
+        fetchHabitsAnalytics();
+      }
+    } else {
+      msgEl.className = "connections-status-msg error";
+      msgEl.textContent = data.detail || "Failed to update timezone settings.";
+    }
+  } catch (err) {
+    msgEl.className = "connections-status-msg error";
+    msgEl.textContent = `Error: ${err.message}`;
   }
 }
 
@@ -6288,6 +7298,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const btnSubmitPw = document.getElementById("btn-submit-change-password");
   if (btnSubmitPw) btnSubmitPw.addEventListener("click", saveAccountPassword);
+
+  const btnSaveTz = document.getElementById("btn-save-timezone");
+  if (btnSaveTz) btnSaveTz.addEventListener("click", saveTimezonePreferences);
+
+  const btnAddEra = document.getElementById("btn-add-tz-era");
+  if (btnAddEra) btnAddEra.addEventListener("click", () => addTimezoneEraRow());
 
   const btnToggleCreateUser = document.getElementById("btn-toggle-create-user");
   const adminCreateCard = document.getElementById("admin-create-user-card");

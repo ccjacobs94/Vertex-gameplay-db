@@ -49,7 +49,14 @@ Use the dedicated Wishlist MCP tools and resources to track desired games across
   - `vertex://wishlist/active`: All active watched games, target thresholds, and latest prices.
   - `vertex://wishlist/{id}/history`: Chronological price history, ATL, and edition SKU breakdown.
 
-## 5. Authentication & Account Status
+## 5. Live Session Tracking, Telemetry & Play Pacing
+
+Vertex includes a telemetry engine that tracks play sessions, streaks, active vs. AFK idle tax, circadian rhythm, and 365-day heatmaps:
+- **Session History MCP Tool**: `get_session_history(title=None, platform=None, days=30, limit=50)` retrieves detailed play session records with exact timestamps, active vs idle durations, achievement unlocks during the session, and daily telemetry metrics.
+- **REST Telemetry API**: `GET /api/analytics/sessions?days=365` returns full daily heatmap ledger, circadian hour/day buckets, session length histogram ("Snack vs. Binge"), and 30-day rotation Gantt strip.
+- **Transition Webhook**: `POST /api/webhooks/session-transition` allows local tools (Playnite, Home Assistant, or background scripts) to push `{ "source": "playnite", "event": "start" | "stop", "title": "Game Title", "platform": "PC" }` into the user's session log.
+
+## 6. Authentication & Account Status
 
 All API calls and MCP tools require an active user account. If an account is pending, suspended, or its hosted subscription lapses, REST endpoints return `401 Unauthorized`, `402 Payment Required`, or `403 Forbidden`, and MCP Bearer token verification rejects requests. Users with `awaiting_payment` or `subscription_lapsed` statuses can manage their billing at `/billing`.
 

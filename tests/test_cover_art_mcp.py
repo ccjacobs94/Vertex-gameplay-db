@@ -41,10 +41,11 @@ class TestCoverArtMCP(unittest.IsolatedAsyncioTestCase):
         if not HAS_MCP:
             self.skipTest("mcp library not available")
         tools = await mcp_server.mcp.list_tools()
-        self.assertEqual(len(tools), 18)
+        self.assertEqual(len(tools), 19)
         tool_map = {t.name: t for t in tools}
         self.assertIn("add_game_to_library", tool_map)
         self.assertIn("update_game_progress", tool_map)
+        self.assertIn("get_session_history", tool_map)
 
         add_props = tool_map["add_game_to_library"].input_schema.get("properties", {})
         self.assertIn("cover_url", add_props)
@@ -261,6 +262,40 @@ class TestCoverArtMCP(unittest.IsolatedAsyncioTestCase):
             # Should catch exception and not raise NameError
             res = await sync_engine.search_external_metadata("Test Query")
             self.assertIsInstance(res, list)
+
+    def test_upsert_synced_game_preserves_repaired_cover_url(self):
+        """Automated syncs must not overwrite a repaired or custom cover_url with generic template URLs."""
+        # 1. Initial sync with template URL
+        g = db.upsert_synced_game(
+            external_id="steam:235600",
+            title="Tom Clancy's Splinter Cell Blacklist",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_hours=10.0,
+            cover_url="https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/235600/library_600x900.jpg",
+            db_path=self.db_path,
+        )
+        self.assertEqual(g["cover_url"], "https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/235600/library_600x900.jpg")
+
+        # 2. Repair cover art to a verified Microsoft Store URL
+        repaired_url = "https://store-images.s-microsoft.com/image/apps.34162.65846051804097394.567e1817-979a-49f7-9d78-19fe5209d8f2.fa6c1765-06c9-4b98-af2d-8243c761ea2c"
+        db.update_game(g["id"], {"cover_url": repaired_url}, db_path=self.db_path)
+        g_repaired = db.query_games(search="Blacklist", db_path=self.db_path)[0]
+        self.assertEqual(g_repaired["cover_url"], repaired_url)
+
+        # 3. Subsequent routine Steam sync passes generic template URL again
+        g_after = db.upsert_synced_game(
+            external_id="steam:235600",
+            title="Tom Clancy's Splinter Cell Blacklist",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_hours=12.0,
+            cover_url="https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/235600/library_600x900.jpg",
+            db_path=self.db_path,
+        )
+        # Repaired cover must be preserved byte-for-byte!
+        self.assertEqual(g_after["cover_url"], repaired_url)
+        self.assertEqual(g_after["playtime_hours"], 12.0)
 
 
 if __name__ == "__main__":

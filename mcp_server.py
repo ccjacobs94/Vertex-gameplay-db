@@ -26,6 +26,7 @@ from db import (
     get_library_stats,
     get_pending_playtime_prompts,
     get_reconcile_candidates,
+    get_sessions_analytics,
     get_sku_price_history,
     get_wishlist_item,
     get_wishlist_item_by_title,
@@ -990,6 +991,44 @@ def mark_as_purchased(
         "library_game_id": res.get("library_game_id"),
         "platform": platform,
         "details": res,
+    })
+
+
+@mcp.tool()
+def get_session_history(
+    title: Optional[str] = None,
+    platform: Optional[str] = None,
+    days: int = 30,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Expose granular game sessions and daily playtime telemetry ledger to AI agents.
+    Answers queries about exact play session timestamps, session duration sweet spots,
+    streaks, AFK idle tax, and historical playtime breakdown by day or title.
+    """
+    db_path = get_default_db_path()
+    analytics = get_sessions_analytics(
+        db_path=db_path,
+        days=days,
+        limit=limit,
+        title=title,
+        platform=platform,
+    )
+    return _sanitize_output({
+        "status": "ok",
+        "filter": {
+            "title": title,
+            "platform": platform,
+            "days": days,
+            "limit": limit,
+        },
+        "kpis": analytics.get("kpis", {}),
+        "session_histogram": analytics.get("session_histogram", {}),
+        "circadian": analytics.get("circadian", {}),
+        "recent_sessions": analytics.get("recent_sessions", []),
+        "daily_heatmap_sample": (analytics.get("heatmap_365") or [])[-days:],
+        "rotation_gantt": analytics.get("rotation_gantt", []),
+        "pagination": analytics.get("pagination", {}),
     })
 
 

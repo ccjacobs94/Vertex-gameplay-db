@@ -10,10 +10,10 @@
   <meta name="apple-mobile-web-app-title" content="Vertex">
   <title>Vertex | Unified Game Nexus</title>
   <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png?v=50">
-  <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg?v=50">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=50">
-  <link rel="stylesheet" href="/static/styles.css?v=50">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png?v=56">
+  <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg?v=56">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=56">
+  <link rel="stylesheet" href="/static/styles.css?v=56">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -35,7 +35,7 @@
   <header class="site-header">
     <div class="header-inner">
       <div class="brand-group">
-        <img src="/static/vertex_logo.png?v=50" alt="Vertex Logo" class="brand-logo" width="36" height="36">
+        <img src="/static/vertex_logo.png?v=56" alt="Vertex Logo" class="brand-logo" width="36" height="36">
         <div class="brand-text">
           <h1>Vertex</h1>
           <p class="subtitle" id="sync-badge">Unified Game Library</p>
@@ -326,8 +326,116 @@
         </article>
       </div>
 
+      <!-- Section & Pacing Intelligence Header & 2x2 Nerd-Stats KPI Grid -->
+      <div class="session-telemetry-header">
+        <div class="panel-header" style="margin-block-end: 0.85rem;">
+          <div>
+            <h3 id="session-telemetry-title" class="session-section-title">Session &amp; Pacing Intelligence</h3>
+            <p class="panel-sub">Live telemetry tracking, 365-day play heatmap, commitment histogram, and 30-day rotation timeline</p>
+          </div>
+          <span class="badge-subtle badge-accent" id="telemetry-live-badge">⚡ Real-Time Engine</span>
+        </div>
+      </div>
+
+      <div class="session-kpis-grid" id="session-kpis-grid" aria-label="Live session and daily telemetry metrics">
+        <article class="habits-kpi-card session-kpi-card" id="kpi-card-streak">
+          <span class="habits-kpi-label">Play Streak</span>
+          <strong class="habits-kpi-value text-accent" id="skpi-streak">0 Days Active</strong>
+          <span class="habits-kpi-sub" id="skpi-streak-detail">Record: 0 Days</span>
+        </article>
+        <article class="habits-kpi-card session-kpi-card" id="kpi-card-sweet-spot">
+          <span class="habits-kpi-label">Median Session Length ("Sweet Spot")</span>
+          <strong class="habits-kpi-value text-emerald" id="skpi-sweet-spot">0m avg session</strong>
+          <span class="habits-kpi-sub" id="skpi-sweet-spot-detail">0.0 sessions/week</span>
+        </article>
+        <article class="habits-kpi-card session-kpi-card" id="kpi-card-focus">
+          <span class="habits-kpi-label">Focus Score (Rotation Index)</span>
+          <strong class="habits-kpi-value text-purple" id="skpi-focus">0%</strong>
+          <span class="habits-kpi-sub" id="skpi-focus-detail">30-day focus ratio</span>
+        </article>
+        <article class="habits-kpi-card session-kpi-card" id="kpi-card-afk">
+          <span class="habits-kpi-label">AFK / Menu Tax Ratio</span>
+          <strong class="habits-kpi-value text-amber" id="skpi-afk">0.0%</strong>
+          <span class="habits-kpi-sub" id="skpi-afk-detail">Idle / pause overhead</span>
+        </article>
+      </div>
+
       <!-- Habits Detailed Sections Grid -->
       <div class="habits-main-grid">
+        <!-- Visual Component 1: 365-Day Activity Heatmap & Circadian Rhythm Clock -->
+        <article class="habits-panel habits-full-width session-heatmap-panel" aria-labelledby="heatmap-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="heatmap-panel-title">365-Day Gaming Contribution Heatmap &amp; Circadian Rhythm</h3>
+              <p class="panel-sub">Daily playtime intensity, session counts, achievements, and 24-hour play rhythm</p>
+            </div>
+            <div class="circadian-badges">
+              <span class="badge-subtle badge-accent" id="heatmap-archetype-badge">Night Owl</span>
+              <span class="badge-subtle" id="heatmap-total-active-pill">0 hrs active this year</span>
+            </div>
+          </div>
+
+          <div class="heatmap-circadian-layout">
+            <div class="heatmap-side-col">
+              <div class="heatmap-scroll-container" id="contribution-heatmap-container">
+                <!-- 52-week x 7-day grid rendered dynamically -->
+              </div>
+              <div class="heatmap-legend-strip">
+                <span class="heatmap-legend-label">Less</span>
+                <span class="heatmap-legend-box" data-level="0" title="0m logged"></span>
+                <span class="heatmap-legend-box" data-level="1" title="< 1h (< 60m)"></span>
+                <span class="heatmap-legend-box" data-level="2" title="1h – 3h (60–180m)"></span>
+                <span class="heatmap-legend-box" data-level="3" title="3h – 5h (180–300m)"></span>
+                <span class="heatmap-legend-box" data-level="4" title="5h+ Marathon (300m+)"></span>
+                <span class="heatmap-legend-label">More</span>
+              </div>
+            </div>
+
+            <div class="circadian-side-col">
+              <h4 class="circadian-side-title">24-Hour Distribution</h4>
+              <div class="circadian-polar-bars" id="circadian-polar-bars">
+                <!-- Rendered dynamically -->
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <!-- Visual Component 2: Session Commitment Distribution ("Snack vs. Binge" Histogram) -->
+        <article class="habits-panel session-histogram-panel" aria-labelledby="histogram-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="histogram-panel-title">Session Commitment Distribution ("Snack vs. Binge")</h3>
+              <p class="panel-sub">Quick check-ins, standard runs, deep sessions, and binge marathons</p>
+            </div>
+          </div>
+
+          <div id="snack-binge-bars" class="commitments-list">
+            <!-- Rendered dynamically -->
+          </div>
+
+          <div id="longest-marathon-badge" class="marathon-callout-card">
+            <div class="marathon-callout-icon">🏆</div>
+            <div class="marathon-callout-text">
+              <strong id="marathon-callout-headline">Longest Marathon: —</strong>
+              <span id="marathon-callout-sub">Single longest recorded session</span>
+            </div>
+          </div>
+        </article>
+
+        <!-- Visual Component 3: 30-Day Rotation Timeline (Gantt Strip) -->
+        <article class="habits-panel habits-full-width session-rotation-gantt-panel" aria-labelledby="gantt-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="gantt-panel-title">30-Day Rotation Timeline (Swimlane Gantt)</h3>
+              <p class="panel-sub">Recent play activity across titles over the last 30 days, status transitions, and game hopping</p>
+            </div>
+            <span class="badge-subtle badge-purple" id="rotation-status-badge">Last 30 Days</span>
+          </div>
+
+          <div class="gantt-scroll-container" id="rotation-gantt-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
         <!-- Systems & Ecosystem Usage -->
         <article class="habits-panel habits-panel-systems" aria-labelledby="systems-panel-title">
           <div class="panel-header">
@@ -433,6 +541,166 @@
           </div>
 
           <div id="gems-games-row" class="hof-games-row">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Circadian Gaming Rhythm & Active Times -->
+        <article class="habits-panel habits-full-width" id="circadian-panel" aria-labelledby="circadian-panel-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="circadian-panel-title">Circadian Gaming Rhythm &amp; Active Times</h3>
+              <p class="panel-sub">Activity aggregated by day of week and hour from achievements, playtime prompts, and sessions</p>
+            </div>
+            <div class="circadian-badges">
+              <span class="badge-subtle badge-accent" id="circadian-archetype-pill">Flexible Gamer</span>
+              <span class="badge-subtle" id="circadian-peak-pill">Peak: —</span>
+              <span class="badge-subtle" id="circadian-tz-pill" title="Timezone used for active hours">Local Time</span>
+            </div>
+          </div>
+
+          <div class="circadian-content-layout">
+            <div class="circadian-heatmap-container" id="circadian-heatmap-container">
+              <!-- Rendered dynamically -->
+            </div>
+            <div class="circadian-time-buckets" id="circadian-time-buckets">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+        </article>
+
+        <!-- The Quit Curve (Drop Distribution & Survival / Retention) -->
+        <article class="habits-panel" id="quit-curve-panel" aria-labelledby="quit-curve-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="quit-curve-title">The Quit Curve &amp; Survival Retention</h3>
+              <p class="panel-sub">How long games stay alive before being completed or abandoned</p>
+            </div>
+            <span class="badge-subtle" id="median-bailout-badge">Median Drop: —</span>
+          </div>
+
+          <div id="quit-curve-container" class="quit-curve-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Rotation Focus vs. Game Hopping -->
+        <article class="habits-panel" id="rotation-focus-panel" aria-labelledby="rotation-focus-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="rotation-focus-title">Rotation Focus vs. Game Hopping</h3>
+              <p class="panel-sub">Single-title concentration vs. multi-game juggling</p>
+            </div>
+            <span class="badge-subtle badge-purple" id="rotation-archetype-badge">Balanced Juggler</span>
+          </div>
+
+          <div id="rotation-focus-container" class="rotation-focus-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Contrarian Index: Critic vs. Personal Rating -->
+        <article class="habits-panel" id="contrarian-panel" aria-labelledby="contrarian-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="contrarian-title">Contrarian Index: Taste vs. Critics</h3>
+              <p class="panel-sub">Where personal 10-point ratings diverge most from critic scores</p>
+            </div>
+            <span class="badge-subtle" id="contrarian-score-badge">Divergence: —</span>
+          </div>
+
+          <div id="contrarian-container" class="contrarian-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Mechanic & Theme DNA -->
+        <article class="habits-panel" id="mechanic-dna-panel" aria-labelledby="mechanic-dna-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="mechanic-dna-title">Mechanic &amp; Theme DNA</h3>
+              <p class="panel-sub">Finish rates and drop rates across gameplay mechanics and themes</p>
+            </div>
+          </div>
+
+          <div id="mechanic-dna-container" class="mechanic-dna-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Genre Time Sink vs. Finish Rate (Bubble Matrix) -->
+        <article class="habits-panel habits-full-width" id="genre-matrix-panel" aria-labelledby="genre-matrix-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="genre-matrix-title">Genre Time Sink vs. Finish Rate</h3>
+              <p class="panel-sub">High-Execution Mastery vs. Endless Comfort Sinks across all genres</p>
+            </div>
+            <div class="matrix-legend-pills">
+              <span class="legend-pill pill-mastery">Dedicated Mastery</span>
+              <span class="legend-pill pill-execution">High Execution</span>
+              <span class="legend-pill pill-comfort">Comfort Sinks</span>
+              <span class="legend-pill pill-casual">Casual Testing</span>
+            </div>
+          </div>
+
+          <div id="genre-matrix-container" class="genre-matrix-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Subscription / Game Pass ROI -->
+        <article class="habits-panel" id="subscription-roi-panel" aria-labelledby="sub-roi-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="sub-roi-title">Subscription &amp; Game Pass ROI</h3>
+              <p class="panel-sub">Owned games vs. subscription titles engagement and tourist bounce rates</p>
+            </div>
+          </div>
+
+          <div id="subscription-roi-container" class="subscription-roi-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Double-Dip & Cross-Platform Mobility -->
+        <article class="habits-panel" id="cross-platform-panel" aria-labelledby="cross-plat-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="cross-plat-title">Multi-Platform Ecosystem Mobility</h3>
+              <p class="panel-sub">Cross-platform ownership, double-dipping, and where you log the hours</p>
+            </div>
+          </div>
+
+          <div id="cross-platform-container" class="cross-platform-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Trophy Hunter & Rarity Pyramid -->
+        <article class="habits-panel" id="trophy-pyramid-panel" aria-labelledby="trophy-pyramid-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="trophy-pyramid-title">Achievement Rarity Pyramid</h3>
+              <p class="panel-sub">Trophies &amp; achievements unlocked by global rarity tier</p>
+            </div>
+          </div>
+
+          <div id="trophy-pyramid-container" class="trophy-pyramid-container">
+            <!-- Rendered dynamically -->
+          </div>
+        </article>
+
+        <!-- Almost Perfect Mastery Strip -->
+        <article class="habits-panel habits-full-width" id="almost-perfect-panel" aria-labelledby="almost-perfect-title">
+          <div class="panel-header">
+            <div>
+              <h3 id="almost-perfect-title">Closest to 100% Mastery (Almost Perfect)</h3>
+              <p class="panel-sub">Titles sitting at 70%+ achievement completion that need just a few more unlocks</p>
+            </div>
+            <span class="badge-subtle">Click game to inspect</span>
+          </div>
+
+          <div id="almost-perfect-container" class="hof-games-row">
             <!-- Rendered dynamically -->
           </div>
         </article>
@@ -1363,6 +1631,67 @@
           </div>
         </div>
 
+        <!-- Timezone & Regional History Card -->
+        <div class="account-timezone-card" style="margin-top: 1.25rem; background: var(--bg-card-subtle); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); padding: 1rem;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; flex-wrap: wrap;">
+            <div>
+              <h4 style="margin: 0; font-size: 0.98rem; display: flex; align-items: center; gap: 0.4rem;">
+                <span>🌐</span> Timezone &amp; Regional History
+              </h4>
+              <p class="settings-panel-desc" style="margin: 0.25rem 0 0.75rem 0; font-size: 0.8rem;">
+                Accurately aligns your Circadian Rhythm and play habits to your real-life wall clock, including historical relocations.
+              </p>
+            </div>
+            <span class="badge-subtle badge-purple" id="tz-current-detected-badge">Auto-Detect</span>
+          </div>
+
+          <form id="form-timezone-settings" onsubmit="return false;" style="margin-top: 0.5rem;">
+            <div class="form-group" style="margin-bottom: 0.85rem;">
+              <label for="select-user-timezone" style="font-size: 0.85rem; font-weight: 500;">Current / Base Timezone</label>
+              <select id="select-user-timezone" style="width: 100%; background: var(--bg-input); border: 1px solid var(--border-subtle); color: var(--text-primary); border-radius: 6px; padding: 0.45rem 0.65rem; font-size: 0.85rem;">
+                <option value="auto">Auto-Detect from Browser</option>
+                <option value="America/New_York">America/New_York (US Eastern Time)</option>
+                <option value="America/Chicago">America/Chicago (US Central Time)</option>
+                <option value="America/Denver">America/Denver (US Mountain Time)</option>
+                <option value="America/Los_Angeles">America/Los_Angeles (US Pacific Time)</option>
+                <option value="America/Anchorage">America/Anchorage (Alaska Time)</option>
+                <option value="Pacific/Honolulu">Pacific/Honolulu (Hawaii Time)</option>
+                <option value="Europe/London">Europe/London (GMT / BST)</option>
+                <option value="Europe/Paris">Europe/Paris (CET / CEST)</option>
+                <option value="Asia/Tokyo">Asia/Tokyo (JST)</option>
+                <option value="Australia/Sydney">Australia/Sydney (AEST)</option>
+                <option value="UTC">UTC (Universal Time)</option>
+              </select>
+              <small class="form-help" id="detected-tz-help" style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; display: block;">
+                Browser detected: <span id="detected-tz-name">—</span>
+              </small>
+            </div>
+
+            <div class="timezone-eras-section" style="margin-top: 1rem; border-top: 1px solid var(--border-subtle); padding-top: 0.85rem;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
+                <div>
+                  <strong style="font-size: 0.85rem;">Historical Relocation Eras (Optional)</strong>
+                  <p style="margin: 0.15rem 0 0 0; font-size: 0.75rem; color: var(--text-muted);">
+                    Map activity before a move to where you lived previously.
+                  </p>
+                </div>
+                <button type="button" id="btn-add-tz-era" class="btn btn-secondary btn-sm" style="font-size: 0.75rem; padding: 0.25rem 0.5rem;">
+                  + Add Earlier Era
+                </button>
+              </div>
+
+              <div id="tz-eras-list" class="tz-eras-list" style="display: flex; flex-direction: column; gap: 0.6rem;">
+                <!-- Era rows rendered dynamically -->
+              </div>
+            </div>
+
+            <div style="margin-top: 1rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+              <button type="button" id="btn-save-timezone" class="btn btn-primary btn-sm">Save Timezone Preferences</button>
+              <div id="timezone-status-msg" class="connections-status-msg" aria-live="polite" style="font-size: 0.8rem;"></div>
+            </div>
+          </form>
+        </div>
+
         <form id="form-change-password" class="settings-form" onsubmit="return false;">
           <h4 style="margin: 1.25rem 0 0.5rem 0; font-size: 0.98rem;">Change Password</h4>
           <div class="form-group">
@@ -1966,6 +2295,6 @@
     <button type="button" id="mnav-add"></button>
   </div>
 
-  <script src="/static/app.js?v=50"></script>
+  <script src="/static/app.js?v=56"></script>
 </body>
 </html>

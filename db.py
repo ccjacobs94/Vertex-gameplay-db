@@ -7,9 +7,10 @@ import json
 import os
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
 
 from context import current_user_id
 
@@ -260,6 +261,42 @@ def init_db(db_path: Optional[str] = None) -> None:
                 created_at TEXT NOT NULL,
                 last_used_at TEXT DEFAULT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS game_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL,
+                canonical_id INTEGER DEFAULT NULL,
+                platform TEXT NOT NULL,
+                source TEXT NOT NULL,
+                external_title_id TEXT DEFAULT '',
+                started_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                ended_at TEXT DEFAULT NULL,
+                wall_clock_minutes REAL DEFAULT 0.0,
+                active_minutes REAL DEFAULT 0.0,
+                idle_minutes REAL DEFAULT 0.0,
+                achievements_earned INTEGER DEFAULT 0,
+                detection_method TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_game_sessions_game ON game_sessions(game_id, started_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_game_sessions_status ON game_sessions(status);
+            CREATE INDEX IF NOT EXISTS idx_game_sessions_started ON game_sessions(started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS daily_playtime_ledger (
+                date TEXT NOT NULL,
+                game_id INTEGER NOT NULL,
+                platform_family TEXT NOT NULL,
+                minutes_played REAL DEFAULT 0.0,
+                sessions_count INTEGER DEFAULT 0,
+                achievements_unlocked INTEGER DEFAULT 0,
+                first_session_hour INTEGER DEFAULT NULL,
+                PRIMARY KEY (date, game_id),
+                FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_daily_ledger_date ON daily_playtime_ledger(date DESC);
+            CREATE INDEX IF NOT EXISTS idx_daily_ledger_game ON daily_playtime_ledger(game_id);
             """
         )
         cols = {
@@ -832,6 +869,9 @@ def upsert_synced_game(
             ):
                 new_status = "Completed"
 
+            # Preserve existing cover_url if already populated (e.g. repaired or custom art)
+            effective_cover = existing["cover_url"] if existing["cover_url"] else cover_url
+
             # Self-reported ownership rule: sync never overwrites existing ownership_status
             # unless an explicit non-None ownership_status is provided and ownership is not locked.
             existing_ownership = normalize_ownership_status(existing["ownership_status"])
@@ -913,7 +953,7 @@ def upsert_synced_game(
                     merged_tags,
                     critic_score,
                     release_year,
-                    cover_url,
+                    effective_cover,
                     now,
                     game_id,
                 ),
@@ -2002,6 +2042,8 @@ def get_habits_analytics(
     is_game_pass: Optional[bool] = None,
     is_play_anywhere: Optional[bool] = None,
     favorite_only: bool = False,
+    user_timezone: Optional[str] = None,
+    user_timezone_eras: Optional[List[Dict[str, Any]]] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -2230,6 +2272,566 @@ def get_habits_analytics(
     dominant_system = platform_list[0]["name"] if platform_list else "None"
     dominant_genre = sorted_genres[0]["genre"] if sorted_genres else "None"
 
+    # -------------------------------------------------------------
+    # Advanced Behavioral, Pacing, Taste, and Mastery Analytics
+    # -------------------------------------------------------------
+    filtered_game_ids = [g["id"] for g in games]
+
+    # 1. Circadian Gaming Rhythm & Active Days
+    # 7 rows (0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun), 24 cols (0..23)
+    circadian_grid = [[0 for _ in range(24)] for _ in range(7)]
+    total_rhythm_events = 0
+    time_buckets = {"night": 0, "morning": 0, "afternoon": 0, "evening": 0}
+
+    # Resolve user base timezone & historical eras
+    base_tz_str = (user_timezone or "").strip()
+    base_tz = None
+    if base_tz_str and base_tz_str.lower() != "auto":
+        try:
+            base_tz = ZoneInfo(base_tz_str)
+        except Exception:
+            base_tz = None
+    if base_tz is None:
+        try:
+            base_tz = datetime.now().astimezone().tzinfo or timezone.utc
+        except Exception:
+            base_tz = timezone.utc
+
+    def _parse_ts(val: Any) -> Optional[datetime]:
+        if not val or not isinstance(val, str):
+            return None
+        v = val.strip()
+        if not v:
+            return None
+        if v.endswith("Z"):
+            v = v[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(v)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            pass
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                dt = datetime.strptime(v, fmt)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except Exception:
+                continue
+        return None
+
+    valid_eras: List[Dict[str, Any]] = []
+    for era in (user_timezone_eras or []):
+        if not isinstance(era, dict):
+            continue
+        e_tz_str = (era.get("timezone") or "").strip()
+        e_until = era.get("until")
+        if not e_tz_str or not e_until:
+            continue
+        try:
+            e_tz = ZoneInfo(e_tz_str)
+            e_until_dt = _parse_ts(e_until)
+            if e_until_dt:
+                valid_eras.append({
+                    "tz": e_tz,
+                    "tz_name": e_tz_str,
+                    "until": e_until_dt,
+                    "label": era.get("label") or e_tz_str,
+                })
+        except Exception:
+            continue
+    valid_eras.sort(key=lambda x: x["until"])
+
+    def _resolve_event_tz(dt_utc: datetime):
+        for ve in valid_eras:
+            if dt_utc < ve["until"]:
+                return ve["tz"]
+        return base_tz
+
+    achievement_times: List[str] = []
+    prompt_times: List[str] = []
+    session_times: List[str] = []
+    if filtered_game_ids:
+        placeholders = ",".join("?" for _ in filtered_game_ids)
+        try:
+            with get_connection(db_path) as conn:
+                rows_ach = conn.execute(
+                    f"SELECT unlock_time FROM game_achievements WHERE game_id IN ({placeholders}) AND unlocked = 1 AND unlock_time IS NOT NULL",
+                    filtered_game_ids,
+                ).fetchall()
+                achievement_times = [r["unlock_time"] for r in rows_ach if r["unlock_time"]]
+
+                rows_prompts = conn.execute(
+                    f"SELECT detected_at FROM playtime_prompts WHERE game_id IN ({placeholders}) AND detected_at IS NOT NULL",
+                    filtered_game_ids,
+                ).fetchall()
+                prompt_times = [r["detected_at"] for r in rows_prompts if r["detected_at"]]
+
+                rows_sess = conn.execute(
+                    f"SELECT started_at FROM game_sessions WHERE game_id IN ({placeholders}) AND started_at IS NOT NULL",
+                    filtered_game_ids,
+                ).fetchall()
+                session_times = [r["started_at"] for r in rows_sess if r["started_at"]]
+        except Exception:
+            pass
+
+    all_timestamps = achievement_times + prompt_times + session_times
+    if len(all_timestamps) < 10:
+        for g in games:
+            lp = g.get("last_played")
+            if lp:
+                all_timestamps.append(lp)
+
+    for ts_str in all_timestamps:
+        dt = _parse_ts(ts_str)
+        if dt:
+            ev_tz = _resolve_event_tz(dt)
+            try:
+                dt_local = dt.astimezone(ev_tz)
+            except Exception:
+                dt_local = dt
+            w = dt_local.weekday()
+            h = dt_local.hour
+            circadian_grid[w][h] += 1
+            total_rhythm_events += 1
+            if 0 <= h < 6:
+                time_buckets["night"] += 1
+            elif 6 <= h < 12:
+                time_buckets["morning"] += 1
+            elif 12 <= h < 18:
+                time_buckets["afternoon"] += 1
+            else:
+                time_buckets["evening"] += 1
+
+    peak_day_idx = 0
+    peak_hour_idx = 0
+    max_cell_count = 0
+    day_totals = [sum(row) for row in circadian_grid]
+    hour_totals = [sum(circadian_grid[d][h] for d in range(7)) for h in range(24)]
+
+    for d in range(7):
+        for h in range(24):
+            if circadian_grid[d][h] > max_cell_count:
+                max_cell_count = circadian_grid[d][h]
+                peak_day_idx = d
+                peak_hour_idx = h
+
+    day_names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    peak_day_name = day_names[peak_day_idx]
+    ampm = "AM" if peak_hour_idx < 12 else "PM"
+    h12 = 12 if peak_hour_idx % 12 == 0 else peak_hour_idx % 12
+    peak_hour_str = f"{h12} {ampm}"
+
+    weekend_events = day_totals[5] + day_totals[6]
+    weekday_events = sum(day_totals[:5])
+    if total_rhythm_events == 0:
+        rhythm_archetype = "Flexible Gamer"
+    elif weekend_events > weekday_events * 0.7 and (time_buckets["evening"] + time_buckets["night"] >= time_buckets["morning"] + time_buckets["afternoon"]):
+        rhythm_archetype = "Weekend Night Owl"
+    elif time_buckets["evening"] >= max(time_buckets.values()):
+        rhythm_archetype = "Prime-Time Evening Warrior"
+    elif time_buckets["night"] >= max(time_buckets.values()):
+        rhythm_archetype = "Midnight Grinder"
+    elif time_buckets["morning"] >= max(time_buckets.values()):
+        rhythm_archetype = "Early Morning Explorer"
+    else:
+        rhythm_archetype = "Afternoon Tactician"
+
+    tz_display = base_tz_str if (base_tz_str and base_tz_str.lower() != "auto") else (getattr(base_tz, "key", None) or str(base_tz))
+    circadian_rhythm = {
+        "grid": circadian_grid,
+        "max_count": max_cell_count,
+        "total_events": total_rhythm_events,
+        "peak_day": peak_day_name,
+        "peak_hour": peak_hour_str,
+        "peak_hour_num": peak_hour_idx,
+        "archetype": rhythm_archetype,
+        "day_totals": day_totals,
+        "hour_totals": hour_totals,
+        "time_buckets": time_buckets,
+        "timezone": tz_display,
+        "eras_count": len(valid_eras),
+    }
+
+    # 2. The Quit Curve (Drop Distribution & Survival / Retention)
+    quit_intervals = [1, 2, 5, 10, 20, 50]
+    survival_data = []
+    for threshold in quit_intervals:
+        survived = sum(
+            1 for g in played_games
+            if float(g.get("playtime_hours") or 0.0) >= threshold
+            or g.get("completion_status") in ("Beaten", "Completed")
+        )
+        rate = round((survived / max(played_count, 1)) * 100, 1) if played_count > 0 else 0.0
+        survival_data.append({"hours": threshold, "alive_count": survived, "rate": rate})
+
+    drop_bins = [
+        {"key": "under_1h", "label": "< 1h (Quick Bounce)", "count": 0, "pct": 0.0},
+        {"key": "1_to_3h", "label": "1–3h (Early Drop)", "count": 0, "pct": 0.0},
+        {"key": "3_to_5h", "label": "3–5h (Opening Arc)", "count": 0, "pct": 0.0},
+        {"key": "5_to_10h", "label": "5–10h (Mid-Game Fade)", "count": 0, "pct": 0.0},
+        {"key": "10_to_20h", "label": "10–20h (Late Burnout)", "count": 0, "pct": 0.0},
+        {"key": "over_20h", "label": "20h+ (Deep Drop)", "count": 0, "pct": 0.0},
+    ]
+    dropped_hours_list = [float(g.get("playtime_hours") or 0.0) for g in dropped_games]
+    for h in dropped_hours_list:
+        if h < 1.0:
+            drop_bins[0]["count"] += 1
+        elif h < 3.0:
+            drop_bins[1]["count"] += 1
+        elif h < 5.0:
+            drop_bins[2]["count"] += 1
+        elif h < 10.0:
+            drop_bins[3]["count"] += 1
+        elif h < 20.0:
+            drop_bins[4]["count"] += 1
+        else:
+            drop_bins[5]["count"] += 1
+
+    for b in drop_bins:
+        b["pct"] = round((b["count"] / max(dropped_count, 1)) * 100, 1) if dropped_count > 0 else 0.0
+
+    dropped_sorted = sorted(dropped_hours_list)
+    if dropped_sorted:
+        mid = len(dropped_sorted) // 2
+        median_drop_hours = round(
+            (dropped_sorted[mid] if len(dropped_sorted) % 2 != 0 else (dropped_sorted[mid - 1] + dropped_sorted[mid]) / 2.0),
+            1,
+        )
+    else:
+        median_drop_hours = 0.0
+
+    quit_curve = {
+        "intervals": survival_data,
+        "drop_bins": drop_bins,
+        "median_drop_hours": median_drop_hours,
+        "dropped_count": dropped_count,
+        "beaten_count": beaten_count,
+    }
+
+    # 3. Rotation Focus vs. Game Hopping Index
+    recent_active_candidates = [
+        g for g in games
+        if float(g.get("playtime_hours") or 0.0) > 0 and g.get("last_played")
+    ]
+    if not recent_active_candidates:
+        recent_active_candidates = [g for g in games if float(g.get("playtime_hours") or 0.0) > 0]
+
+    recent_active_candidates.sort(
+        key=lambda x: (x.get("last_played") or "", float(x.get("playtime_hours") or 0.0)),
+        reverse=True,
+    )
+    recent_slice = recent_active_candidates[:8]
+    recent_slice_hours = sum(float(g.get("playtime_hours") or 0.0) for g in recent_slice)
+    top_active_game_hours = float(recent_slice[0].get("playtime_hours") or 0.0) if recent_slice else 0.0
+    top_share_pct = round((top_active_game_hours / max(recent_slice_hours, 0.1)) * 100, 1) if recent_slice_hours > 0 else 0.0
+    focus_score = min(100, max(0, int(top_share_pct)))
+
+    if focus_score >= 65:
+        focus_archetype = "Serial Monogamist"
+        focus_desc = "Concentrates heavily on one primary title until beaten."
+    elif focus_score >= 35:
+        focus_archetype = "Balanced Juggler"
+        focus_desc = "Rotates smoothly across 2 to 4 active titles in parallel."
+    else:
+        focus_archetype = "Channel Surfer"
+        focus_desc = "Disperses playtime across numerous games simultaneously."
+
+    rotation_focus = {
+        "focus_score": focus_score,
+        "archetype": focus_archetype,
+        "description": focus_desc,
+        "active_rotation_count": len(recent_slice),
+        "recent_games": [
+            {
+                "id": g["id"],
+                "title": g["title"],
+                "platform": g["platform"],
+                "hours": float(g.get("playtime_hours") or 0.0),
+                "completion_status": g.get("completion_status"),
+                "cover_url": g.get("cover_url"),
+                "last_played": g.get("last_played"),
+                "share_pct": round((float(g.get("playtime_hours") or 0.0) / max(recent_slice_hours, 0.1)) * 100, 1),
+            }
+            for g in recent_slice
+        ],
+    }
+
+    # 4. Contrarian Index (Critic vs. Personal Rating)
+    rated_both = []
+    for g in games:
+        ur = g.get("user_rating")
+        cs = g.get("critic_score")
+        if ur is not None and cs is not None:
+            ur_float = float(ur)
+            norm_user = round(ur_float * 10.0, 1)
+            diff = round(norm_user - float(cs), 1)
+            rated_both.append({
+                "id": g["id"],
+                "title": g["title"],
+                "platform": g["platform"],
+                "cover_url": g.get("cover_url"),
+                "user_rating": ur,
+                "user_score_norm": int(round(norm_user)),
+                "critic_score": int(cs),
+                "delta": diff,
+                "status": g.get("completion_status"),
+            })
+
+    guilty_pleasures = sorted(
+        [r for r in rated_both if r["delta"] >= 10.0 or (r["user_score_norm"] >= 80 and r["critic_score"] <= 75)],
+        key=lambda x: x["delta"],
+        reverse=True,
+    )[:5]
+
+    overhyped_misses = sorted(
+        [r for r in rated_both if r["delta"] <= -10.0 or (r["user_score_norm"] <= 50 and r["critic_score"] >= 80) or (r["status"] == "Dropped" and r["critic_score"] >= 80)],
+        key=lambda x: x["delta"],
+    )[:5]
+
+    contrarian_score = round(
+        sum(abs(r["delta"]) for r in rated_both) / max(len(rated_both), 1),
+        1,
+    ) if rated_both else 0.0
+
+    contrarian_index = {
+        "contrarian_score": contrarian_score,
+        "guilty_pleasures": guilty_pleasures,
+        "overhyped_misses": overhyped_misses,
+        "scatter_points": rated_both[:40],
+    }
+
+    # 5. Genre Matrix (Hours vs Finish Rate Bubble Chart)
+    genre_matrix = []
+    for gd in sorted_genres[:16]:
+        h = gd["hours"]
+        cr = gd["completion_rate"]
+        cnt = gd["count"]
+        if h >= 25.0 and cr >= 50.0:
+            cat = "Dedicated Mastery"
+        elif h < 25.0 and cr >= 50.0:
+            cat = "High Execution"
+        elif h >= 25.0 and cr < 50.0:
+            cat = "Comfort Sinks"
+        else:
+            cat = "Casual Testing"
+        genre_matrix.append({
+            "genre": gd["genre"],
+            "hours": h,
+            "completion_rate": cr,
+            "count": cnt,
+            "category": cat,
+        })
+
+    # 6. Mechanic & Theme DNA (Tags)
+    tag_counts: Dict[str, Dict[str, Any]] = {}
+    for g in games:
+        st = g.get("completion_status") or "Not Played"
+        fav = bool(g.get("favorite"))
+        h = float(g.get("playtime_hours") or 0.0)
+        is_started = h > 0 or st in ("Playing", "Beaten", "Completed", "Dropped")
+        for tag in (g.get("tags") or []):
+            if tag not in tag_counts:
+                tag_counts[tag] = {
+                    "tag": tag,
+                    "count": 0,
+                    "hours": 0.0,
+                    "played_count": 0,
+                    "beaten_count": 0,
+                    "dropped_count": 0,
+                    "favorite_count": 0,
+                }
+            tc = tag_counts[tag]
+            tc["count"] += 1
+            tc["hours"] = round(tc["hours"] + h, 1)
+            if fav:
+                tc["favorite_count"] += 1
+            if is_started:
+                tc["played_count"] += 1
+            if st in ("Beaten", "Completed"):
+                tc["beaten_count"] += 1
+            elif st == "Dropped":
+                tc["dropped_count"] += 1
+
+    tag_list = []
+    for tc in tag_counts.values():
+        p_cnt = max(tc["played_count"], tc["beaten_count"] + tc["dropped_count"], 1)
+        tc["finish_rate"] = min(100.0, round((tc["beaten_count"] / p_cnt) * 100, 1)) if tc["played_count"] > 0 else 0.0
+        tc["drop_rate"] = min(100.0, round((tc["dropped_count"] / p_cnt) * 100, 1)) if tc["played_count"] > 0 else 0.0
+        tag_list.append(tc)
+
+    tag_list.sort(key=lambda x: (x["hours"], x["count"]), reverse=True)
+    top_tags = tag_list[:12]
+
+    qualified_for_insights = [t for t in tag_list if t["played_count"] >= 2]
+    best_tag = max(qualified_for_insights, key=lambda x: x["finish_rate"], default=None) if qualified_for_insights else None
+    worst_tag = max(qualified_for_insights, key=lambda x: x["drop_rate"], default=None) if qualified_for_insights else None
+
+    mechanic_dna = {
+        "tags": top_tags,
+        "best_finished_tag": best_tag,
+        "worst_dropped_tag": worst_tag,
+    }
+
+    # 7. Subscription / Game Pass ROI
+    sub_games = [g for g in games if g.get("is_game_pass") or g.get("ownership_status") == "Subscription"]
+    owned_games = [g for g in games if (g.get("ownership_status") or "Owned") == "Owned" and not g.get("is_game_pass")]
+
+    def _calc_cohort_stats(cohort: List[Dict[str, Any]]) -> Dict[str, Any]:
+        c_count = len(cohort)
+        c_hours = round(sum(float(g.get("playtime_hours") or 0.0) for g in cohort), 1)
+        c_played = [
+            g for g in cohort
+            if float(g.get("playtime_hours") or 0.0) > 0 or g.get("completion_status") in ("Playing", "Beaten", "Completed", "Dropped")
+        ]
+        c_beaten = sum(1 for g in cohort if g.get("completion_status") in ("Beaten", "Completed"))
+        c_dropped = sum(1 for g in cohort if g.get("completion_status") == "Dropped")
+        c_tourist = sum(1 for g in cohort if 0 < float(g.get("playtime_hours") or 0.0) < 1.0)
+        c_p_count = max(len(c_played), c_beaten + c_dropped)
+        return {
+            "count": c_count,
+            "hours": c_hours,
+            "played_count": c_p_count,
+            "avg_hours": round(c_hours / max(c_count, 1), 1),
+            "completion_rate": min(100.0, round((c_beaten / max(c_p_count, 1)) * 100, 1)) if c_p_count > 0 else 0.0,
+            "drop_rate": min(100.0, round((c_dropped / max(c_p_count, 1)) * 100, 1)) if c_p_count > 0 else 0.0,
+            "tourist_rate": min(100.0, round((c_tourist / max(c_p_count, 1)) * 100, 1)) if c_p_count > 0 else 0.0,
+            "tourist_count": c_tourist,
+        }
+
+    subscription_roi = {
+        "subscription": _calc_cohort_stats(sub_games),
+        "owned": _calc_cohort_stats(owned_games),
+    }
+
+    # 8. Double-Dip & Cross-Platform Overlap
+    canonical_map: Dict[str, List[Dict[str, Any]]] = {}
+    for g in games:
+        key = str(g.get("canonical_id") or g.get("title", "").strip().lower())
+        if key not in canonical_map:
+            canonical_map[key] = []
+        canonical_map[key].append(g)
+
+    double_dipped_titles = []
+    pair_counts: Dict[str, int] = {}
+    double_dipped_hours = 0.0
+
+    for title_key, members in canonical_map.items():
+        unique_plats = sorted({_platform_family(m.get("platform") or "") for m in members})
+        if len(unique_plats) > 1:
+            tot_h = round(sum(float(m.get("playtime_hours") or 0.0) for m in members), 1)
+            double_dipped_hours = round(double_dipped_hours + tot_h, 1)
+            pair_key = " + ".join(unique_plats[:2])
+            pair_counts[pair_key] = pair_counts.get(pair_key, 0) + 1
+            primary = max(members, key=lambda m: float(m.get("playtime_hours") or 0.0))
+            double_dipped_titles.append({
+                "title": primary["title"],
+                "platforms": unique_plats,
+                "total_hours": tot_h,
+                "cover_url": primary.get("cover_url"),
+                "platform_hours": [
+                    {"platform": m["platform"], "hours": float(m.get("playtime_hours") or 0.0)}
+                    for m in members
+                ],
+            })
+
+    double_dipped_titles.sort(key=lambda x: x["total_hours"], reverse=True)
+
+    cross_platform = {
+        "double_dipped_count": len(double_dipped_titles),
+        "double_dipped_hours": double_dipped_hours,
+        "pairs": [
+            {"pair": k, "count": v}
+            for k, v in sorted(pair_counts.items(), key=lambda x: x[1], reverse=True)
+        ],
+        "top_titles": double_dipped_titles[:6],
+    }
+
+    # 9. Trophy Hunter / Rarity Pyramid
+    ultra_rare = {"unlocked": 0, "total": 0, "pct": 0.0}
+    rare = {"unlocked": 0, "total": 0, "pct": 0.0}
+    common = {"unlocked": 0, "total": 0, "pct": 0.0}
+
+    if filtered_game_ids:
+        placeholders = ",".join("?" for _ in filtered_game_ids)
+        try:
+            with get_connection(db_path) as conn:
+                row_pyr = conn.execute(
+                    f"""
+                    SELECT
+                        SUM(CASE WHEN rarity_pct < 5.0 AND rarity_pct IS NOT NULL THEN 1 ELSE 0 END) as ur_tot,
+                        SUM(CASE WHEN rarity_pct < 5.0 AND rarity_pct IS NOT NULL AND unlocked = 1 THEN 1 ELSE 0 END) as ur_unl,
+                        SUM(CASE WHEN rarity_pct >= 5.0 AND rarity_pct < 20.0 THEN 1 ELSE 0 END) as r_tot,
+                        SUM(CASE WHEN rarity_pct >= 5.0 AND rarity_pct < 20.0 AND unlocked = 1 THEN 1 ELSE 0 END) as r_unl,
+                        SUM(CASE WHEN rarity_pct >= 20.0 OR rarity_pct IS NULL THEN 1 ELSE 0 END) as c_tot,
+                        SUM(CASE WHEN (rarity_pct >= 20.0 OR rarity_pct IS NULL) AND unlocked = 1 THEN 1 ELSE 0 END) as c_unl
+                    FROM game_achievements
+                    WHERE game_id IN ({placeholders})
+                    """,
+                    filtered_game_ids,
+                ).fetchone()
+                if row_pyr and (row_pyr["ur_tot"] is not None or row_pyr["r_tot"] is not None or row_pyr["c_tot"] is not None):
+                    ur_tot = row_pyr["ur_tot"] or 0
+                    ur_unl = row_pyr["ur_unl"] or 0
+                    ultra_rare = {
+                        "unlocked": ur_unl,
+                        "total": ur_tot,
+                        "pct": round((ur_unl / max(ur_tot, 1)) * 100, 1) if ur_tot > 0 else 0.0,
+                    }
+                    r_tot = row_pyr["r_tot"] or 0
+                    r_unl = row_pyr["r_unl"] or 0
+                    rare = {
+                        "unlocked": r_unl,
+                        "total": r_tot,
+                        "pct": round((r_unl / max(r_tot, 1)) * 100, 1) if r_tot > 0 else 0.0,
+                    }
+                    c_tot = row_pyr["c_tot"] or 0
+                    c_unl = row_pyr["c_unl"] or 0
+                    common = {
+                        "unlocked": c_unl,
+                        "total": c_tot,
+                        "pct": round((c_unl / max(c_tot, 1)) * 100, 1) if c_tot > 0 else 0.0,
+                    }
+        except Exception:
+            pass
+
+    trophy_pyramid = {
+        "ultra_rare": ultra_rare,
+        "rare": rare,
+        "common": common,
+    }
+
+    # 10. Almost Perfect Games (Closest to 100% Mastery)
+    almost_perfect_candidates = []
+    for g in games:
+        tot_ach = int(g.get("achievements_total") or 0)
+        unl_ach = int(g.get("achievements_unlocked") or 0)
+        if tot_ach >= 3 and 0 < unl_ach < tot_ach:
+            pct = round((unl_ach / tot_ach) * 100, 1)
+            if pct >= 70.0:
+                almost_perfect_candidates.append({
+                    "id": g["id"],
+                    "title": g["title"],
+                    "platform": g["platform"],
+                    "cover_url": g.get("cover_url"),
+                    "unlocked": unl_ach,
+                    "total": tot_ach,
+                    "remaining": tot_ach - unl_ach,
+                    "pct": pct,
+                })
+
+    almost_perfect_candidates.sort(key=lambda x: (x["pct"], -x["remaining"]), reverse=True)
+    almost_perfect = almost_perfect_candidates[:8]
+
+    session_telemetry = get_sessions_analytics(
+        days=365,
+        user_timezone=user_timezone,
+        user_timezone_eras=user_timezone_eras,
+        db_path=db_path,
+    )
+
     return {
         "summary": {
             "total_games": total_games,
@@ -2267,6 +2869,17 @@ def get_habits_analytics(
             "backlog_gems": backlog_gems,
         },
         "hall_of_fame": hall_of_fame,
+        "circadian_rhythm": circadian_rhythm,
+        "quit_curve": quit_curve,
+        "rotation_focus": rotation_focus,
+        "contrarian_index": contrarian_index,
+        "genre_matrix": genre_matrix,
+        "mechanic_dna": mechanic_dna,
+        "subscription_roi": subscription_roi,
+        "cross_platform": cross_platform,
+        "trophy_pyramid": trophy_pyramid,
+        "almost_perfect": almost_perfect,
+        "session_telemetry": session_telemetry,
     }
 
 
@@ -3535,4 +4148,1011 @@ def list_active_push_subscriptions(db_path: Optional[str] = None) -> List[Dict[s
     with get_connection(db_path) as conn:
         rows = conn.execute("SELECT * FROM push_subscriptions WHERE is_active = 1").fetchall()
         return [dict(r) for r in rows]
+
+
+# ==============================================================================
+# Telemetry, Session Reconstruction & Daily Metrics Engine (Sections 1-5)
+# ==============================================================================
+
+def parse_iso_datetime(val: Any) -> Optional[datetime]:
+    if not val or not isinstance(val, str):
+        return None
+    v = val.strip()
+    if not v:
+        return None
+    if v.endswith("Z"):
+        v = v[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(v)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(v, fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            continue
+    return None
+
+
+def resolve_timezone_context(
+    user_timezone: Optional[str] = "auto",
+    user_timezone_eras: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Any, List[Dict[str, Any]], Any]:
+    base_tz_str = (user_timezone or "").strip()
+    base_tz = None
+    if base_tz_str and base_tz_str.lower() != "auto":
+        try:
+            base_tz = ZoneInfo(base_tz_str)
+        except Exception:
+            base_tz = None
+    if base_tz is None:
+        try:
+            base_tz = datetime.now().astimezone().tzinfo or timezone.utc
+        except Exception:
+            base_tz = timezone.utc
+
+    valid_eras: List[Dict[str, Any]] = []
+    for era in (user_timezone_eras or []):
+        if not isinstance(era, dict):
+            continue
+        e_tz_str = (era.get("timezone") or "").strip()
+        e_until = era.get("until")
+        if not e_tz_str or not e_until:
+            continue
+        try:
+            e_tz = ZoneInfo(e_tz_str)
+            e_until_dt = parse_iso_datetime(e_until)
+            if e_until_dt:
+                valid_eras.append({
+                    "tz": e_tz,
+                    "tz_name": e_tz_str,
+                    "until": e_until_dt,
+                    "label": era.get("label") or e_tz_str,
+                })
+        except Exception:
+            continue
+    valid_eras.sort(key=lambda x: x["until"])
+
+    def resolve_event_tz(dt_utc: datetime):
+        for ve in valid_eras:
+            if dt_utc < ve["until"]:
+                return ve["tz"]
+        return base_tz
+
+    return base_tz, valid_eras, resolve_event_tz
+
+
+def start_session(
+    game_id: int,
+    external_title_id: str = "",
+    started_at: Optional[str] = None,
+    detection_method: str = "presence_poll",
+    source: Optional[str] = None,
+    platform: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    now_iso = started_at or datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        existing = conn.execute(
+            "SELECT * FROM game_sessions WHERE game_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
+            (game_id,),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE game_sessions SET last_seen_at = ? WHERE id = ?",
+                (now_iso, existing["id"]),
+            )
+            return dict(conn.execute("SELECT * FROM game_sessions WHERE id = ?", (existing["id"],)).fetchone())
+
+        game = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+        if not game:
+            raise ValueError(f"Game with id {game_id} not found")
+
+        g_plat = platform or game["platform"]
+        g_src = source or game["source"]
+        c_id = game["canonical_id"]
+        ext_tid = external_title_id or str(game["external_id"]).split(":")[-1]
+
+        cur = conn.execute(
+            """
+            INSERT INTO game_sessions (
+                game_id, canonical_id, platform, source, external_title_id,
+                started_at, last_seen_at, ended_at, wall_clock_minutes,
+                active_minutes, idle_minutes, achievements_earned,
+                detection_method, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0.0, 0.0, 0.0, 0, ?, 'active')
+            """,
+            (
+                game_id,
+                c_id,
+                g_plat,
+                g_src,
+                ext_tid,
+                now_iso,
+                now_iso,
+                detection_method,
+            ),
+        )
+        sess_id = cur.lastrowid
+        row = conn.execute("SELECT * FROM game_sessions WHERE id = ?", (sess_id,)).fetchone()
+        return dict(row)
+
+
+def touch_session(
+    session_id: int,
+    last_seen_at: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    now_iso = last_seen_at or datetime.now(timezone.utc).isoformat()
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "UPDATE game_sessions SET last_seen_at = ? WHERE id = ? AND status = 'active'",
+            (now_iso, session_id),
+        )
+        row = conn.execute("SELECT * FROM game_sessions WHERE id = ?", (session_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def commit_session_to_database(
+    session_id: int,
+    ended_at: Optional[str] = None,
+    wall_clock_minutes: Optional[float] = None,
+    active_minutes: Optional[float] = None,
+    idle_minutes: Optional[float] = None,
+    achievements_earned: int = 0,
+    status: str = "completed",
+    user_timezone: str = "auto",
+    user_timezone_eras: Optional[List[Dict[str, Any]]] = None,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    with get_connection(db_path) as conn:
+        sess_row = conn.execute("SELECT * FROM game_sessions WHERE id = ?", (session_id,)).fetchone()
+        if not sess_row:
+            return None
+        session = dict(sess_row)
+        game_id = session["game_id"]
+
+        end_iso = ended_at or datetime.now(timezone.utc).isoformat()
+        start_dt = parse_iso_datetime(session["started_at"]) or datetime.now(timezone.utc)
+        end_dt = parse_iso_datetime(end_iso) or datetime.now(timezone.utc)
+
+        if wall_clock_minutes is None:
+            w_mins = max(0.0, round((end_dt - start_dt).total_seconds() / 60.0, 2))
+        else:
+            w_mins = round(float(wall_clock_minutes), 2)
+
+        if active_minutes is None:
+            a_mins = w_mins
+        else:
+            a_mins = round(float(active_minutes), 2)
+
+        if idle_minutes is None:
+            i_mins = max(0.0, round(w_mins - a_mins, 2))
+        else:
+            i_mins = round(float(idle_minutes), 2)
+
+        conn.execute(
+            """
+            UPDATE game_sessions SET
+                ended_at = ?,
+                wall_clock_minutes = ?,
+                active_minutes = ?,
+                idle_minutes = ?,
+                achievements_earned = ?,
+                status = ?
+            WHERE id = ?
+            """,
+            (
+                end_iso,
+                w_mins,
+                a_mins,
+                i_mins,
+                int(achievements_earned or 0),
+                status,
+                session_id,
+            ),
+        )
+
+        # Upsert daily_playtime_ledger
+        _, _, resolve_tz = resolve_timezone_context(user_timezone, user_timezone_eras)
+        local_tz = resolve_tz(start_dt)
+        try:
+            local_dt = start_dt.astimezone(local_tz)
+        except Exception:
+            local_dt = start_dt
+        date_str = local_dt.strftime("%Y-%m-%d")
+        hour_int = local_dt.hour
+        platform_family = normalize_platform_family(session.get("platform") or "Xbox")
+
+        conn.execute(
+            """
+            INSERT INTO daily_playtime_ledger (
+                date, game_id, platform_family, minutes_played, sessions_count, achievements_unlocked, first_session_hour
+            ) VALUES (?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(date, game_id) DO UPDATE SET
+                minutes_played = ROUND(daily_playtime_ledger.minutes_played + excluded.minutes_played, 2),
+                sessions_count = daily_playtime_ledger.sessions_count + 1,
+                achievements_unlocked = daily_playtime_ledger.achievements_unlocked + excluded.achievements_unlocked,
+                first_session_hour = MIN(COALESCE(daily_playtime_ledger.first_session_hour, excluded.first_session_hour), excluded.first_session_hour)
+            """,
+            (
+                date_str,
+                game_id,
+                platform_family,
+                a_mins,
+                int(achievements_earned or 0),
+                hour_int,
+            ),
+        )
+
+        # Update last_played on games if later
+        g_row = conn.execute("SELECT last_played FROM games WHERE id = ?", (game_id,)).fetchone()
+        if g_row:
+            lp = g_row["last_played"]
+            if not lp or end_iso > lp:
+                conn.execute(
+                    "UPDATE games SET last_played = ?, updated_at = ? WHERE id = ?",
+                    (end_iso, end_iso, game_id),
+                )
+
+        updated_row = conn.execute("SELECT * FROM game_sessions WHERE id = ?", (session_id,)).fetchone()
+        return dict(updated_row) if updated_row else None
+
+
+def record_reconciled_session(
+    game_id: int,
+    delta_minutes: float,
+    last_time_played_iso: str,
+    detection_method: str = "daily_reconciliation",
+    achievements_earned: int = 0,
+    user_timezone: str = "auto",
+    user_timezone_eras: Optional[List[Dict[str, Any]]] = None,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    delta_mins = round(float(delta_minutes), 2)
+    if delta_mins <= 0:
+        return None
+
+    end_dt = parse_iso_datetime(last_time_played_iso) or datetime.now(timezone.utc)
+    start_dt = end_dt - timedelta(minutes=delta_mins)
+    start_iso = start_dt.isoformat()
+    end_iso = end_dt.isoformat()
+
+    with get_connection(db_path) as conn:
+        game = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+        if not game:
+            return None
+
+        c_id = game["canonical_id"]
+        plat = game["platform"]
+        src = game["source"]
+        ext_tid = str(game["external_id"]).split(":")[-1]
+
+        cur = conn.execute(
+            """
+            INSERT INTO game_sessions (
+                game_id, canonical_id, platform, source, external_title_id,
+                started_at, last_seen_at, ended_at, wall_clock_minutes,
+                active_minutes, idle_minutes, achievements_earned,
+                detection_method, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, ?, 'reconciled')
+            """,
+            (
+                game_id,
+                c_id,
+                plat,
+                src,
+                ext_tid,
+                start_iso,
+                end_iso,
+                end_iso,
+                delta_mins,
+                delta_mins,
+                achievements_earned,
+                detection_method,
+            ),
+        )
+        sess_id = cur.lastrowid
+
+        # Upsert daily_playtime_ledger
+        _, _, resolve_tz = resolve_timezone_context(user_timezone, user_timezone_eras)
+        local_tz = resolve_tz(start_dt)
+        try:
+            local_dt = start_dt.astimezone(local_tz)
+        except Exception:
+            local_dt = start_dt
+        date_str = local_dt.strftime("%Y-%m-%d")
+        hour_int = local_dt.hour
+        platform_family = normalize_platform_family(plat)
+
+        conn.execute(
+            """
+            INSERT INTO daily_playtime_ledger (
+                date, game_id, platform_family, minutes_played, sessions_count, achievements_unlocked, first_session_hour
+            ) VALUES (?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(date, game_id) DO UPDATE SET
+                minutes_played = ROUND(daily_playtime_ledger.minutes_played + excluded.minutes_played, 2),
+                sessions_count = daily_playtime_ledger.sessions_count + 1,
+                achievements_unlocked = daily_playtime_ledger.achievements_unlocked + excluded.achievements_unlocked,
+                first_session_hour = MIN(COALESCE(daily_playtime_ledger.first_session_hour, excluded.first_session_hour), excluded.first_session_hour)
+            """,
+            (
+                date_str,
+                game_id,
+                platform_family,
+                delta_mins,
+                achievements_earned,
+                hour_int,
+            ),
+        )
+
+        row = conn.execute("SELECT * FROM game_sessions WHERE id = ?", (sess_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def backfill_historical_sessions_from_achievements(
+    db_path: Optional[str] = None,
+    user_timezone: str = "auto",
+    user_timezone_eras: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    """
+    Historical Backfill Engine (Section 4).
+    Clusters historical game_achievements.unlock_time where consecutive gap <= 180 mins,
+    synthesizing game_sessions boundaries:
+      started_at = first_unlock - 30m
+      ended_at = last_unlock + 15m
+    and seeds daily_playtime_ledger.
+    Idempotent: skips games that already have 'achievement_backfill' sessions.
+    """
+    sessions_created = 0
+    games_backfilled = set()
+
+    with get_connection(db_path) as conn:
+        already_backfilled = {
+            r["game_id"]
+            for r in conn.execute(
+                "SELECT DISTINCT game_id FROM game_sessions WHERE detection_method = 'achievement_backfill'"
+            ).fetchall()
+        }
+
+        rows = conn.execute(
+            """
+            SELECT ga.game_id, ga.name, ga.unlock_time, g.canonical_id, g.platform, g.source, g.external_id
+            FROM game_achievements ga
+            JOIN games g ON ga.game_id = g.id
+            WHERE ga.unlocked = 1 AND ga.unlock_time IS NOT NULL AND ga.unlock_time != ''
+            ORDER BY ga.game_id, ga.unlock_time ASC
+            """
+        ).fetchall()
+
+        by_game: Dict[int, List[Dict[str, Any]]] = {}
+        for r in rows:
+            gid = r["game_id"]
+            if gid in already_backfilled:
+                continue
+            by_game.setdefault(gid, []).append(dict(r))
+
+        _, _, resolve_tz = resolve_timezone_context(user_timezone, user_timezone_eras)
+
+        for gid, ach_list in by_game.items():
+            if not ach_list:
+                continue
+
+            parsed_achs = []
+            for a in ach_list:
+                dt = parse_iso_datetime(a["unlock_time"])
+                if dt:
+                    parsed_achs.append({**a, "dt": dt})
+
+            if not parsed_achs:
+                continue
+
+            parsed_achs.sort(key=lambda x: x["dt"])
+
+            clusters: List[List[Dict[str, Any]]] = []
+            current_cluster: List[Dict[str, Any]] = [parsed_achs[0]]
+
+            for next_ach in parsed_achs[1:]:
+                prev_dt = current_cluster[-1]["dt"]
+                gap_minutes = (next_ach["dt"] - prev_dt).total_seconds() / 60.0
+                if gap_minutes <= 180.0:
+                    current_cluster.append(next_ach)
+                else:
+                    clusters.append(current_cluster)
+                    current_cluster = [next_ach]
+            if current_cluster:
+                clusters.append(current_cluster)
+
+            meta = parsed_achs[0]
+            c_id = meta.get("canonical_id")
+            plat = meta.get("platform") or "Xbox"
+            src = meta.get("source") or "Xbox"
+            ext_tid = str(meta.get("external_id") or "").split(":")[-1]
+            platform_family = normalize_platform_family(plat)
+
+            for cl in clusters:
+                first_dt = cl[0]["dt"]
+                last_dt = cl[-1]["dt"]
+                started_dt = first_dt - timedelta(minutes=30)
+                ended_dt = last_dt + timedelta(minutes=15)
+                duration_minutes = max(15.0, round((ended_dt - started_dt).total_seconds() / 60.0, 2))
+
+                started_iso = started_dt.isoformat()
+                ended_iso = ended_dt.isoformat()
+                ach_count = len(cl)
+
+                conn.execute(
+                    """
+                    INSERT INTO game_sessions (
+                        game_id, canonical_id, platform, source, external_title_id,
+                        started_at, last_seen_at, ended_at, wall_clock_minutes,
+                        active_minutes, idle_minutes, achievements_earned,
+                        detection_method, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.0, ?, 'achievement_backfill', 'reconciled')
+                    """,
+                    (
+                        gid,
+                        c_id,
+                        plat,
+                        src,
+                        ext_tid,
+                        started_iso,
+                        ended_iso,
+                        ended_iso,
+                        duration_minutes,
+                        duration_minutes,
+                        ach_count,
+                    ),
+                )
+                sessions_created += 1
+                games_backfilled.add(gid)
+
+                local_tz = resolve_tz(started_dt)
+                try:
+                    local_dt = started_dt.astimezone(local_tz)
+                except Exception:
+                    local_dt = started_dt
+                date_str = local_dt.strftime("%Y-%m-%d")
+                hour_int = local_dt.hour
+
+                conn.execute(
+                    """
+                    INSERT INTO daily_playtime_ledger (
+                        date, game_id, platform_family, minutes_played, sessions_count, achievements_unlocked, first_session_hour
+                    ) VALUES (?, ?, ?, ?, 1, ?, ?)
+                    ON CONFLICT(date, game_id) DO UPDATE SET
+                        minutes_played = ROUND(daily_playtime_ledger.minutes_played + excluded.minutes_played, 2),
+                        sessions_count = daily_playtime_ledger.sessions_count + 1,
+                        achievements_unlocked = daily_playtime_ledger.achievements_unlocked + excluded.achievements_unlocked,
+                        first_session_hour = MIN(COALESCE(daily_playtime_ledger.first_session_hour, excluded.first_session_hour), excluded.first_session_hour)
+                    """,
+                    (
+                        date_str,
+                        gid,
+                        platform_family,
+                        duration_minutes,
+                        ach_count,
+                        hour_int,
+                    ),
+                )
+
+    return {
+        "sessions_created": sessions_created,
+        "games_backfilled": len(games_backfilled),
+    }
+
+
+def get_active_sessions(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT s.*, g.title, g.cover_url, g.completion_status
+            FROM game_sessions s
+            JOIN games g ON s.game_id = g.id
+            WHERE s.status = 'active'
+            ORDER BY s.started_at DESC
+            """
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_sessions_analytics(
+    days: int = 365,
+    game_id: Optional[int] = None,
+    title: Optional[str] = None,
+    platform: Optional[str] = None,
+    user_timezone: str = "auto",
+    user_timezone_eras: Optional[List[Dict[str, Any]]] = None,
+    limit: int = 30,
+    offset: int = 0,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Computes Section 5 Nerd-Stats Metrics, Visual Components 1-3, and session feeds:
+    5.1 2x2 KPI Summary Cards (Streaks, Median Sweet Spot, 30-Day Focus Score, AFK/Menu Tax)
+    5.2 365-Day Gaming Contribution Heatmap & 24h Circadian Clock
+    5.3 Snack vs. Binge Commitment Histogram & Longest Marathon
+    5.4 30-Day Rotation Timeline (Gantt Strip)
+    """
+    if title and not game_id:
+        with get_connection(db_path) as conn:
+            row = conn.execute("SELECT id FROM games WHERE LOWER(title) = LOWER(?) LIMIT 1", (title.strip(),)).fetchone()
+            if row:
+                game_id = row["id"]
+    base_tz, valid_eras, resolve_tz = resolve_timezone_context(user_timezone, user_timezone_eras)
+    now_utc = datetime.now(timezone.utc)
+    local_now = now_utc.astimezone(resolve_tz(now_utc))
+    today_date = local_now.date()
+    yesterday_date = today_date - timedelta(days=1)
+
+    where_clauses = ["1=1"]
+    params: List[Any] = []
+    if game_id:
+        where_clauses.append("s.game_id = ?")
+        params.append(game_id)
+    if platform:
+        where_clauses.append("LOWER(s.platform) LIKE ?")
+        params.append(f"%{platform.lower().strip()}%")
+
+    where_sql = " AND ".join(where_clauses)
+
+    with get_connection(db_path) as conn:
+        # 1. Streaks from daily_playtime_ledger (dates with >= 15 min logged)
+        ledger_filter = []
+        l_params: List[Any] = []
+        if game_id:
+            ledger_filter.append("game_id = ?")
+            l_params.append(game_id)
+        if platform:
+            norm_plat = normalize_platform_family(platform)
+            ledger_filter.append("platform_family = ?")
+            l_params.append(norm_plat)
+
+        l_where = f"WHERE {' AND '.join(ledger_filter)}" if ledger_filter else ""
+        date_sums = conn.execute(
+            f"""
+            SELECT date, SUM(minutes_played) as total_mins, SUM(sessions_count) as total_sess, SUM(achievements_unlocked) as total_achs
+            FROM daily_playtime_ledger
+            {l_where}
+            GROUP BY date
+            HAVING SUM(minutes_played) >= 15.0
+            ORDER BY date ASC
+            """,
+            l_params,
+        ).fetchall()
+
+        active_dates = []
+        for r in date_sums:
+            try:
+                active_dates.append(datetime.strptime(r["date"], "%Y-%m-%d").date())
+            except Exception:
+                pass
+
+        active_dates = sorted(set(active_dates))
+        current_streak = 0
+        longest_streak = 0
+
+        if active_dates:
+            run = 1
+            longest_streak = 1
+            for i in range(1, len(active_dates)):
+                if active_dates[i] - active_dates[i - 1] == timedelta(days=1):
+                    run += 1
+                else:
+                    run = 1
+                if run > longest_streak:
+                    longest_streak = run
+
+            # Current streak
+            if active_dates[-1] in (today_date, yesterday_date):
+                c_run = 1
+                for i in range(len(active_dates) - 1, 0, -1):
+                    if active_dates[i] - active_dates[i - 1] == timedelta(days=1):
+                        c_run += 1
+                    else:
+                        break
+                current_streak = c_run
+
+        # 2. Sweet spot (median session duration of active_minutes)
+        all_completed_sessions = conn.execute(
+            f"""
+            SELECT s.active_minutes, s.wall_clock_minutes, s.idle_minutes, s.started_at, s.ended_at
+            FROM game_sessions s
+            WHERE {where_sql} AND s.status IN ('completed', 'reconciled') AND s.active_minutes > 0
+            """,
+            params,
+        ).fetchall()
+
+        active_mins_list = sorted([float(r["active_minutes"]) for r in all_completed_sessions])
+        if active_mins_list:
+            mid = len(active_mins_list) // 2
+            median_session_minutes = (
+                active_mins_list[mid]
+                if len(active_mins_list) % 2 != 0
+                else round((active_mins_list[mid - 1] + active_mins_list[mid]) / 2.0, 1)
+            )
+            avg_session_minutes = round(sum(active_mins_list) / len(active_mins_list), 1)
+        else:
+            median_session_minutes = 0.0
+            avg_session_minutes = 0.0
+
+        # Sessions per week over the last 90 days
+        cutoff_90d = (local_now - timedelta(days=90)).isoformat()
+        count_90d = conn.execute(
+            f"SELECT COUNT(*) as c FROM game_sessions s WHERE {where_sql} AND s.status IN ('completed', 'reconciled') AND s.started_at >= ?",
+            params + [cutoff_90d],
+        ).fetchone()["c"]
+        sessions_per_week = round(count_90d / (90.0 / 7.0), 1)
+
+        # 3. 30-Day Focus Score (Rotation Index)
+        date_30d_str = (today_date - timedelta(days=30)).strftime("%Y-%m-%d")
+        recent_30d_rows = conn.execute(
+            """
+            SELECT l.game_id, g.title, SUM(l.minutes_played) as total_mins
+            FROM daily_playtime_ledger l
+            JOIN games g ON l.game_id = g.id
+            WHERE l.date >= ?
+            GROUP BY l.game_id
+            ORDER BY total_mins DESC
+            """,
+            (date_30d_str,),
+        ).fetchall()
+
+        total_30d_mins = sum(float(r["total_mins"]) for r in recent_30d_rows)
+        if recent_30d_rows and total_30d_mins > 0:
+            top_game_title = recent_30d_rows[0]["title"]
+            top_game_mins = float(recent_30d_rows[0]["total_mins"])
+            focus_score_pct = round((top_game_mins / total_30d_mins) * 100, 1)
+            active_count = len(recent_30d_rows)
+            score_int = int(round(focus_score_pct))
+            if focus_score_pct >= 65:
+                archetype_label = f"{score_int}% Monogamous — Deep in {top_game_title}"
+            elif focus_score_pct >= 35:
+                archetype_label = f"{score_int}% Balanced Juggler — Juggling {active_count} titles"
+            else:
+                archetype_label = f"{score_int}% Channel Surfer — Juggling {active_count} titles"
+        else:
+            focus_score_pct = 0.0
+            top_game_title = "None"
+            active_count = 0
+            archetype_label = "No Recent Activity"
+
+        # 4. AFK / Menu Tax Ratio
+        tot_wall = sum(float(r["wall_clock_minutes"]) for r in all_completed_sessions)
+        tot_active = sum(float(r["active_minutes"]) for r in all_completed_sessions)
+        tot_idle = sum(float(r["idle_minutes"]) for r in all_completed_sessions)
+        idle_ratio_pct = round((tot_idle / max(tot_wall, 0.1)) * 100, 1) if tot_wall > 0 else 0.0
+
+        # 5. 365-Day Gaming Contribution Heatmap
+        # Query ledger rows for the last 365 days joined with game details
+        date_365_str = (today_date - timedelta(days=364)).strftime("%Y-%m-%d")
+        ledger_details = conn.execute(
+            """
+            SELECT l.date, l.game_id, g.title, l.platform_family, l.minutes_played, l.achievements_unlocked
+            FROM daily_playtime_ledger l
+            JOIN games g ON l.game_id = g.id
+            WHERE l.date >= ?
+            ORDER BY l.date ASC, l.minutes_played DESC
+            """,
+            (date_365_str,),
+        ).fetchall()
+
+        ledger_by_date: Dict[str, List[Dict[str, Any]]] = {}
+        for r in ledger_details:
+            d_key = r["date"]
+            ledger_by_date.setdefault(d_key, []).append(dict(r))
+
+        heatmap_365 = []
+        for i in range(364, -1, -1):
+            cur_d = today_date - timedelta(days=i)
+            cur_str = cur_d.strftime("%Y-%m-%d")
+            day_items = ledger_by_date.get(cur_str, [])
+            day_mins = round(sum(float(x["minutes_played"]) for x in day_items), 1)
+            day_achs = sum(int(x["achievements_unlocked"]) for x in day_items)
+            day_sess = len(day_items)
+
+            if day_mins == 0:
+                intensity = 0
+            elif day_mins < 60:
+                intensity = 1
+            elif day_mins <= 180:
+                intensity = 2
+            elif day_mins <= 300:
+                intensity = 3
+            else:
+                intensity = 4
+
+            heatmap_365.append({
+                "date": cur_str,
+                "minutes_played": day_mins,
+                "active_minutes": day_mins,
+                "hours_played": round(day_mins / 60.0, 1),
+                "sessions_count": day_sess,
+                "session_count": day_sess,
+                "achievements_unlocked": day_achs,
+                "intensity": intensity,
+                "games_played": [x["title"] for x in day_items],
+                "games": [
+                    {
+                        "game_id": x["game_id"],
+                        "title": x["title"],
+                        "platform_family": x["platform_family"],
+                        "minutes_played": round(float(x["minutes_played"]), 1),
+                        "achievements_unlocked": int(x["achievements_unlocked"]),
+                    }
+                    for x in day_items
+                ],
+            })
+
+        # 6. Circadian 24-Hour & 7-Day Clock
+        circadian_hours = [0 for _ in range(24)]
+        circadian_days = [0 for _ in range(7)]  # 0=Mon .. 6=Sun
+        circadian_events_tot = 0
+
+        # Aggregate from daily_playtime_ledger first_session_hour & minutes_played
+        hour_rows = conn.execute(
+            """
+            SELECT date, first_session_hour, minutes_played FROM daily_playtime_ledger WHERE first_session_hour IS NOT NULL
+            """
+        ).fetchall()
+        for r in hour_rows:
+            h = r["first_session_hour"]
+            if 0 <= h < 24:
+                circadian_hours[h] += int(r["minutes_played"] or 1)
+                circadian_events_tot += 1
+            try:
+                dt_obj = datetime.strptime(r["date"], "%Y-%m-%d")
+                w = dt_obj.weekday()
+                circadian_days[w] += int(r["minutes_played"] or 1)
+            except Exception:
+                pass
+
+        peak_hour_idx = max(range(24), key=lambda x: circadian_hours[x]) if any(circadian_hours) else 20
+        ampm = "AM" if peak_hour_idx < 12 else "PM"
+        h12 = 12 if peak_hour_idx % 12 == 0 else peak_hour_idx % 12
+        peak_hour_label = f"{h12} {ampm}"
+
+        fri_sat_sun = circadian_days[4] + circadian_days[5] + circadian_days[6]
+        tot_wk = max(sum(circadian_days), 1)
+        weekend_pct = int(round((fri_sat_sun / tot_wk) * 100))
+        if weekend_pct >= 55:
+            circadian_archetype = f"Weekend Night Owl — {weekend_pct}% of playtime happens Fri–Sun"
+        elif peak_hour_idx >= 20 or peak_hour_idx <= 2:
+            circadian_archetype = f"Midnight Grinder — Peak hours after 8:00 PM ({peak_hour_label})"
+        elif 6 <= peak_hour_idx < 12:
+            circadian_archetype = f"Early Morning Explorer — Peak activity at {peak_hour_label}"
+        else:
+            circadian_archetype = f"Prime-Time Evening Warrior — Peak activity at {peak_hour_label}"
+
+        # 7. Snack vs. Binge Commitment Histogram
+        b_quick = [s for s in active_mins_list if s < 30.0]
+        b_standard = [s for s in active_mins_list if 30.0 <= s < 90.0]
+        b_deep = [s for s in active_mins_list if 90.0 <= s < 180.0]
+        b_binge = [s for s in active_mins_list if s >= 180.0]
+        tot_s = max(len(active_mins_list), 1)
+
+        snack_vs_binge = {
+            "quick_checkins": {
+                "label": "Quick Check-ins (< 30m)",
+                "count": len(b_quick),
+                "pct": round((len(b_quick) / tot_s) * 100, 1),
+                "hours": round(sum(b_quick) / 60.0, 1),
+            },
+            "standard_runs": {
+                "label": "Standard Runs (30–90m)",
+                "count": len(b_standard),
+                "pct": round((len(b_standard) / tot_s) * 100, 1),
+                "hours": round(sum(b_standard) / 60.0, 1),
+            },
+            "deep_sessions": {
+                "label": "Deep Sessions (1.5–3h)",
+                "count": len(b_deep),
+                "pct": round((len(b_deep) / tot_s) * 100, 1),
+                "hours": round(sum(b_deep) / 60.0, 1),
+            },
+            "binge_marathons": {
+                "label": "Binge Marathons (3h+)",
+                "count": len(b_binge),
+                "pct": round((len(b_binge) / tot_s) * 100, 1),
+                "hours": round(sum(b_binge) / 60.0, 1),
+            },
+            "longest_marathon": None,
+        }
+
+        # Find longest marathon session
+        longest_row = conn.execute(
+            f"""
+            SELECT s.*, g.title, g.cover_url
+            FROM game_sessions s
+            JOIN games g ON s.game_id = g.id
+            WHERE {where_sql} AND s.status IN ('completed', 'reconciled')
+            ORDER BY s.active_minutes DESC
+            LIMIT 1
+            """,
+            params,
+        ).fetchone()
+        if longest_row and float(longest_row["active_minutes"] or 0) > 0:
+            m_dt = parse_iso_datetime(longest_row["started_at"])
+            date_str = m_dt.strftime("%b %-d, %Y") if m_dt else str(longest_row["started_at"])[:10]
+            hrs_val = round(float(longest_row["active_minutes"]) / 60.0, 1)
+            snack_vs_binge["longest_marathon"] = {
+                "session_id": longest_row["id"],
+                "game_id": longest_row["game_id"],
+                "title": longest_row["title"],
+                "cover_url": longest_row["cover_url"],
+                "platform": longest_row["platform"],
+                "active_minutes": longest_row["active_minutes"],
+                "hours": hrs_val,
+                "date_label": date_str,
+                "summary": f"Longest Marathon: {hrs_val} hrs on {longest_row['title']} — {date_str}",
+            }
+
+        # 8. 30-Day Rotation Timeline (Gantt Strip)
+        gantt_dates = [(today_date - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(29, -1, -1)]
+        gantt_rows = []
+        if recent_30d_rows:
+            for g_item in recent_30d_rows:
+                g_id = g_item["game_id"]
+                g_obj = conn.execute("SELECT * FROM games WHERE id = ?", (g_id,)).fetchone()
+                if not g_obj:
+                    continue
+
+                # Query daily minutes for this game in the last 30 days
+                day_records = conn.execute(
+                    "SELECT date, minutes_played FROM daily_playtime_ledger WHERE game_id = ? AND date >= ?",
+                    (g_id, date_30d_str),
+                ).fetchall()
+                active_days_map = {r["date"]: round(float(r["minutes_played"]), 1) for r in day_records}
+
+                st = (g_obj["completion_status"] or "Playing").lower()
+                badge_type = "completed" if "completed" in st else ("beaten" if "beaten" in st else ("dropped" if "dropped" in st else "playing"))
+
+                gantt_rows.append({
+                    "game_id": g_id,
+                    "title": g_obj["title"],
+                    "platform": g_obj["platform"],
+                    "cover_url": g_obj["cover_url"],
+                    "completion_status": g_obj["completion_status"] or "Playing",
+                    "status_badge": badge_type,
+                    "total_30d_minutes": round(float(g_item["total_mins"]), 1),
+                    "total_30d_hours": round(float(g_item["total_mins"]) / 60.0, 1),
+                    "active_dates": active_days_map,
+                })
+
+        # 9. Recent sessions (paginated)
+        recent_sessions_rows = conn.execute(
+            f"""
+            SELECT s.*, g.title, g.cover_url, g.completion_status as game_status
+            FROM game_sessions s
+            JOIN games g ON s.game_id = g.id
+            WHERE {where_sql}
+            ORDER BY s.started_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            params + [limit, offset],
+        ).fetchall()
+
+        # 10. Active live sessions
+        active_rows = conn.execute(
+            """
+            SELECT s.*, g.title, g.cover_url, g.completion_status as game_status
+            FROM game_sessions s
+            JOIN games g ON s.game_id = g.id
+            WHERE s.status = 'active'
+            ORDER BY s.started_at DESC
+            """
+        ).fetchall()
+
+        total_sessions_count = conn.execute(
+            f"SELECT COUNT(*) as c FROM game_sessions s WHERE {where_sql}", params
+        ).fetchone()["c"]
+
+    kpis_dict = {
+        "streaks": {
+            "current_streak_days": current_streak,
+            "longest_streak_days": longest_streak,
+            "active_days_total": len(active_dates),
+            "summary": f"{current_streak} Days Active | Record: {longest_streak} Days",
+        },
+        "play_streak": {
+            "current": current_streak,
+            "longest": longest_streak,
+            "active_today": (today_date in active_dates),
+        },
+        "sweet_spot": {
+            "median_session_minutes": median_session_minutes,
+            "avg_session_minutes": avg_session_minutes,
+            "sessions_per_week": sessions_per_week,
+            "formatted": f"{int(round(median_session_minutes))}m",
+            "summary": f"{int(round(median_session_minutes))}m median session | {sessions_per_week} sessions/week",
+        },
+        "focus_30d": {
+            "focus_score_pct": focus_score_pct,
+            "top_game_title": top_game_title,
+            "active_titles_count": active_count,
+            "archetype_label": archetype_label,
+        },
+        "focus_score_30d": {
+            "ratio": round(focus_score_pct / 100.0, 3),
+            "percentage": int(round(focus_score_pct)),
+            "top_game": top_game_title,
+            "archetype": archetype_label,
+        },
+        "afk_menu_tax": {
+            "idle_ratio_pct": idle_ratio_pct,
+            "total_wall_clock_minutes": round(tot_wall, 1),
+            "total_active_minutes": round(tot_active, 1),
+            "total_idle_minutes": round(tot_idle, 1),
+            "summary": f"{idle_ratio_pct}% Idle / Pause Time",
+        },
+        "afk_menu_tax_ratio": {
+            "ratio": round(idle_ratio_pct / 100.0, 3),
+            "percentage": idle_ratio_pct,
+            "idle_minutes": round(tot_idle, 1),
+            "wall_clock_minutes": round(tot_wall, 1),
+        },
+    }
+
+    gantt_game_rows = [
+        {
+            "game_id": r["game_id"],
+            "title": r["title"],
+            "platform": r["platform"],
+            "status": r["completion_status"],
+            "total_30d_minutes": r["total_30d_minutes"],
+            "days": [
+                {
+                    "date": d,
+                    "active": (d in r["active_dates"]),
+                    "minutes": r["active_dates"].get(d, 0.0),
+                }
+                for d in gantt_dates
+            ],
+        }
+        for r in gantt_rows
+    ]
+
+    circadian_dict = {
+        "hours": circadian_hours,
+        "days": circadian_days,
+        "weekdays": circadian_days,
+        "peak_hour": peak_hour_label,
+        "archetype": circadian_archetype,
+    }
+
+    recent_sessions_list = [dict(r) for r in recent_sessions_rows]
+
+    return {
+        "kpis": kpis_dict,
+        "heatmap_365": heatmap_365,
+        "circadian_clock": circadian_dict,
+        "circadian": circadian_dict,
+        "snack_vs_binge": snack_vs_binge,
+        "session_histogram": snack_vs_binge,
+        "rotation_gantt_30d": {
+            "days_axis": gantt_dates,
+            "rows": gantt_rows,
+        },
+        "rotation_gantt": gantt_game_rows,
+        "sessions": recent_sessions_list,
+        "recent_sessions": recent_sessions_list,
+        "total_sessions": total_sessions_count,
+        "pagination": {
+            "total": total_sessions_count,
+            "limit": limit,
+            "offset": offset,
+        },
+        "active_sessions": [dict(r) for r in active_rows],
+        "quota_budget": {
+            "hourly_calls_estimate": 4,
+            "hourly_limit": 150,
+            "utilization_pct": 2.7,
+        },
+    }
 

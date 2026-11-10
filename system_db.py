@@ -5,6 +5,7 @@ and the shared cross-user game catalog metadata cache.
 """
 
 import hashlib
+import json
 import logging
 import os
 import re
@@ -123,10 +124,12 @@ def migrate_secrets_at_rest(db_path: Optional[str] = None) -> int:
     changed = 0
     with get_system_connection(target) as conn:
         rows = conn.execute(
-            "SELECT user_id, xbl_api_key_encrypted, psn_npsso_encrypted FROM user_connections"
+            "SELECT * FROM user_connections"
         ).fetchall()
         for r in rows:
-            for col in ("xbl_api_key_encrypted", "psn_npsso_encrypted"):
+            for col in ("xbl_api_key_encrypted", "xbl_watcher_api_key_encrypted", "psn_npsso_encrypted"):
+                if col not in r.keys():
+                    continue
                 new_val = _reencrypt_to_primary(str(r[col] or ""), primary, cipher)
                 if new_val is not None:
                     conn.execute(
@@ -235,6 +238,10 @@ def init_system_db(db_path: Optional[str] = None) -> None:
             conn.execute("ALTER TABLE users ADD COLUMN updated_at TEXT")
         if "last_login_at" not in user_cols:
             conn.execute("ALTER TABLE users ADD COLUMN last_login_at TEXT")
+        if "timezone" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN timezone TEXT DEFAULT 'auto'")
+        if "timezone_eras" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN timezone_eras TEXT DEFAULT '[]'")
 
         # Additive migration for web_sessions table
         sess_cols = {r["name"] for r in conn.execute("PRAGMA table_info(web_sessions)")}
@@ -249,6 +256,8 @@ def init_system_db(db_path: Optional[str] = None) -> None:
             conn.execute("ALTER TABLE user_connections ADD COLUMN xbox_gamertag TEXT")
         if "xbox_xuid" not in conn_cols:
             conn.execute("ALTER TABLE user_connections ADD COLUMN xbox_xuid TEXT")
+        if "xbl_watcher_api_key_encrypted" not in conn_cols:
+            conn.execute("ALTER TABLE user_connections ADD COLUMN xbl_watcher_api_key_encrypted TEXT")
 
         # Migrate legacy plaintext platform credentials to Fernet-encrypted format
         try:
@@ -357,6 +366,38 @@ def get_user_by_username(username: str, db_path: Optional[str] = None) -> Option
             "SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (username.strip(),)
         ).fetchone()
         return dict(row) if row else None
+
+
+def get_user_timezone_settings(user_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
+    user = get_user(user_id, db_path=db_path)
+    if not user:
+        return {"timezone": "auto", "timezone_eras": []}
+    tz = user.get("timezone") or "auto"
+    eras_raw = user.get("timezone_eras") or "[]"
+    try:
+        eras = json.loads(eras_raw) if isinstance(eras_raw, str) else (eras_raw or [])
+    except Exception:
+        eras = []
+    return {"timezone": tz, "timezone_eras": eras}
+
+
+def update_user_timezone_settings(
+    user_id: str,
+    tz_name: str,
+    timezone_eras: List[Dict[str, Any]],
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    target_path = db_path or DEFAULT_SYSTEM_DB_PATH
+    init_system_db(target_path)
+    tz_val = (tz_name or "auto").strip()
+    eras_json = json.dumps(timezone_eras or [])
+    now = datetime.now(timezone.utc).isoformat()
+    with get_system_connection(target_path) as conn:
+        conn.execute(
+            "UPDATE users SET timezone = ?, timezone_eras = ?, updated_at = ? WHERE id = ?",
+            (tz_val, eras_json, now, user_id),
+        )
+    return {"timezone": tz_val, "timezone_eras": timezone_eras or []}
 
 
 def validate_username(username: str) -> None:
@@ -865,7 +906,7 @@ def upsert_catalog_cache_entry(
 
 def get_user_connections(user_id: str, db_path: Optional[str] = None) -> Dict[str, Any]:
     if not user_id:
-        return {"steam_id": "", "xbl_api_key": "", "xbox_gamertag": "", "xbox_xuid": "", "psn_npsso": "", "onboarding_completed": False}
+        return {"steam_id": "", "xbl_api_key": "", "xbl_watcher_api_key": "", "xbox_gamertag": "", "xbox_xuid": "", "psn_npsso": "", "onboarding_completed": False}
     target_path = db_path or DEFAULT_SYSTEM_DB_PATH
     init_system_db(target_path)
     with get_system_connection(target_path) as conn:
@@ -874,11 +915,12 @@ def get_user_connections(user_id: str, db_path: Optional[str] = None) -> Dict[st
             (user_id,),
         ).fetchone()
         if not row:
-            return {"steam_id": "", "xbl_api_key": "", "xbox_gamertag": "", "xbox_xuid": "", "psn_npsso": "", "onboarding_completed": False}
+            return {"steam_id": "", "xbl_api_key": "", "xbl_watcher_api_key": "", "xbox_gamertag": "", "xbox_xuid": "", "psn_npsso": "", "onboarding_completed": False}
         keys = row.keys()
         return {
             "steam_id": str(row["steam_id"] or ""),
             "xbl_api_key": decrypt_credential(str(row["xbl_api_key_encrypted"] or "")),
+            "xbl_watcher_api_key": decrypt_credential(str(row["xbl_watcher_api_key_encrypted"] or "")) if "xbl_watcher_api_key_encrypted" in keys else "",
             "xbox_gamertag": str(row["xbox_gamertag"] or "") if "xbox_gamertag" in keys else "",
             "xbox_xuid": str(row["xbox_xuid"] or "") if "xbox_xuid" in keys else "",
             "psn_npsso": decrypt_credential(str(row["psn_npsso_encrypted"] or "")),
@@ -890,6 +932,7 @@ def set_user_connections(
     user_id: str,
     steam_id: Optional[str] = None,
     xbl_api_key: Optional[str] = None,
+    xbl_watcher_api_key: Optional[str] = None,
     xbox_gamertag: Optional[str] = None,
     xbox_xuid: Optional[str] = None,
     psn_npsso: Optional[str] = None,
@@ -911,35 +954,40 @@ def set_user_connections(
 
         e_keys = existing.keys() if existing else []
         existing_xbl = decrypt_credential(existing["xbl_api_key_encrypted"]) if existing else ""
+        existing_watcher = decrypt_credential(existing["xbl_watcher_api_key_encrypted"]) if existing and "xbl_watcher_api_key_encrypted" in e_keys else ""
         existing_psn = decrypt_credential(existing["psn_npsso_encrypted"]) if existing else ""
         final_steam = steam_id.strip() if steam_id is not None else (existing["steam_id"] if existing else "")
         final_xbl = xbl_api_key.strip() if xbl_api_key is not None else existing_xbl
+        final_watcher = xbl_watcher_api_key.strip() if xbl_watcher_api_key is not None else existing_watcher
         final_gt = xbox_gamertag.strip() if xbox_gamertag is not None else (existing["xbox_gamertag"] if existing and "xbox_gamertag" in e_keys else "")
         final_xuid = xbox_xuid.strip() if xbox_xuid is not None else (existing["xbox_xuid"] if existing and "xbox_xuid" in e_keys else "")
         final_psn = psn_npsso.strip() if psn_npsso is not None else existing_psn
         final_onboarding = int(onboarding_completed) if onboarding_completed is not None else (existing["onboarding_completed"] if existing else 0)
 
         enc_xbl = encrypt_credential(final_xbl) if final_xbl else ""
+        enc_watcher = encrypt_credential(final_watcher) if final_watcher else ""
         enc_psn = encrypt_credential(final_psn) if final_psn else ""
 
         conn.execute(
             """
-            INSERT INTO user_connections (user_id, steam_id, xbl_api_key_encrypted, xbox_gamertag, xbox_xuid, psn_npsso_encrypted, updated_at, onboarding_completed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO user_connections (user_id, steam_id, xbl_api_key_encrypted, xbl_watcher_api_key_encrypted, xbox_gamertag, xbox_xuid, psn_npsso_encrypted, updated_at, onboarding_completed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 steam_id = excluded.steam_id,
                 xbl_api_key_encrypted = excluded.xbl_api_key_encrypted,
+                xbl_watcher_api_key_encrypted = excluded.xbl_watcher_api_key_encrypted,
                 xbox_gamertag = excluded.xbox_gamertag,
                 xbox_xuid = excluded.xbox_xuid,
                 psn_npsso_encrypted = excluded.psn_npsso_encrypted,
                 updated_at = excluded.updated_at,
                 onboarding_completed = excluded.onboarding_completed
             """,
-            (user_id, final_steam, enc_xbl, final_gt, final_xuid, enc_psn, now, final_onboarding),
+            (user_id, final_steam, enc_xbl, enc_watcher, final_gt, final_xuid, enc_psn, now, final_onboarding),
         )
     return {
         "steam_id": final_steam,
         "xbl_api_key": final_xbl,
+        "xbl_watcher_api_key": final_watcher,
         "xbox_gamertag": final_gt,
         "xbox_xuid": final_xuid,
         "psn_npsso": final_psn,
