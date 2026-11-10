@@ -487,6 +487,7 @@ async def sync_steam(
                     platform="PC (Steam)",
                     source="Steam",
                     playtime_hours=playtime_hours,
+                    playtime_minutes=playtime_mins,
                     last_played=last_played,
                     cover_url=cover_url,
                     db_path=db_path,
@@ -748,6 +749,7 @@ async def sync_xbox(
                     platform=platform,
                     source="Xbox",
                     playtime_hours=playtime_hours,
+                    playtime_minutes=int(playtime_mins),
                     last_played=last_played,
                     achievements_unlocked=unlocked,
                     achievements_total=total_ach,
@@ -827,7 +829,8 @@ def _sync_psn_blocking(npsso: str, db_path: Optional[str] = None) -> int:
             continue
 
         play_dur = getattr(item, "play_duration", None)
-        playtime_hours = round(play_dur.total_seconds() / 3600.0, 2) if play_dur else 0.0
+        playtime_mins = int(round(play_dur.total_seconds() / 60.0)) if play_dur else 0
+        playtime_hours = round(playtime_mins / 60.0, 2)
 
         last_dt = getattr(item, "last_played_date_time", None)
         last_played = last_dt.isoformat() if last_dt else None
@@ -844,6 +847,7 @@ def _sync_psn_blocking(npsso: str, db_path: Optional[str] = None) -> int:
             platform=platform,
             source="PSN",
             playtime_hours=playtime_hours,
+            playtime_minutes=playtime_mins,
             last_played=last_played,
             achievements_unlocked=tr_info["unlocked"],
             achievements_total=tr_info["total"],
