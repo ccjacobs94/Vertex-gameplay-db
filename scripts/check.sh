@@ -95,6 +95,7 @@ elif docker image inspect "$IMAGE" >/dev/null 2>&1; then
       -v "$PWD":/src:ro -w /src \
       -e PYTHONPATH=/src -e PYTHONDONTWRITEBYTECODE=1 \
       -e GAMEHUB_DB_PATH=/tmp/gate-games.db \
+      -e SYSTEM_DB_PATH=/tmp/gate-system.db \
       --entrypoint python "$IMAGE" -m unittest discover -s tests 2>&1 | sed 's/^/         /'; then
     pass "unit + invariant tests (container)"
   else
@@ -102,7 +103,7 @@ elif docker image inspect "$IMAGE" >/dev/null 2>&1; then
   fi
 else
   warn "image '$IMAGE' missing; falling back to host python (some tests may skip)"
-  if PYTHONPATH=. GAMEHUB_DB_PATH=/tmp/gate-games.db PYTHONDONTWRITEBYTECODE=1 \
+  if PYTHONPATH=. GAMEHUB_DB_PATH=/tmp/gate-games.db SYSTEM_DB_PATH=/tmp/gate-system.db PYTHONDONTWRITEBYTECODE=1 \
       python3 -m unittest discover -s tests 2>&1 | sed 's/^/         /'; then
     pass "unit tests (host)"
   else
