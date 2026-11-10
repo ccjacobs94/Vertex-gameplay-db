@@ -593,7 +593,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Unified Game Library Hub",
     description="Cross-platform game library & metrics tracker across Xbox, PC, PS4, and Nintendo Switch",
-    version="1.21.0",
+    version="1.21.1",
     lifespan=lifespan,
 )
 
