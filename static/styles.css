@@ -7906,15 +7906,30 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   left: 0;
   z-index: 100;
   width: max-content;
-  min-width: 270px;
-  max-width: min(380px, 88vw);
+  min-width: 250px;
+  max-width: min(340px, calc(100vw - 24px));
   max-height: 280px;
   overflow-y: auto;
+  box-sizing: border-box;
   background-color: var(--surface-card, #1A1D27);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: var(--radius-md, 8px);
   box-shadow: 0 12px 28px -4px rgba(0, 0, 0, 0.75), 0 6px 12px -4px rgba(0, 0, 0, 0.5);
   padding: 0.45rem 0.5rem;
+}
+
+.session-ach-dropdown-menu.align-right {
+  left: auto;
+  right: 0;
+}
+
+@media (max-width: 640px) {
+  .session-ach-dropdown-menu {
+    left: auto;
+    right: 0;
+    min-width: 240px;
+    max-width: min(300px, calc(100vw - 24px));
+  }
 }
 
 .session-ach-dropdown-header {
@@ -7996,6 +8011,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   line-height: 1.35;
   margin: 0;
   overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .session-badge-locked {

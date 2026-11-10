@@ -475,6 +475,28 @@ class TestUIBrandAssets(unittest.TestCase):
         # But mnav-settings must still exist in index.html (hidden anchor) for backward compatibility
         self.assertIn('id="mnav-settings"', index_html)
 
+    def test_session_achievements_mobile_dropdown_styling_and_positioning(self):
+        """Ensure session achievement dropdowns handle mobile viewport constraints without being cut off."""
+        styles_path = os.path.join(self.static_dir, "styles.css")
+        app_js_path = os.path.join(self.static_dir, "app.js")
+
+        with open(styles_path, "r", encoding="utf-8") as f:
+            styles_css = f.read()
+        with open(app_js_path, "r", encoding="utf-8") as f:
+            app_js = f.read()
+
+        # Check mobile CSS rule aligns dropdown menu to the right to avoid viewport clipping
+        self.assertIn(".session-ach-dropdown-menu", styles_css)
+        self.assertIn("box-sizing: border-box;", styles_css)
+        self.assertIn("@media (max-width: 640px)", styles_css)
+        self.assertIn("right: 0;", styles_css)
+        self.assertIn("word-break: break-word;", styles_css)
+
+        # Check JavaScript viewport boundary protection helper exists
+        self.assertIn("function positionSessionDropdown", app_js)
+        self.assertIn("positionSessionDropdown(e.target)", app_js)
+        self.assertIn("targetScreenLeft", app_js)
+
 
 if __name__ == "__main__":
     unittest.main()
