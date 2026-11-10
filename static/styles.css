@@ -7855,6 +7855,149 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   border: 1px solid rgba(234, 179, 8, 0.3);
 }
 
+/* Session Achievements Dropdown */
+.session-ach-dropdown {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.session-ach-dropdown summary.session-ach-summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-right: 0.45rem;
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.session-ach-dropdown summary.session-ach-summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-ach-dropdown summary.session-ach-summary:hover {
+  background: rgba(234, 179, 8, 0.28);
+  border-color: rgba(234, 179, 8, 0.55);
+}
+
+.session-ach-dropdown[open] summary.session-ach-summary {
+  background: rgba(234, 179, 8, 0.32);
+  border-color: rgba(234, 179, 8, 0.75);
+  box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.2);
+}
+
+.session-ach-chevron {
+  font-size: 0.65rem;
+  display: inline-block;
+  transition: transform 0.2s ease;
+  color: #FDE047;
+  line-height: 1;
+}
+
+.session-ach-dropdown[open] .session-ach-chevron {
+  transform: rotate(180deg);
+}
+
+.session-ach-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  width: max-content;
+  min-width: 270px;
+  max-width: min(380px, 88vw);
+  max-height: 280px;
+  overflow-y: auto;
+  background-color: var(--surface-card, #1A1D27);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: var(--radius-md, 8px);
+  box-shadow: 0 12px 28px -4px rgba(0, 0, 0, 0.75), 0 6px 12px -4px rgba(0, 0, 0, 0.5);
+  padding: 0.45rem 0.5rem;
+}
+
+.session-ach-dropdown-header {
+  padding: 0.3rem 0.45rem 0.4rem 0.45rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #E2E8F0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.35rem;
+}
+
+.session-ach-dropdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.session-ach-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  transition: background-color 0.12s ease;
+}
+
+.session-ach-item:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.session-ach-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #0B0C10;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.session-ach-fallback-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(234, 179, 8, 0.12);
+  font-size: 1rem;
+  flex-shrink: 0;
+  border: 1px solid rgba(234, 179, 8, 0.25);
+}
+
+.session-ach-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.session-ach-name {
+  font-size: 0.825rem;
+  font-weight: 600;
+  color: #F8FAFC;
+  line-height: 1.25;
+  overflow-wrap: break-word;
+}
+
+.session-ach-desc {
+  font-size: 0.74rem;
+  color: #94A3B8;
+  line-height: 1.35;
+  margin: 0;
+  overflow-wrap: break-word;
+}
+
 .session-badge-locked {
   background: rgba(148, 163, 184, 0.12);
   color: #94A3B8;
