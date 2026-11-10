@@ -11,7 +11,22 @@ from typing import Any, Dict, List, Optional
 try:
     from mcp.server.mcpserver import MCPServer as FastMCP
 except ImportError:
-    from mcp.server.fastmcp import FastMCP
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ImportError:
+        class FastMCP:
+            def __init__(self, *args, **kwargs):
+                pass
+            def tool(self, *args, **kwargs):
+                def decorator(fn):
+                    return fn
+                return decorator
+            def resource(self, *args, **kwargs):
+                def decorator(fn):
+                    return fn
+                return decorator
+            def run(self, *args, **kwargs):
+                pass
 
 import wishlist_sync
 
@@ -25,6 +40,8 @@ from db import (
     get_connection,
     get_library_stats,
     get_pending_playtime_prompts,
+    get_play_session_analytics,
+    get_play_sessions as db_get_play_sessions,
     get_reconcile_candidates,
     get_sessions_analytics,
     get_sku_price_history,
@@ -43,6 +60,7 @@ from db import (
     record_sku_price,
     resolve_playtime_prompt,
     update_game,
+    update_play_session,
     update_wishlist_item,
     update_wishlist_platforms as db_update_wishlist_platforms,
     upsert_canonical_game,
@@ -1030,6 +1048,74 @@ def get_session_history(
         "rotation_gantt": analytics.get("rotation_gantt", []),
         "pagination": analytics.get("pagination", {}),
     })
+
+
+@mcp.tool()
+def get_play_sessions(
+    game_title: Optional[str] = None,
+    platform: Optional[str] = None,
+    days_back: int = 30,
+    limit: int = 25,
+) -> Dict[str, Any]:
+    """
+    Retrieve granular recorded play sessions across synced platforms.
+    Filter by game title, platform (Steam, Xbox, PlayStation), and time window (days_back).
+    Returns session timestamps, duration in minutes, achievements unlocked during session, and notes.
+    """
+    db_path = get_default_db_path()
+    game_id = None
+    if game_title:
+        with get_connection(db_path) as conn:
+            match = conn.execute(
+                "SELECT id FROM games WHERE LOWER(title) = ? LIMIT 1",
+                (game_title.strip().lower(),),
+            ).fetchone()
+            if not match:
+                match = conn.execute(
+                    "SELECT id FROM games WHERE LOWER(title) LIKE ? LIMIT 1",
+                    (f"%{game_title.strip().lower()}%",),
+                ).fetchone()
+            if match:
+                game_id = match["id"]
+            else:
+                return _sanitize_output({"sessions": [], "total": 0, "message": f"Game '{game_title}' not found in library"})
+
+    res = db_get_play_sessions(
+        game_id=game_id,
+        platform=platform,
+        days=days_back,
+        limit=limit,
+        db_path=db_path,
+    )
+    return _sanitize_output(res)
+
+
+@mcp.tool()
+def get_session_analytics(
+    days_back: int = 30,
+) -> Dict[str, Any]:
+    """
+    Retrieve aggregated play session analytics: playtime velocity, active gaming days,
+    average session duration, and top most-played games in the specified window.
+    """
+    db_path = get_default_db_path()
+    return _sanitize_output(get_play_session_analytics(days_back=days_back, db_path=db_path))
+
+
+@mcp.tool()
+def update_session_notes(
+    session_id: int,
+    notes: str,
+) -> Dict[str, Any]:
+    """
+    Append or update user journal notes on a synced play session.
+    Automatically locks the session (is_locked = 1) to prevent automated sync coalescence.
+    """
+    db_path = get_default_db_path()
+    updated = update_play_session(session_id=session_id, notes=notes, db_path=db_path)
+    if not updated:
+        return _sanitize_output({"status": "error", "message": f"Session with id {session_id} not found"})
+    return _sanitize_output({"status": "ok", "session": updated})
 
 
 @mcp.resource("vertex://wishlist/active")
