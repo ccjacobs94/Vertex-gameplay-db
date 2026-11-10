@@ -340,22 +340,26 @@ function refreshActiveView() {
 }
 
 function switchMainTab(tabName, shouldScroll = false) {
-  state.activeTab = (tabName === "habits" || tabName === "wishlist") ? tabName : "library";
+  state.activeTab = (tabName === "habits" || tabName === "wishlist" || tabName === "sessions") ? tabName : "library";
   localStorage.setItem("vertex_active_tab", state.activeTab);
 
   const tabLib = document.getElementById("tab-library");
+  const tabSess = document.getElementById("tab-sessions");
   const tabHab = document.getElementById("tab-habits");
   const tabWish = document.getElementById("tab-wishlist");
   const mnavLib = document.getElementById("mnav-library");
+  const mnavSess = document.getElementById("mnav-sessions");
   const mnavHab = document.getElementById("mnav-habits");
   const mnavWish = document.getElementById("mnav-wishlist");
   const libSec = document.getElementById("library-view-section");
+  const sessSec = document.getElementById("sessions-view-section");
   const habSec = document.getElementById("habits-view-section");
   const wishSec = document.getElementById("wishlist-view-section");
   const metricsBar = document.getElementById("metrics-bar");
   const controlsBar = document.getElementById("controls-bar");
   const promptsBanner = document.getElementById("playtime-prompts-banner");
 
+  const isSessions = state.activeTab === "sessions";
   const isHabits = state.activeTab === "habits";
   const isWishlist = state.activeTab === "wishlist";
   const isLibrary = state.activeTab === "library";
@@ -363,6 +367,10 @@ function switchMainTab(tabName, shouldScroll = false) {
   if (tabLib) {
     tabLib.classList.toggle("active", isLibrary);
     tabLib.setAttribute("aria-selected", String(isLibrary));
+  }
+  if (tabSess) {
+    tabSess.classList.toggle("active", isSessions);
+    tabSess.setAttribute("aria-selected", String(isSessions));
   }
   if (tabHab) {
     tabHab.classList.toggle("active", isHabits);
@@ -374,17 +382,21 @@ function switchMainTab(tabName, shouldScroll = false) {
   }
 
   if (mnavLib) mnavLib.classList.toggle("active", isLibrary);
+  if (mnavSess) mnavSess.classList.toggle("active", isSessions);
   if (mnavHab) mnavHab.classList.toggle("active", isHabits);
   if (mnavWish) mnavWish.classList.toggle("active", isWishlist);
 
   if (libSec) libSec.hidden = !isLibrary;
+  if (sessSec) sessSec.hidden = !isSessions;
   if (metricsBar) metricsBar.hidden = !isLibrary;
-  if (controlsBar) controlsBar.hidden = isWishlist;
+  if (controlsBar) controlsBar.hidden = isWishlist || isSessions;
   if (promptsBanner) promptsBanner.hidden = !isLibrary || (state.playtimePrompts || []).length === 0;
   if (habSec) habSec.hidden = !isHabits;
   if (wishSec) wishSec.hidden = !isWishlist;
 
-  if (isHabits) {
+  if (isSessions) {
+    fetchPlaySessions();
+  } else if (isHabits) {
     fetchHabitsAnalytics();
   } else if (isWishlist) {
     fetchWishlistAndDeals();
@@ -3040,7 +3052,9 @@ function openEditModal(game) {
   document.getElementById("edit-notes").value = game.notes || "";
   syncEditFavButton(game.favorite);
   renderEditLinkedCopies(game);
+  state.activeEditGameId = game.id;
   loadAndRenderGameAchievements(game.id, false);
+  loadGameSessionHistory(game.id);
   if (!dialog.open) {
     dialog.showModal();
   }
@@ -6344,18 +6358,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Main View Switcher
   const tabLibraryBtn = document.getElementById("tab-library");
+  const tabSessionsBtn = document.getElementById("tab-sessions");
   const tabHabitsBtn = document.getElementById("tab-habits");
   const tabWishlistBtn = document.getElementById("tab-wishlist");
   const mnavLibraryBtn = document.getElementById("mnav-library");
+  const mnavSessionsBtn = document.getElementById("mnav-sessions");
   const mnavHabitsBtn = document.getElementById("mnav-habits");
   const mnavWishlistBtn = document.getElementById("mnav-wishlist");
 
   if (tabLibraryBtn) tabLibraryBtn.addEventListener("click", () => switchMainTab("library"));
+  if (tabSessionsBtn) tabSessionsBtn.addEventListener("click", () => switchMainTab("sessions"));
   if (tabHabitsBtn) tabHabitsBtn.addEventListener("click", () => switchMainTab("habits"));
   if (tabWishlistBtn) tabWishlistBtn.addEventListener("click", () => switchMainTab("wishlist"));
   if (mnavLibraryBtn) mnavLibraryBtn.addEventListener("click", () => switchMainTab("library"));
+  if (mnavSessionsBtn) mnavSessionsBtn.addEventListener("click", () => switchMainTab("sessions"));
   if (mnavHabitsBtn) mnavHabitsBtn.addEventListener("click", () => switchMainTab("habits"));
   if (mnavWishlistBtn) mnavWishlistBtn.addEventListener("click", () => switchMainTab("wishlist"));
+
+  const sessDaysSelect = document.getElementById("sessions-days-select");
+  const sessPlatSelect = document.getElementById("sessions-platform-select");
+  if (sessDaysSelect) sessDaysSelect.addEventListener("change", () => fetchPlaySessions());
+  if (sessPlatSelect) sessPlatSelect.addEventListener("change", () => fetchPlaySessions());
 
   // Wishlist Actions
   const btnOpenWishlistAdd = document.getElementById("btn-open-wishlist-add");
@@ -7724,3 +7747,322 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 });
+
+// --- Play Sessions Activity Feed & Modal History ---
+
+async function fetchPlaySessions() {
+  const daysSelect = document.getElementById("sessions-days-select");
+  const platformSelect = document.getElementById("sessions-platform-select");
+  const days = daysSelect ? daysSelect.value : "30";
+  const platform = platformSelect ? platformSelect.value : "";
+
+  const listEl = document.getElementById("sessions-list");
+  const loadingEl = document.getElementById("sessions-loading");
+  const emptyEl = document.getElementById("sessions-empty");
+
+  if (loadingEl) loadingEl.hidden = false;
+  if (emptyEl) emptyEl.hidden = true;
+  if (listEl) listEl.innerHTML = "";
+
+  try {
+    const [sessRes, statsRes] = await Promise.all([
+      fetch(`/api/sessions?days=${days}&platform=${encodeURIComponent(platform)}&limit=100`),
+      fetch(`/api/sessions/stats?days=${days || 30}`),
+    ]);
+
+    if (sessRes.ok) {
+      const data = await sessRes.json();
+      const sessions = Array.isArray(data) ? data : (data.sessions || []);
+      renderSessionsFeed(sessions);
+    }
+    if (statsRes.ok) {
+      const stats = await statsRes.json();
+      renderSessionsKPIs(stats);
+    }
+  } catch (err) {
+    console.error("Failed to load sessions:", err);
+  } finally {
+    if (loadingEl) loadingEl.hidden = true;
+  }
+}
+
+function renderSessionsKPIs(stats) {
+  const skpiCount = document.getElementById("skpi-count");
+  const skpiTime = document.getElementById("skpi-time");
+  const skpiTimeSub = document.getElementById("skpi-time-sub");
+  const skpiAvg = document.getElementById("skpi-avg");
+  const skpiDays = document.getElementById("skpi-days");
+
+  const count = stats.total_sessions || stats.session_count || 0;
+  const mins = stats.total_minutes || 0;
+  const hrs = (mins / 60).toFixed(1);
+  const avg = Math.round(stats.average_duration_minutes || stats.average_session_length || 0);
+  const dailySeries = stats.daily_playtime_series || stats.daily_series || [];
+  const activeDays = dailySeries.filter(d => (d.minutes || 0) > 0).length;
+
+  if (skpiCount) skpiCount.textContent = count;
+  if (skpiTime) skpiTime.textContent = `${hrs} hrs`;
+  if (skpiTimeSub) skpiTimeSub.textContent = `${mins} minutes logged`;
+  if (skpiAvg) skpiAvg.textContent = `${avg} min`;
+  if (skpiDays) skpiDays.textContent = activeDays;
+}
+
+function formatSessionDateTime(isoStr) {
+  try {
+    const dt = new Date(isoStr);
+    if (Number.isNaN(dt.getTime())) return isoStr;
+    return dt.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch (_) {
+    return isoStr;
+  }
+}
+
+function getRelativeTime(isoStr) {
+  try {
+    const dt = new Date(isoStr);
+    if (Number.isNaN(dt.getTime())) return "";
+    const diffMs = Date.now() - dt.getTime();
+    const diffSec = Math.floor(diffMs / 1000);
+    if (diffSec < 60) return "Just now";
+    const diffMin = Math.floor(diffSec / 60);
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffHrs = Math.floor(diffMin / 60);
+    if (diffHrs < 24) return `${diffHrs}h ago`;
+    const diffDays = Math.floor(diffHrs / 24);
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 30) return `${diffDays}d ago`;
+    return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  } catch (_) {
+    return "";
+  }
+}
+
+function renderSessionsFeed(sessions) {
+  const listEl = document.getElementById("sessions-list");
+  const emptyEl = document.getElementById("sessions-empty");
+  if (!listEl) return;
+
+  if (!sessions || sessions.length === 0) {
+    if (emptyEl) emptyEl.hidden = false;
+    listEl.innerHTML = "";
+    return;
+  }
+
+  if (emptyEl) emptyEl.hidden = true;
+  listEl.innerHTML = sessions.map(sess => {
+    const mins = sess.duration_minutes || 0;
+    const durStr = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+    const achCount = sess.achievements_unlocked || 0;
+    const isLocked = Boolean(sess.is_locked);
+    const coverUrl = sess.cover_url || "/static/icons/icon-192.png";
+    const startDate = sess.started_at ? formatSessionDateTime(sess.started_at) : "";
+    const endDate = sess.ended_at ? formatSessionDateTime(sess.ended_at) : "";
+    const relativeTime = sess.ended_at ? getRelativeTime(sess.ended_at) : "";
+
+    return `
+      <article class="session-card" data-session-id="${sess.id}">
+        <div class="session-card-cover-wrap">
+          <img src="${escapeHtml(coverUrl)}" alt="${escapeHtml(sess.title)}" class="session-card-cover" loading="lazy" width="60" height="90">
+        </div>
+        <div class="session-card-content">
+          <div class="session-card-header">
+            <div class="session-card-title-group">
+              <h3 class="session-card-title">${escapeHtml(sess.title)}</h3>
+              <div class="session-card-badges">
+                <span class="session-badge session-badge-platform">${escapeHtml(sess.platform)}</span>
+                <span class="session-badge session-badge-duration">${durStr}</span>
+                ${achCount > 0 ? `<span class="session-badge session-badge-ach">🏆 ${achCount} unlocked</span>` : ""}
+                ${isLocked ? `<span class="session-badge session-badge-locked" title="User edited session (locked)">🔒 Edited</span>` : ""}
+              </div>
+            </div>
+            <div class="session-card-time-group">
+              <span class="session-card-relative">${escapeHtml(relativeTime)}</span>
+              <span class="session-card-range">${escapeHtml(startDate)} — ${escapeHtml(endDate)}</span>
+            </div>
+          </div>
+          <div class="session-card-notes-wrap" id="session-notes-wrap-${sess.id}">
+            <div class="session-notes-display" id="session-notes-display-${sess.id}">
+              <p class="session-notes-text ${sess.notes ? '' : 'session-notes-empty'}">${sess.notes ? escapeHtml(sess.notes) : '<em>No journal notes added.</em>'}</p>
+              <div class="session-actions-row">
+                <button type="button" class="btn btn-chip btn-xs" onclick="window.toggleSessionNoteEdit(${sess.id})">✎ Note</button>
+                <button type="button" class="btn btn-chip btn-xs btn-chip-danger" onclick="window.confirmDeleteSession(${sess.id})">✕ Delete</button>
+              </div>
+            </div>
+            <div class="session-notes-edit-form" id="session-notes-edit-${sess.id}" hidden>
+              <textarea id="session-notes-input-${sess.id}" class="session-notes-textarea" placeholder="Add session journal notes...">${sess.notes ? escapeHtml(sess.notes) : ''}</textarea>
+              <div class="session-notes-edit-buttons">
+                <button type="button" class="btn btn-primary btn-xs" onclick="window.saveSessionNotes(${sess.id})">Save</button>
+                <button type="button" class="btn btn-secondary btn-xs" onclick="window.toggleSessionNoteEdit(${sess.id})">Cancel</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
+window.toggleSessionNoteEdit = function(sessionId) {
+  const displayEl = document.getElementById(`session-notes-display-${sessionId}`);
+  const editEl = document.getElementById(`session-notes-edit-${sessionId}`);
+  if (displayEl && editEl) {
+    const isEditing = !editEl.hidden;
+    editEl.hidden = isEditing;
+    displayEl.hidden = !isEditing;
+    if (!isEditing) {
+      const input = document.getElementById(`session-notes-input-${sessionId}`);
+      if (input) input.focus();
+    }
+  }
+};
+
+window.saveSessionNotes = async function(sessionId) {
+  const input = document.getElementById(`session-notes-input-${sessionId}`);
+  if (!input) return;
+  const newNotes = input.value.trim();
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes: newNotes }),
+    });
+    if (!res.ok) {
+      alert("Failed to save session notes.");
+      return;
+    }
+    fetchPlaySessions();
+    if (state.activeEditGameId) {
+      loadGameSessionHistory(state.activeEditGameId);
+    }
+  } catch (err) {
+    console.error("Error saving session note:", err);
+  }
+};
+
+window.confirmDeleteSession = async function(sessionId) {
+  if (!confirm("Delete this recorded play session? Cumulative playtime won't be altered.")) return;
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      alert("Failed to delete session.");
+      return;
+    }
+    fetchPlaySessions();
+    if (state.activeEditGameId) {
+      loadGameSessionHistory(state.activeEditGameId);
+    }
+  } catch (err) {
+    console.error("Error deleting session:", err);
+  }
+};
+
+async function loadGameSessionHistory(gameId) {
+  const loadingEl = document.getElementById("edit-sessions-loading");
+  const listEl = document.getElementById("edit-sessions-list");
+  const emptyEl = document.getElementById("edit-sessions-empty");
+  const badgeEl = document.getElementById("edit-sessions-count-badge");
+
+  if (!listEl) return;
+  if (loadingEl) loadingEl.hidden = false;
+  if (emptyEl) emptyEl.hidden = true;
+  listEl.innerHTML = "";
+  if (badgeEl) badgeEl.textContent = "0 sessions";
+
+  try {
+    const res = await fetch(`/api/sessions?game_id=${gameId}&days=0&limit=50`);
+    if (!res.ok) return;
+    const data = await res.json();
+    const sessions = Array.isArray(data) ? data : (data.sessions || []);
+
+    if (badgeEl) {
+      const totalMins = sessions.reduce((acc, s) => acc + (s.duration_minutes || 0), 0);
+      const hrsStr = (totalMins / 60).toFixed(1);
+      badgeEl.textContent = `${sessions.length} session${sessions.length === 1 ? '' : 's'} (${hrsStr} hrs)`;
+    }
+
+    if (sessions.length === 0) {
+      if (emptyEl) emptyEl.hidden = false;
+      return;
+    }
+
+    listEl.innerHTML = sessions.map(sess => {
+      const mins = sess.duration_minutes || 0;
+      const durStr = mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`;
+      const achCount = sess.achievements_unlocked || 0;
+      const isLocked = Boolean(sess.is_locked);
+      const startDate = sess.started_at ? formatSessionDateTime(sess.started_at) : "";
+      const endDate = sess.ended_at ? formatSessionDateTime(sess.ended_at) : "";
+
+      return `
+        <li class="session-modal-card">
+          <div class="session-modal-card-top">
+            <span class="session-badge session-badge-platform">${escapeHtml(sess.platform)}</span>
+            <span class="session-badge session-badge-duration">${durStr}</span>
+            ${achCount > 0 ? `<span class="session-badge session-badge-ach">🏆 ${achCount} ach</span>` : ''}
+            ${isLocked ? `<span class="session-badge session-badge-locked">🔒 Edited</span>` : ''}
+            <span class="session-modal-date">${escapeHtml(startDate)} — ${escapeHtml(endDate)}</span>
+          </div>
+          <div class="session-modal-notes-row">
+            <div id="modal-session-notes-display-${sess.id}" class="modal-session-notes-display">
+              <span class="modal-session-notes-text ${sess.notes ? '' : 'modal-session-notes-empty'}">${sess.notes ? escapeHtml(sess.notes) : 'No notes'}</span>
+              <button type="button" class="btn-link-subtle" onclick="window.toggleModalSessionNoteEdit(${sess.id})">Edit</button>
+            </div>
+            <div id="modal-session-notes-edit-${sess.id}" class="modal-session-notes-edit" hidden>
+              <input type="text" id="modal-session-notes-input-${sess.id}" class="modal-session-notes-input" value="${sess.notes ? escapeHtml(sess.notes) : ''}" placeholder="Session note...">
+              <button type="button" class="btn btn-primary btn-xs" onclick="window.saveModalSessionNote(${sess.id}, ${gameId})">Save</button>
+              <button type="button" class="btn btn-secondary btn-xs" onclick="window.toggleModalSessionNoteEdit(${sess.id})">✕</button>
+            </div>
+          </div>
+        </li>
+      `;
+    }).join("");
+  } catch (err) {
+    console.error("Failed to load session history for game:", err);
+  } finally {
+    if (loadingEl) loadingEl.hidden = true;
+  }
+}
+
+window.toggleModalSessionNoteEdit = function(sessionId) {
+  const displayEl = document.getElementById(`modal-session-notes-display-${sessionId}`);
+  const editEl = document.getElementById(`modal-session-notes-edit-${sessionId}`);
+  if (displayEl && editEl) {
+    const isEditing = !editEl.hidden;
+    editEl.hidden = isEditing;
+    displayEl.hidden = !isEditing;
+    if (!isEditing) {
+      const input = document.getElementById(`modal-session-notes-input-${sessionId}`);
+      if (input) input.focus();
+    }
+  }
+};
+
+window.saveModalSessionNote = async function(sessionId, gameId) {
+  const input = document.getElementById(`modal-session-notes-input-${sessionId}`);
+  if (!input) return;
+  const newNotes = input.value.trim();
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes: newNotes }),
+    });
+    if (!res.ok) {
+      alert("Failed to save session note.");
+      return;
+    }
+    loadGameSessionHistory(gameId);
+    if (state.activeTab === "sessions") {
+      fetchPlaySessions();
+    }
+  } catch (err) {
+    console.error("Error saving modal session note:", err);
+  }
+};
