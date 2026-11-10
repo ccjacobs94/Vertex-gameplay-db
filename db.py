@@ -5312,6 +5312,90 @@ def get_sessions_analytics(
     }
 
 
+def get_session_unlocked_achievements(
+    conn: sqlite3.Connection,
+    session: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve achievements unlocked during a specific play session.
+    First checks for achievements unlocked within the session's time window (+/- 45m).
+    Falls back to achievements unlocked closest to/before ended_at if timestamps were estimated.
+    """
+    limit_count = int(session.get("achievements_unlocked") or 0)
+    if limit_count <= 0:
+        return []
+
+    g_row = conn.execute("SELECT id, canonical_id FROM games WHERE id = ?", (session["game_id"],)).fetchone()
+    target_ids = [session["game_id"]]
+    if g_row and g_row["canonical_id"]:
+        cid = g_row["canonical_id"]
+        linked_rows = conn.execute(
+            "SELECT id FROM games WHERE canonical_id = ? OR id = ?",
+            (cid, cid),
+        ).fetchall()
+        target_ids = list({int(r["id"]) for r in linked_rows} | {int(session["game_id"])})
+    placeholders = ",".join("?" for _ in target_ids)
+
+    # 1. Direct window match (unlock_time within started_at - 45m and ended_at + 45m)
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT DISTINCT name, description, icon_url, unlock_time, rarity_pct
+            FROM game_achievements
+            WHERE game_id IN ({placeholders})
+              AND unlocked = 1
+              AND unlock_time IS NOT NULL
+              AND unlock_time != ''
+              AND unlock_time >= datetime(?, '-45 minutes')
+              AND unlock_time <= datetime(?, '+45 minutes')
+            ORDER BY unlock_time DESC
+            """,
+            tuple(target_ids + [session["started_at"], session["ended_at"]]),
+        )
+        matches = [dict(r) for r in cur.fetchall()]
+        if matches:
+            return matches[:limit_count]
+    except Exception:
+        pass
+
+    # 2. Fallback: unlocked closest to/before ended_at (+1 day margin for sync delays)
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT DISTINCT name, description, icon_url, unlock_time, rarity_pct
+            FROM game_achievements
+            WHERE game_id IN ({placeholders})
+              AND unlocked = 1
+              AND (unlock_time <= datetime(?, '+1 day') OR unlock_time IS NULL OR unlock_time = '')
+            ORDER BY CASE WHEN unlock_time IS NOT NULL AND unlock_time != '' THEN unlock_time ELSE '0000-00-00' END DESC
+            LIMIT ?
+            """,
+            tuple(target_ids + [session["ended_at"], limit_count]),
+        )
+        matches = [dict(r) for r in cur.fetchall()]
+        if matches:
+            return matches
+    except Exception:
+        pass
+
+    # 3. Super fallback: any unlocked for this game
+    try:
+        cur = conn.execute(
+            f"""
+            SELECT DISTINCT name, description, icon_url, unlock_time, rarity_pct
+            FROM game_achievements
+            WHERE game_id IN ({placeholders})
+              AND unlocked = 1
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            tuple(target_ids + [limit_count]),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
 def get_play_sessions(
     game_id: Optional[int] = None,
     platform: Optional[str] = None,
@@ -5365,6 +5449,12 @@ def get_play_sessions(
         """
         rows = conn.execute(query_sql, tuple(params + [limit, offset])).fetchall()
         sessions = [dict(r) for r in rows]
+
+        for s in sessions:
+            if s.get("achievements_unlocked", 0) > 0:
+                s["achievements"] = get_session_unlocked_achievements(conn, s)
+            else:
+                s["achievements"] = []
 
         return {
             "sessions": sessions,
@@ -5474,7 +5564,14 @@ def update_play_session(
             """,
             (session_id,),
         ).fetchone()
-        return dict(updated_row) if updated_row else None
+        if updated_row:
+            d = dict(updated_row)
+            if d.get("achievements_unlocked", 0) > 0:
+                d["achievements"] = get_session_unlocked_achievements(conn, d)
+            else:
+                d["achievements"] = []
+            return d
+        return None
 
 
 def delete_play_session(

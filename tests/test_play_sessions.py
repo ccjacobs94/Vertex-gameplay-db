@@ -342,6 +342,90 @@ class TestPlaySessionAPIAndMCP(unittest.TestCase):
             self.assertEqual(up_res["session"]["notes"], "Campfire scene")
             self.assertEqual(up_res["session"]["is_locked"], 1)
 
+    def test_session_includes_unlocked_achievements_details(self):
+        g = db.upsert_synced_game(
+            external_id="steam:999",
+            title="Hollow Knight",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_hours=5.0,
+            db_path=self.db_path,
+        )
+        base_time = datetime(2026, 11, 10, 14, 0, 0, tzinfo=timezone.utc)
+        ach1_time = base_time - timedelta(minutes=20)
+        ach2_time = base_time - timedelta(minutes=10)
+
+        # Insert achievements into game_achievements
+        db.upsert_game_achievements(
+            game_id=g["id"],
+            source="Steam",
+            platform="PC (Steam)",
+            achievements=[
+                {
+                    "external_ach_id": "ach_1",
+                    "name": "False Knight",
+                    "description": "Defeat the False Knight in the Crossroads.",
+                    "unlocked": True,
+                    "unlock_time": ach1_time.isoformat(),
+                    "icon_url": "https://example.com/ach1.png",
+                },
+                {
+                    "external_ach_id": "ach_2",
+                    "name": "Hornet",
+                    "description": "Defeat Hornet in Greenpath.",
+                    "unlocked": True,
+                    "unlock_time": ach2_time.isoformat(),
+                    "icon_url": "https://example.com/ach2.png",
+                },
+                {
+                    "external_ach_id": "ach_3",
+                    "name": "Mantis Lords",
+                    "description": "Defeat the Mantis Lords.",
+                    "unlocked": False,
+                    "unlock_time": None,
+                },
+            ],
+            db_path=self.db_path,
+        )
+
+        # Sync session with +30m and 2 achievements
+        db.upsert_synced_game(
+            external_id="steam:999",
+            title="Hollow Knight",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_minutes=330,
+            last_played=base_time.isoformat(),
+            achievements_unlocked=2,
+            new_achievements_count=2,
+            db_path=self.db_path,
+        )
+
+        sessions = db.get_play_sessions(game_id=g["id"], db_path=self.db_path)["sessions"]
+        self.assertEqual(len(sessions), 1)
+        sess = sessions[0]
+        self.assertEqual(sess["achievements_unlocked"], 2)
+        self.assertIn("achievements", sess)
+        self.assertEqual(len(sess["achievements"]), 2)
+        ach_names = [a["name"] for a in sess["achievements"]]
+        self.assertIn("False Knight", ach_names)
+        self.assertIn("Hornet", ach_names)
+        # Check descriptions are populated
+        fk_ach = next(a for a in sess["achievements"] if a["name"] == "False Knight")
+        self.assertEqual(fk_ach["description"], "Defeat the False Knight in the Crossroads.")
+        self.assertEqual(fk_ach["icon_url"], "https://example.com/ach1.png")
+
+        # Verify API response also returns achievements
+        with patch("app._get_active_user_db_path", return_value=Path(self.db_path)), \
+             patch("app._get_active_user", return_value=(1, "testuser")):
+            client = TestClient(app)
+            resp = client.get(f"/api/sessions?game_id={g['id']}")
+            self.assertEqual(resp.status_code, 200)
+            api_sess = resp.json()["sessions"][0]
+            self.assertIn("achievements", api_sess)
+            self.assertEqual(len(api_sess["achievements"]), 2)
+            self.assertEqual(api_sess["achievements"][0]["name"], fk_ach["name"] if api_sess["achievements"][0]["name"] == "False Knight" else "Hornet")
+
 
 if __name__ == "__main__":
     unittest.main()
