@@ -82,6 +82,7 @@
     <div hidden>
       <nav class="view-tabs-bar" aria-label="Main Views" role="tablist">
         <button type="button" id="tab-library" class="view-tab-btn active" role="tab" aria-selected="true" aria-controls="library-view-section">Library</button>
+        <button type="button" id="tab-sessions" class="view-tab-btn" role="tab" aria-selected="false" aria-controls="sessions-view-section">Activity</button>
         <button type="button" id="tab-habits" class="view-tab-btn" role="tab" aria-selected="false" aria-controls="habits-view-section">Insights</button>
         <button type="button" id="tab-wishlist" class="view-tab-btn" role="tab" aria-selected="false" aria-controls="wishlist-view-section">Wishlist <span id="wishlist-badge" class="badge-pill tab-deal-badge" hidden>0</span></button>
       </nav>
@@ -278,6 +279,72 @@
       </div>
 
       <div id="games-grid" class="games-grid"></div>
+    </section>
+
+    <!-- Play Sessions / Activity Dashboard Section -->
+    <section aria-labelledby="sessions-heading" id="sessions-view-section" class="sessions-view-section" hidden>
+      <div class="section-header sessions-section-header">
+        <div>
+          <h2 id="sessions-heading">Recent Play Sessions</h2>
+          <p class="section-subtitle" id="sessions-subtitle">
+            Granular play sessions and deltas captured across Steam, Xbox, and PlayStation.
+          </p>
+        </div>
+        <div class="sessions-filter-controls">
+          <label for="sessions-days-select" class="sr-only">Time Window</label>
+          <select id="sessions-days-select" class="session-filter-select">
+            <option value="7">Last 7 Days</option>
+            <option value="30" selected>Last 30 Days</option>
+            <option value="90">Last 90 Days</option>
+            <option value="365">Last 365 Days</option>
+            <option value="0">All Time</option>
+          </select>
+          <label for="sessions-platform-select" class="sr-only">Platform</label>
+          <select id="sessions-platform-select" class="session-filter-select">
+            <option value="">All Platforms</option>
+            <option value="Steam">Steam (PC)</option>
+            <option value="Xbox">Xbox</option>
+            <option value="PlayStation">PlayStation</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Sessions KPI Pulse Strip -->
+      <div class="sessions-pulse-grid" id="sessions-pulse-grid" aria-label="Key session metrics">
+        <article class="sessions-kpi-card">
+          <span class="sessions-kpi-label">Recorded Sessions</span>
+          <strong class="sessions-kpi-value" id="skpi-count">0</strong>
+          <span class="sessions-kpi-sub" id="skpi-count-sub">Total play sessions in window</span>
+        </article>
+        <article class="sessions-kpi-card">
+          <span class="sessions-kpi-label">Total Time Played</span>
+          <strong class="sessions-kpi-value text-accent" id="skpi-time">0 hrs</strong>
+          <span class="sessions-kpi-sub" id="skpi-time-sub">0 minutes logged</span>
+        </article>
+        <article class="sessions-kpi-card">
+          <span class="sessions-kpi-label">Average Session</span>
+          <strong class="sessions-kpi-value text-purple" id="skpi-avg">0 min</strong>
+          <span class="sessions-kpi-sub" id="skpi-avg-sub">Typical playtime length</span>
+        </article>
+        <article class="sessions-kpi-card">
+          <span class="sessions-kpi-label">Active Gaming Days</span>
+          <strong class="sessions-kpi-value text-emerald" id="skpi-days">0</strong>
+          <span class="sessions-kpi-sub" id="skpi-days-sub">Unique days played</span>
+        </article>
+      </div>
+
+      <!-- Sessions List -->
+      <div id="sessions-feed-container" class="sessions-feed-container">
+        <div id="sessions-loading" class="sessions-loading-state" hidden>
+          <span class="spin-anim" aria-hidden="true">⏳</span>
+          <span>Loading play sessions...</span>
+        </div>
+        <div id="sessions-empty" class="sessions-empty-state" hidden>
+          <p>No play sessions recorded in this time window.</p>
+          <small>Sessions are automatically derived from cumulative playtime deltas during library syncs.</small>
+        </div>
+        <div id="sessions-list" class="sessions-feed-list"></div>
+      </div>
     </section>
 
     <!-- Play Habits & Gaming Insights Dashboard Section -->
@@ -1131,6 +1198,23 @@
           <ul id="edit-achievements-list" class="achievements-cards-list"></ul>
           <div id="ach-empty-state" class="ach-empty-state" hidden>
             <span>No achievements match your filter or none available for this game.</span>
+          </div>
+        </div>
+
+        <div id="edit-sessions-section" class="sessions-history-panel">
+          <div class="sessions-history-header">
+            <div class="sessions-header-title-group">
+              <strong>Session History</strong>
+              <span id="edit-sessions-count-badge" class="linked-summary-badge">0 sessions</span>
+            </div>
+          </div>
+          <div id="edit-sessions-loading" class="ach-loading-state" hidden>
+            <span class="spin-anim" aria-hidden="true">⏳</span>
+            <span>Loading play sessions...</span>
+          </div>
+          <ul id="edit-sessions-list" class="sessions-cards-list"></ul>
+          <div id="edit-sessions-empty" class="ach-empty-state" hidden>
+            <span>No play sessions recorded yet for this title.</span>
           </div>
         </div>
 
@@ -2265,6 +2349,12 @@
       </span>
       <span class="mnav-label">Library</span>
     </button>
+    <button type="button" id="mnav-sessions" class="mnav-item" aria-label="Activity">
+      <span class="mnav-icon" aria-hidden="true">
+        <svg class="lucide-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </span>
+      <span class="mnav-label">Activity</span>
+    </button>
     <button type="button" id="mnav-wishlist" class="mnav-item" aria-label="Wishlist">
       <span class="mnav-icon-wrap">
         <span class="mnav-icon" aria-hidden="true">
@@ -2295,6 +2385,6 @@
     <button type="button" id="mnav-add"></button>
   </div>
 
-  <script src="/static/app.js?v=56"></script>
+  <script src="/static/app.js?v=58"></script>
 </body>
 </html>

@@ -872,6 +872,13 @@ class SessionTransitionRequest(BaseModel):
     achievements_unlocked: Optional[int] = 0
 
 
+class PlaySessionPatchRequest(BaseModel):
+    notes: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+
+
 class ConnectionTestRequest(BaseModel):
     platform: str
     credential: str
@@ -1287,6 +1294,79 @@ async def api_get_sessions_analytics(
         user_timezone=tz,
         user_timezone_eras=eras,
     )
+
+
+@app.get("/api/sessions")
+async def api_get_play_sessions(
+    request: Request,
+    game_id: Optional[int] = Query(default=None),
+    platform: Optional[str] = Query(default=None),
+    days: int = Query(default=30, ge=0, le=3650),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    user_db_path = str(_get_active_user_db_path(user_id))
+    return db.get_play_sessions(
+        game_id=game_id,
+        platform=platform,
+        days=days,
+        limit=limit,
+        offset=offset,
+        db_path=user_db_path,
+    )
+
+
+@app.get("/api/sessions/stats")
+async def api_get_play_sessions_stats(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=3650),
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    user_db_path = str(_get_active_user_db_path(user_id))
+    return db.get_play_sessions_stats(
+        days=days,
+        db_path=user_db_path,
+    )
+
+
+@app.patch("/api/sessions/{session_id}")
+async def api_patch_play_session(
+    session_id: int,
+    payload: PlaySessionPatchRequest,
+    request: Request,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    user_db_path = str(_get_active_user_db_path(user_id))
+    if payload.duration_minutes is not None and payload.duration_minutes <= 0:
+        raise HTTPException(status_code=400, detail="duration_minutes must be > 0")
+    try:
+        updated = db.update_play_session(
+            session_id=session_id,
+            notes=payload.notes,
+            duration_minutes=payload.duration_minutes,
+            started_at=payload.started_at,
+            ended_at=payload.ended_at,
+            db_path=user_db_path,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Play session not found")
+    return updated
+
+
+@app.delete("/api/sessions/{session_id}")
+async def api_delete_play_session(
+    session_id: int,
+    request: Request,
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    user_db_path = str(_get_active_user_db_path(user_id))
+    ok = db.delete_play_session(session_id, db_path=user_db_path)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Play session not found")
+    return {"status": "ok", "deleted_id": session_id}
 
 
 @app.post("/api/webhooks/session-transition")

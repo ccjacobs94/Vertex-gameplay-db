@@ -13,6 +13,8 @@
   - **Nintendo Switch & Manual Titles**: Add physical or digital console titles with keyless high-res cover art & release year lookup (Steam Store Search + Wikipedia API, with optional RAWG enrichment).
 - **Smart Cross-Platform Reconciliation**:
   - Detects duplicate games owned across multiple platforms (e.g., Steam + Xbox) and lets you merge them into a unified library card while preserving per-platform stats.
+- **Automated Play Session Tracking**:
+  - Automatically captures granular play sessions from cumulative sync deltas across Steam, Xbox, and PlayStation. Coalesces sessions within 30 minutes, protects user-edited sessions (`is_locked`), auto-transitions unlocked backlogged games to 'Playing', and provides session journals and history.
 - **User Edits Protected**:
   - Manually locking a completion status (`Completed`, `Beaten`, `Playing`, `Plan to Play`, `Dropped`, `Not Played`), rating a game, favoriting, or adding personal notes will never be overwritten by background syncs.
 - **Built-in MCP Server (Streamable HTTP + SSE + OAuth 2.1)**:
