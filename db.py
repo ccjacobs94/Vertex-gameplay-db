@@ -869,6 +869,9 @@ def upsert_synced_game(
             ):
                 new_status = "Completed"
 
+            # Preserve existing cover_url if already populated (e.g. repaired or custom art)
+            effective_cover = existing["cover_url"] if existing["cover_url"] else cover_url
+
             # Self-reported ownership rule: sync never overwrites existing ownership_status
             # unless an explicit non-None ownership_status is provided and ownership is not locked.
             existing_ownership = normalize_ownership_status(existing["ownership_status"])
@@ -950,7 +953,7 @@ def upsert_synced_game(
                     merged_tags,
                     critic_score,
                     release_year,
-                    cover_url,
+                    effective_cover,
                     now,
                     game_id,
                 ),

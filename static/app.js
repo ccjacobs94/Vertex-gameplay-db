@@ -566,10 +566,17 @@ function renderHabitsDashboard(data) {
         card.setAttribute("tabindex", "0");
         card.setAttribute("title", `Click to filter by ${plat.name}`);
 
+        let topGameImgHtml = "";
+        if (plat.top_game) {
+          const fallback = makeFallbackCover(plat.top_game.title, plat.name);
+          const coverSrc = plat.top_game.cover_url || fallback;
+          topGameImgHtml = `<img src="${escapeHtml(coverSrc)}" alt="" class="system-top-game-img" loading="lazy" onerror="this.onerror=null; this.src='${fallback}'">`;
+        }
+
         const topGameSnippet = plat.top_game
           ? `
             <div class="system-top-game-snippet">
-              ${plat.top_game.cover_url ? `<img src="${escapeHtml(plat.top_game.cover_url)}" alt="" class="system-top-game-img" loading="lazy">` : ""}
+              ${topGameImgHtml}
               <span>#1 Most Played: <strong>${escapeHtml(plat.top_game.title)}</strong> (${plat.top_game.hours}h)</span>
             </div>
           `
