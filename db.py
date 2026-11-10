@@ -71,6 +71,8 @@ def init_db(db_path: Optional[str] = None) -> None:
                 platform TEXT NOT NULL,
                 source TEXT NOT NULL,
                 playtime_hours REAL DEFAULT 0.0,
+                playtime_minutes INTEGER DEFAULT 0,
+                last_synced_playtime_minutes INTEGER DEFAULT NULL,
                 last_played TEXT,
                 completion_status TEXT DEFAULT 'Not Played',
                 status_locked INTEGER DEFAULT 0,
@@ -297,6 +299,23 @@ def init_db(db_path: Optional[str] = None) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_daily_ledger_date ON daily_playtime_ledger(date DESC);
             CREATE INDEX IF NOT EXISTS idx_daily_ledger_game ON daily_playtime_ledger(game_id);
+
+            CREATE TABLE IF NOT EXISTS play_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                game_id INTEGER NOT NULL,
+                platform TEXT NOT NULL,
+                started_at DATETIME NOT NULL,
+                ended_at DATETIME NOT NULL,
+                duration_minutes INTEGER NOT NULL CHECK (duration_minutes > 0),
+                source TEXT NOT NULL DEFAULT 'sync',
+                notes TEXT,
+                achievements_unlocked INTEGER DEFAULT 0,
+                is_locked INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (game_id) REFERENCES games(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_sessions_game_id ON play_sessions(game_id);
+            CREATE INDEX IF NOT EXISTS idx_sessions_ended_at ON play_sessions(ended_at DESC);
             """
         )
         cols = {
@@ -305,6 +324,12 @@ def init_db(db_path: Optional[str] = None) -> None:
         }
         if "canonical_id" not in cols:
             conn.execute("ALTER TABLE games ADD COLUMN canonical_id INTEGER DEFAULT NULL;")
+        if "playtime_minutes" not in cols:
+            conn.execute("ALTER TABLE games ADD COLUMN playtime_minutes INTEGER DEFAULT 0;")
+            conn.execute("UPDATE games SET playtime_minutes = CAST(ROUND(playtime_hours * 60) AS INTEGER) WHERE playtime_minutes IS NULL OR playtime_minutes = 0;")
+        if "last_synced_playtime_minutes" not in cols:
+            conn.execute("ALTER TABLE games ADD COLUMN last_synced_playtime_minutes INTEGER DEFAULT NULL;")
+            conn.execute("UPDATE games SET last_synced_playtime_minutes = playtime_minutes WHERE last_synced_playtime_minutes IS NULL;")
         if "tags" not in cols:
             conn.execute("ALTER TABLE games ADD COLUMN tags TEXT DEFAULT '[]';")
         if "achievements_synced_at" not in cols:
@@ -442,6 +467,21 @@ def _clean_display_title(title: str) -> str:
     return re.sub(r"\s{2,}", " ", t).strip() or title
 
 
+def _parse_utc_iso(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        s = str(ts).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
 def _short_platform_label(platform: str) -> str:
     p = (platform or "").strip()
     mapping = {
@@ -513,6 +553,8 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
             "is_game_pass": d["is_game_pass"],
             "is_play_anywhere": d["is_play_anywhere"],
             "cover_url": d.get("cover_url"),
+            "playtime_minutes": d.get("playtime_minutes"),
+            "last_synced_playtime_minutes": d.get("last_synced_playtime_minutes"),
         }
     ]
     return d
@@ -586,6 +628,8 @@ def _consolidate_dicts(
                     "is_game_pass": single["is_game_pass"],
                     "is_play_anywhere": single["is_play_anywhere"],
                     "cover_url": single.get("cover_url"),
+                    "playtime_minutes": single.get("playtime_minutes"),
+                    "last_synced_playtime_minutes": single.get("last_synced_playtime_minutes"),
                 }
             ]
             consolidated.append(single)
@@ -759,6 +803,8 @@ def _consolidate_dicts(
                 "is_game_pass": bool(m.get("is_game_pass", 0)),
                 "is_play_anywhere": bool(m.get("is_play_anywhere", 0)),
                 "cover_url": m.get("cover_url"),
+                "playtime_minutes": m.get("playtime_minutes"),
+                "last_synced_playtime_minutes": m.get("last_synced_playtime_minutes"),
             }
             for m in members_sorted
         ]
@@ -776,6 +822,7 @@ def upsert_synced_game(
     platform: str,
     source: str,
     playtime_hours: float = 0.0,
+    playtime_minutes: Optional[int] = None,
     last_played: Optional[str] = None,
     achievements_unlocked: int = 0,
     achievements_total: int = 0,
@@ -787,6 +834,7 @@ def upsert_synced_game(
     ownership_status: Optional[str] = None,
     is_game_pass: Optional[bool] = None,
     is_play_anywhere: Optional[bool] = None,
+    new_achievements_count: Optional[int] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -796,7 +844,15 @@ def upsert_synced_game(
     empty, but manual genres/tags are preserved.
     """
     now = datetime.now(timezone.utc).isoformat()
-    playtime_hours = round(float(playtime_hours or 0.0), 2)
+    if playtime_minutes is not None:
+        incoming_mins = int(playtime_minutes)
+        if playtime_hours == 0.0 and incoming_mins > 0:
+            playtime_hours = round(incoming_mins / 60.0, 2)
+        else:
+            playtime_hours = round(float(playtime_hours or 0.0), 2)
+    else:
+        playtime_hours = round(float(playtime_hours or 0.0), 2)
+        incoming_mins = int(round(playtime_hours * 60))
 
     # Infer initial completion status when not manually locked by user
     inferred_status = "Not Played"
@@ -824,12 +880,12 @@ def upsert_synced_game(
             cursor = conn.execute(
                 """
                 INSERT INTO games (
-                    external_id, title, platform, source, playtime_hours,
-                    last_played, completion_status, status_locked,
+                    external_id, title, platform, source, playtime_hours, playtime_minutes,
+                    last_synced_playtime_minutes, last_played, completion_status, status_locked,
                     ownership_status, ownership_locked, is_game_pass, is_play_anywhere,
                     achievements_unlocked, achievements_total, genres, tags,
                     critic_score, release_year, cover_url, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     external_id,
@@ -837,6 +893,8 @@ def upsert_synced_game(
                     platform,
                     source,
                     playtime_hours,
+                    incoming_mins,
+                    incoming_mins,
                     last_played,
                     inferred_status,
                     norm_incoming_ownership,
@@ -860,6 +918,20 @@ def upsert_synced_game(
             new_playtime = max(old_playtime, playtime_hours)
             delta_hours = round(new_playtime - old_playtime, 2)
 
+            stored_last_synced = existing["last_synced_playtime_minutes"]
+            if stored_last_synced is None:
+                if "playtime_minutes" in existing.keys() and existing["playtime_minutes"] is not None:
+                    stored_last_synced = int(existing["playtime_minutes"])
+                else:
+                    stored_last_synced = int(round(old_playtime * 60))
+
+            delta_minutes = incoming_mins - stored_last_synced
+            new_last_synced = max(stored_last_synced, incoming_mins)
+            new_playtime_mins = max(
+                int(existing["playtime_minutes"] or 0) if "playtime_minutes" in existing.keys() else 0,
+                incoming_mins,
+            )
+
             # Preserve existing status on sync updates; prompt the user when playtime increases >= 0.5h
             new_status = existing["completion_status"]
             if (
@@ -868,6 +940,78 @@ def upsert_synced_game(
                 and achievements_unlocked >= achievements_total
             ):
                 new_status = "Completed"
+
+            if delta_minutes > 0:
+                # Timestamp Resolution
+                ended_dt = None
+                if last_played:
+                    inc_dt = _parse_utc_iso(last_played)
+                    prev_dt = _parse_utc_iso(existing["last_played"]) if existing["last_played"] else None
+                    if inc_dt and (prev_dt is None or inc_dt > prev_dt):
+                        ended_dt = inc_dt
+                if ended_dt is None:
+                    ended_dt = datetime.now(timezone.utc)
+
+                started_dt = ended_dt - timedelta(minutes=delta_minutes)
+                ended_at_str = ended_dt.isoformat()
+                started_at_str = started_dt.isoformat()
+
+                ach_delta = (
+                    new_achievements_count
+                    if new_achievements_count is not None
+                    else max(0, achievements_unlocked - (existing["achievements_unlocked"] or 0))
+                )
+
+                # Anti-Fragmentation Coalescing
+                prev_sess = conn.execute(
+                    """
+                    SELECT id, ended_at, duration_minutes, achievements_unlocked, is_locked
+                    FROM play_sessions
+                    WHERE game_id = ? AND platform = ?
+                    ORDER BY ended_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (game_id, platform),
+                ).fetchone()
+
+                coalesced = False
+                if prev_sess and not bool(prev_sess["is_locked"]):
+                    prev_ended_dt = _parse_utc_iso(prev_sess["ended_at"])
+                    if prev_ended_dt:
+                        gap_seconds = (started_dt - prev_ended_dt).total_seconds()
+                        if gap_seconds <= 1800:
+                            coalesced = True
+                            merged_ended_dt = max(prev_ended_dt, ended_dt)
+                            merged_duration = int(prev_sess["duration_minutes"]) + delta_minutes
+                            merged_ach = int(prev_sess["achievements_unlocked"] or 0) + ach_delta
+                            conn.execute(
+                                """
+                                UPDATE play_sessions SET
+                                    ended_at = ?,
+                                    duration_minutes = ?,
+                                    achievements_unlocked = ?
+                                WHERE id = ?
+                                """,
+                                (merged_ended_dt.isoformat(), merged_duration, merged_ach, prev_sess["id"]),
+                            )
+
+                if not coalesced:
+                    conn.execute(
+                        """
+                        INSERT INTO play_sessions (
+                            game_id, platform, started_at, ended_at, duration_minutes,
+                            source, notes, achievements_unlocked, is_locked
+                        ) VALUES (?, ?, ?, ?, ?, 'sync', NULL, ?, 0)
+                        """,
+                        (game_id, platform, started_at_str, ended_at_str, delta_minutes, ach_delta),
+                    )
+
+                # Automatic Status Transition
+                if not bool(existing["status_locked"]):
+                    curr_status = existing["completion_status"]
+                    if not curr_status or curr_status in ("Unplayed", "Not Played", "Plan to Play", ""):
+                        if new_status != "Completed":
+                            new_status = "Playing"
 
             # Preserve existing cover_url if already populated (e.g. repaired or custom art)
             effective_cover = existing["cover_url"] if existing["cover_url"] else cover_url
@@ -924,6 +1068,8 @@ def upsert_synced_game(
                 UPDATE games SET
                     title = ?,
                     playtime_hours = ?,
+                    playtime_minutes = ?,
+                    last_synced_playtime_minutes = ?,
                     last_played = COALESCE(?, last_played),
                     completion_status = ?,
                     ownership_status = ?,
@@ -942,6 +1088,8 @@ def upsert_synced_game(
                 (
                     effective_title,
                     new_playtime,
+                    new_playtime_mins,
+                    new_last_synced,
                     last_played,
                     new_status,
                     new_ownership,
@@ -1021,20 +1169,25 @@ def add_manual_game(
     is_gp_val = 1 if is_game_pass else 0
     is_pa_val = 1 if is_play_anywhere else 0
 
+    p_hours = round(float(playtime_hours or 0.0), 2)
+    p_mins = int(round(p_hours * 60))
+
     with get_connection(db_path) as conn:
         conn.execute(
             """
             INSERT INTO games (
-                external_id, title, platform, source, playtime_hours,
-                completion_status, status_locked, ownership_status, ownership_locked,
-                is_game_pass, is_play_anywhere,
+                external_id, title, platform, source, playtime_hours, playtime_minutes,
+                last_synced_playtime_minutes, completion_status, status_locked, ownership_status,
+                ownership_locked, is_game_pass, is_play_anywhere,
                 genres, tags, critic_score,
                 user_rating, release_year, cover_url, notes, favorite,
                 created_at, updated_at
-            ) VALUES (?, ?, ?, 'Manual', ?, ?, 1, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, 'Manual', ?, ?, ?, ?, 1, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(external_id) DO UPDATE SET
                 title = excluded.title,
                 playtime_hours = excluded.playtime_hours,
+                playtime_minutes = excluded.playtime_minutes,
+                last_synced_playtime_minutes = excluded.last_synced_playtime_minutes,
                 completion_status = excluded.completion_status,
                 status_locked = 1,
                 ownership_status = excluded.ownership_status,
@@ -1055,7 +1208,9 @@ def add_manual_game(
                 external_id,
                 title,
                 platform,
-                round(float(playtime_hours or 0.0), 2),
+                p_hours,
+                p_mins,
+                p_mins,
                 completion_status,
                 norm_ownership,
                 is_gp_val,
@@ -5155,4 +5310,244 @@ def get_sessions_analytics(
             "utilization_pct": 2.7,
         },
     }
+
+
+def get_play_sessions(
+    game_id: Optional[int] = None,
+    platform: Optional[str] = None,
+    days: int = 30,
+    limit: int = 50,
+    offset: int = 0,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    with get_connection(db_path) as conn:
+        where_clauses = []
+        params: List[Any] = []
+
+        if game_id is not None:
+            target_ids = [int(game_id)]
+            g_row = conn.execute("SELECT id, canonical_id FROM games WHERE id = ?", (game_id,)).fetchone()
+            if g_row:
+                cid = g_row["canonical_id"] or g_row["id"]
+                linked_rows = conn.execute(
+                    "SELECT id FROM games WHERE canonical_id = ? OR id = ?",
+                    (cid, cid),
+                ).fetchall()
+                target_ids = list({int(r["id"]) for r in linked_rows} | {int(game_id)})
+            placeholders = ",".join("?" for _ in target_ids)
+            where_clauses.append(f"s.game_id IN ({placeholders})")
+            params.extend(target_ids)
+
+        if platform:
+            where_clauses.append("LOWER(s.platform) LIKE ?")
+            params.append(f"%{platform.lower()}%")
+
+        if days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            where_clauses.append("s.ended_at >= ?")
+            params.append(cutoff)
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+
+        count_row = conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM play_sessions s {where_sql}",
+            tuple(params),
+        ).fetchone()
+        total = count_row["cnt"] if count_row else 0
+
+        query_sql = f"""
+            SELECT s.*, g.title, g.cover_url
+            FROM play_sessions s
+            JOIN games g ON s.game_id = g.id
+            {where_sql}
+            ORDER BY s.ended_at DESC, s.id DESC
+            LIMIT ? OFFSET ?
+        """
+        rows = conn.execute(query_sql, tuple(params + [limit, offset])).fetchall()
+        sessions = [dict(r) for r in rows]
+
+        return {
+            "sessions": sessions,
+            "total": total,
+            "count": len(sessions),
+            "limit": limit,
+            "offset": offset,
+        }
+
+
+def get_play_sessions_stats(
+    days: int = 30,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    with get_connection(db_path) as conn:
+        where_sql = ""
+        params: List[Any] = []
+        if days > 0:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            where_sql = "WHERE s.ended_at >= ?"
+            params.append(cutoff)
+
+        rows = conn.execute(
+            f"""
+            SELECT s.*, g.title
+            FROM play_sessions s
+            JOIN games g ON s.game_id = g.id
+            {where_sql}
+            ORDER BY s.ended_at ASC
+            """,
+            tuple(params),
+        ).fetchall()
+
+        total_sessions = len(rows)
+        total_minutes = sum(int(r["duration_minutes"] or 0) for r in rows)
+        avg_duration = round(total_minutes / total_sessions, 1) if total_sessions > 0 else 0.0
+
+        daily_map: Dict[str, int] = {}
+        plat_map: Dict[str, int] = {}
+
+        for r in rows:
+            ended_at = r["ended_at"] or ""
+            d_str = ended_at[:10] if len(ended_at) >= 10 else "Unknown"
+            dur = int(r["duration_minutes"] or 0)
+            daily_map[d_str] = daily_map.get(d_str, 0) + dur
+            plat = r["platform"] or "Unknown"
+            plat_map[plat] = plat_map.get(plat, 0) + dur
+
+        daily_series = [{"date": d, "minutes": m} for d, m in sorted(daily_map.items())]
+
+        return {
+            "total_sessions": total_sessions,
+            "session_count": total_sessions,
+            "total_minutes": total_minutes,
+            "average_duration_minutes": avg_duration,
+            "average_session_length": avg_duration,
+            "daily_playtime_series": daily_series,
+            "daily_series": daily_series,
+            "platform_distribution": plat_map,
+        }
+
+
+def update_play_session(
+    session_id: int,
+    notes: Optional[str] = None,
+    duration_minutes: Optional[int] = None,
+    started_at: Optional[str] = None,
+    ended_at: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT * FROM play_sessions WHERE id = ?", (session_id,)).fetchone()
+        if not row:
+            return None
+
+        updates = ["is_locked = 1"]
+        params: List[Any] = []
+
+        if notes is not None:
+            updates.append("notes = ?")
+            params.append(notes)
+        if duration_minutes is not None:
+            dur = int(duration_minutes)
+            if dur <= 0:
+                raise ValueError("duration_minutes must be > 0")
+            updates.append("duration_minutes = ?")
+            params.append(dur)
+        if started_at is not None:
+            updates.append("started_at = ?")
+            params.append(started_at)
+        if ended_at is not None:
+            updates.append("ended_at = ?")
+            params.append(ended_at)
+
+        params.append(session_id)
+        conn.execute(
+            f"UPDATE play_sessions SET {', '.join(updates)} WHERE id = ?",
+            tuple(params),
+        )
+
+        updated_row = conn.execute(
+            """
+            SELECT s.*, g.title, g.cover_url
+            FROM play_sessions s
+            JOIN games g ON s.game_id = g.id
+            WHERE s.id = ?
+            """,
+            (session_id,),
+        ).fetchone()
+        return dict(updated_row) if updated_row else None
+
+
+def delete_play_session(
+    session_id: int,
+    db_path: Optional[str] = None,
+) -> bool:
+    with get_connection(db_path) as conn:
+        row = conn.execute("SELECT id FROM play_sessions WHERE id = ?", (session_id,)).fetchone()
+        if not row:
+            return False
+        conn.execute("DELETE FROM play_sessions WHERE id = ?", (session_id,))
+        return True
+
+
+def get_play_session_analytics(
+    days_back: int = 30,
+    db_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    with get_connection(db_path) as conn:
+        days = max(1, days_back)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        rows = conn.execute(
+            """
+            SELECT s.*, g.title
+            FROM play_sessions s
+            JOIN games g ON s.game_id = g.id
+            WHERE s.ended_at >= ?
+            ORDER BY s.ended_at DESC
+            """,
+            (cutoff,),
+        ).fetchall()
+
+        total_sessions = len(rows)
+        total_minutes = sum(int(r["duration_minutes"] or 0) for r in rows)
+        avg_duration = round(total_minutes / total_sessions, 1) if total_sessions > 0 else 0.0
+
+        active_days = set()
+        by_game: Dict[int, Dict[str, Any]] = {}
+
+        for r in rows:
+            ended_at = r["ended_at"] or ""
+            if len(ended_at) >= 10:
+                active_days.add(ended_at[:10])
+            gid = r["game_id"]
+            if gid not in by_game:
+                by_game[gid] = {
+                    "game_id": gid,
+                    "title": r["title"],
+                    "platform": r["platform"],
+                    "minutes": 0,
+                    "sessions_count": 0,
+                }
+            by_game[gid]["minutes"] += int(r["duration_minutes"] or 0)
+            by_game[gid]["sessions_count"] += 1
+
+        most_played = sorted(by_game.values(), key=lambda x: x["minutes"], reverse=True)
+        for item in most_played:
+            item["hours"] = round(item["minutes"] / 60.0, 1)
+
+        minutes_per_day = round(total_minutes / days, 1)
+        hours_per_week = round((total_minutes / 60.0) / (days / 7.0), 1)
+
+        return {
+            "days_back": days,
+            "total_sessions": total_sessions,
+            "active_gaming_days": len(active_days),
+            "average_session_duration_minutes": avg_duration,
+            "playtime_velocity": {
+                "total_minutes": total_minutes,
+                "total_hours": round(total_minutes / 60.0, 2),
+                "minutes_per_day": minutes_per_day,
+                "hours_per_week": hours_per_week,
+            },
+            "most_played_titles": most_played[:10],
+        }
 

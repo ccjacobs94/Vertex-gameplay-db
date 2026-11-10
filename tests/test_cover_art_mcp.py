@@ -41,11 +41,14 @@ class TestCoverArtMCP(unittest.IsolatedAsyncioTestCase):
         if not HAS_MCP:
             self.skipTest("mcp library not available")
         tools = await mcp_server.mcp.list_tools()
-        self.assertEqual(len(tools), 19)
+        self.assertEqual(len(tools), 22)
         tool_map = {t.name: t for t in tools}
         self.assertIn("add_game_to_library", tool_map)
         self.assertIn("update_game_progress", tool_map)
         self.assertIn("get_session_history", tool_map)
+        self.assertIn("get_play_sessions", tool_map)
+        self.assertIn("get_session_analytics", tool_map)
+        self.assertIn("update_session_notes", tool_map)
 
         add_props = tool_map["add_game_to_library"].input_schema.get("properties", {})
         self.assertIn("cover_url", add_props)

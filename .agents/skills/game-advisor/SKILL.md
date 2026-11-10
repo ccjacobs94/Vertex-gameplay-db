@@ -49,10 +49,18 @@ Use the dedicated Wishlist MCP tools and resources to track desired games across
   - `vertex://wishlist/active`: All active watched games, target thresholds, and latest prices.
   - `vertex://wishlist/{id}/history`: Chronological price history, ATL, and edition SKU breakdown.
 
-## 5. Live Session Tracking, Telemetry & Play Pacing
+## 5. Automated Play Sessions & Delta Telemetry
 
-Vertex includes a telemetry engine that tracks play sessions, streaks, active vs. AFK idle tax, circadian rhythm, and 365-day heatmaps:
+Vertex includes an automated play session delta engine and telemetry tracker:
+- **Play Sessions MCP Tool**: `get_play_sessions(game_title=None, platform=None, days_back=30, limit=25)` retrieves granular play sessions derived from sync deltas across Steam, Xbox, and PlayStation.
+- **Session Analytics MCP Tool**: `get_session_analytics(days_back=30)` returns aggregated playtime velocity, active gaming days, average session length, and top played titles in the window.
+- **Session Notes MCP Tool**: `update_session_notes(session_id, notes)` appends or updates personal journal notes on a session and automatically sets `is_locked = 1`.
 - **Session History MCP Tool**: `get_session_history(title=None, platform=None, days=30, limit=50)` retrieves detailed play session records with exact timestamps, active vs idle durations, achievement unlocks during the session, and daily telemetry metrics.
+- **REST Session APIs**:
+  - `GET /api/sessions?days=30&platform=...`: Chronological list of play sessions joined with game title and cover art.
+  - `GET /api/sessions/stats?days=30`: Total sessions, total minutes, daily series, and platform distribution.
+  - `PATCH /api/sessions/{id}`: Update notes or duration (sets `is_locked = 1`).
+  - `DELETE /api/sessions/{id}`: Delete a session row without altering cumulative playtime baseline.
 - **REST Telemetry API**: `GET /api/analytics/sessions?days=365` returns full daily heatmap ledger, circadian hour/day buckets, session length histogram ("Snack vs. Binge"), and 30-day rotation Gantt strip.
 - **Transition Webhook**: `POST /api/webhooks/session-transition` allows local tools (Playnite, Home Assistant, or background scripts) to push `{ "source": "playnite", "event": "start" | "stop", "title": "Game Title", "platform": "PC" }` into the user's session log.
 

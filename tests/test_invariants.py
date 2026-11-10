@@ -244,6 +244,86 @@ class TestUserEditPreservation(unittest.TestCase):
         self.assertTrue(game["ownership_locked"])
         self.assertTrue(game["is_game_pass"])
 
+    # --- play sessions & delta tracking invariants -------------------------
+
+    def test_initial_migration_seeds_last_synced_playtime_minutes_without_false_sessions(self):
+        # A brand new game imported for the first time initializes baseline without sessions
+        game = self._sync(external_id="steam:first_import", title="First Game", playtime_hours=15.0)
+        stored = db.get_game_by_id(game["id"], db_path=self.db_path)
+        self.assertEqual(stored["last_synced_playtime_minutes"], 900)
+        sessions_res = db.get_play_sessions(game_id=game["id"], db_path=self.db_path)
+        self.assertEqual(len(sessions_res["sessions"]), 0)
+
+    def test_consecutive_sync_deltas_within_30_minutes_coalesce_when_unlocked(self):
+        # Initial sync establishes baseline
+        game = self._sync(playtime_hours=10.0)
+        # First delta (+30 mins)
+        self._sync(playtime_hours=10.5)
+        sessions_res = db.get_play_sessions(game_id=game["id"], db_path=self.db_path)
+        self.assertEqual(len(sessions_res["sessions"]), 1)
+        self.assertEqual(sessions_res["sessions"][0]["duration_minutes"], 30)
+        self.assertEqual(sessions_res["sessions"][0]["is_locked"], 0)
+
+        # Second delta (+30 mins immediately / within 30m window)
+        self._sync(playtime_hours=11.0)
+        sessions_res2 = db.get_play_sessions(game_id=game["id"], db_path=self.db_path)
+        # Must coalesce into the single existing session
+        self.assertEqual(len(sessions_res2["sessions"]), 1)
+        self.assertEqual(sessions_res2["sessions"][0]["duration_minutes"], 60)
+        self.assertEqual(sessions_res2["sessions"][0]["is_locked"], 0)
+
+    def test_consecutive_sync_deltas_do_not_coalesce_when_locked(self):
+        # Initial sync
+        game = self._sync(playtime_hours=10.0)
+        # First delta (+30 mins)
+        self._sync(playtime_hours=10.5)
+        sessions_res = db.get_play_sessions(game_id=game["id"], db_path=self.db_path)
+        self.assertEqual(len(sessions_res["sessions"]), 1)
+        sess_id = sessions_res["sessions"][0]["id"]
+
+        # User edits the session notes/duration, locking it (is_locked = 1)
+        db.update_play_session(sess_id, notes="Great boss fight", db_path=self.db_path)
+        locked_sess = db.get_play_sessions(game_id=game["id"], db_path=self.db_path)["sessions"][0]
+        self.assertEqual(locked_sess["is_locked"], 1)
+
+        # Next delta (+30 mins)
+        self._sync(playtime_hours=11.0)
+        sessions_after = db.get_play_sessions(game_id=game["id"], db_path=self.db_path)["sessions"]
+        # Must NOT coalesce into the locked session: 2 sessions must exist now
+        self.assertEqual(len(sessions_after), 2)
+        old_sess = next(s for s in sessions_after if s["id"] == sess_id)
+        self.assertEqual(old_sess["duration_minutes"], 30)
+        self.assertEqual(old_sess["notes"], "Great boss fight")
+        self.assertEqual(old_sess["is_locked"], 1)
+
+        new_sess = next(s for s in sessions_after if s["id"] != sess_id)
+        self.assertEqual(new_sess["duration_minutes"], 30)
+        self.assertEqual(new_sess["is_locked"], 0)
+
+    def test_logging_session_transitions_unlocked_plan_to_play_to_playing_but_preserves_locked_status(self):
+        # Game 1: Unlocked Plan to Play
+        g1 = self._sync(external_id="steam:unlocked_plan", title="Unlocked RPG", playtime_hours=0.0)
+        db.update_game(g1["id"], {"completion_status": "Plan to Play"}, db_path=self.db_path)
+        # Unlocked status by clearing status_locked flag for test scenario
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE games SET status_locked = 0 WHERE id = ?", (g1["id"],))
+
+        # Delta sync creates a session -> transitions to Playing
+        self._sync(external_id="steam:unlocked_plan", title="Unlocked RPG", playtime_hours=1.0)
+        after_g1 = db.get_game_by_id(g1["id"], db_path=self.db_path)
+        self.assertEqual(after_g1["completion_status"], "Playing")
+
+        # Game 2: Locked Plan to Play (status_locked = 1)
+        g2 = self._sync(external_id="steam:locked_plan", title="Locked RPG", playtime_hours=0.0)
+        db.update_game(g2["id"], {"completion_status": "Plan to Play"}, db_path=self.db_path)
+        self.assertTrue(db.get_game_by_id(g2["id"], db_path=self.db_path)["status_locked"])
+
+        # Delta sync creates a session -> MUST NOT touch completion_status
+        self._sync(external_id="steam:locked_plan", title="Locked RPG", playtime_hours=1.0)
+        after_g2 = db.get_game_by_id(g2["id"], db_path=self.db_path)
+        self.assertEqual(after_g2["completion_status"], "Plan to Play")
+        self.assertTrue(after_g2["status_locked"])
+
     # --- sync data monotonicity --------------------------------------------
 
     def test_sync_never_decreases_playtime(self):
@@ -272,7 +352,7 @@ class TestSchemaMigrations(unittest.TestCase):
                 cols = {r[1] for r in conn.execute("PRAGMA table_info(games)")}
             for required in (
                 "status_locked", "ownership_status", "ownership_locked", "is_game_pass",
-                "user_rating", "notes", "favorite", "genres", "tags"
+                "user_rating", "notes", "favorite", "genres", "tags", "last_synced_playtime_minutes"
             ):
                 self.assertIn(required, cols)
 

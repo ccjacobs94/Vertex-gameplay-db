@@ -452,6 +452,29 @@ class TestUIBrandAssets(unittest.TestCase):
         self.assertIn('src="/static/vertex_logo.png?v=', index_html)
         self.assertIn('class="brand-logo"', index_html)
 
+    def test_mobile_bottom_nav_strictly_four_items(self):
+        """Regression test: ensure bottom navigation contains strictly 4 main views without wrapping into a 2nd row."""
+        import re
+        index_path = os.path.join(self.static_dir, "index.html")
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_html = f.read()
+
+        match = re.search(r'<nav class="mobile-bottom-nav"[^>]*>(.*?)</nav>', index_html, re.DOTALL)
+        self.assertIsNotNone(match, "mobile-bottom-nav not found in index.html")
+        nav_content = match.group(1)
+
+        # Must contain the 4 main view tabs
+        self.assertIn('id="mnav-library"', nav_content)
+        self.assertIn('id="mnav-sessions"', nav_content)
+        self.assertIn('id="mnav-wishlist"', nav_content)
+        self.assertIn('id="mnav-habits"', nav_content)
+
+        # Must NOT contain mnav-settings inside the visible 4-column nav
+        self.assertNotIn('id="mnav-settings"', nav_content)
+
+        # But mnav-settings must still exist in index.html (hidden anchor) for backward compatibility
+        self.assertIn('id="mnav-settings"', index_html)
+
 
 if __name__ == "__main__":
     unittest.main()
