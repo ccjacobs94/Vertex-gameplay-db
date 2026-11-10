@@ -7750,17 +7750,32 @@ document.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("click", (e) => {
     if (!e.target.closest(".session-ach-dropdown")) {
       document.querySelectorAll(".session-ach-dropdown[open]").forEach((d) => d.removeAttribute("open"));
+    } else {
+      const summary = e.target.closest(".session-ach-dropdown summary");
+      if (summary) {
+        const details = summary.closest(".session-ach-dropdown");
+        if (details) {
+          requestAnimationFrame(() => positionSessionDropdown(details));
+        }
+      }
     }
   });
 
-  // Ensure only one session achievement dropdown is open at a time
+  // Ensure only one session achievement dropdown is open at a time and position safely within viewport
   document.addEventListener("toggle", (e) => {
     if (e.target.classList && e.target.classList.contains("session-ach-dropdown") && e.target.open) {
       document.querySelectorAll(".session-ach-dropdown[open]").forEach((d) => {
         if (d !== e.target) d.removeAttribute("open");
       });
+      requestAnimationFrame(() => positionSessionDropdown(e.target));
     }
   }, true);
+
+  window.addEventListener("resize", () => {
+    document.querySelectorAll(".session-ach-dropdown[open]").forEach((d) => {
+      positionSessionDropdown(d);
+    });
+  }, { passive: true });
 });
 
 // --- Play Sessions Activity Feed & Modal History ---
@@ -7856,6 +7871,43 @@ function getRelativeTime(isoStr) {
     return "";
   }
 }
+
+function positionSessionDropdown(detailsEl) {
+  if (!detailsEl || !detailsEl.open) return;
+  const menu = detailsEl.querySelector(".session-ach-dropdown-menu");
+  if (!menu) return;
+
+  // Clear previous inline positioning overrides to measure natural size
+  menu.style.left = "";
+  menu.style.right = "";
+
+  const detailsRect = detailsEl.getBoundingClientRect();
+  const menuWidth = menu.offsetWidth;
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth;
+  const margin = 12;
+
+  // Check if opening with left: 0 causes right viewport overflow
+  const naturalLeft = detailsRect.left;
+  const naturalRight = naturalLeft + menuWidth;
+
+  if (naturalRight > viewportWidth - margin) {
+    // If aligning to right edge (right: 0) stays within left margin:
+    if (detailsRect.right - menuWidth >= margin) {
+      menu.style.left = "auto";
+      menu.style.right = "0";
+    } else {
+      // Clamped offset to fit neatly within [margin, viewportWidth - margin]
+      const targetScreenLeft = Math.max(margin, Math.min(naturalLeft, viewportWidth - menuWidth - margin));
+      const offsetLeft = targetScreenLeft - detailsRect.left;
+      menu.style.left = `${Math.round(offsetLeft)}px`;
+      menu.style.right = "auto";
+    }
+  } else {
+    menu.style.left = "0";
+    menu.style.right = "auto";
+  }
+}
+window.positionSessionDropdown = positionSessionDropdown;
 
 function renderSessionAchievementsDropdown(sess, labelSuffix = "unlocked") {
   const achCount = sess.achievements_unlocked || 0;
