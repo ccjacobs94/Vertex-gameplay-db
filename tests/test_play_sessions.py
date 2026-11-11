@@ -141,7 +141,8 @@ class TestPlaySessionEngine(unittest.TestCase):
         sessions = db.get_play_sessions(game_id=g["id"], db_path=self.db_path)["sessions"]
         self.assertEqual(len(sessions), 1)
         self.assertEqual(sessions[0]["duration_minutes"], 50)
-        self.assertEqual(sessions[0]["ended_at"], t2.isoformat())
+        expected_merged_end = (t2 + timedelta(minutes=20)).isoformat()
+        self.assertEqual(sessions[0]["ended_at"], expected_merged_end)
 
     def test_separate_session_created_when_gap_exceeds_30_minutes(self):
         g = db.upsert_synced_game(
@@ -425,6 +426,115 @@ class TestPlaySessionAPIAndMCP(unittest.TestCase):
             self.assertIn("achievements", api_sess)
             self.assertEqual(len(api_sess["achievements"]), 2)
             self.assertEqual(api_sess["achievements"][0]["name"], fk_ach["name"] if api_sess["achievements"][0]["name"] == "False Knight" else "Hornet")
+
+    def test_xbox_last_time_played_anchors_session_start_not_end(self):
+        """Regression test: Xbox titleHistory.lastTimePlayed is launch/start time, not exit time."""
+        launch_time = datetime(2026, 11, 10, 20, 0, 0, tzinfo=timezone.utc)
+        g = db.upsert_synced_game(
+            external_id="xbox:1679168855",
+            title="A Quiet Place: The Road Ahead",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=60,
+            db_path=self.db_path,
+        )
+
+        # User plays 90 minutes; Xbox records lastTimePlayed as the launch timestamp (20:00 UTC)
+        db.upsert_synced_game(
+            external_id="xbox:1679168855",
+            title="A Quiet Place: The Road Ahead",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=150,
+            last_played=launch_time.isoformat(),
+            db_path=self.db_path,
+        )
+
+        sessions = db.get_play_sessions(game_id=g["id"], db_path=self.db_path)["sessions"]
+        self.assertEqual(len(sessions), 1)
+        sess = sessions[0]
+        self.assertEqual(sess["duration_minutes"], 90)
+        # started_at must be launch_time (20:00), ended_at must be launch_time + 90m (21:30)
+        self.assertEqual(sess["started_at"], launch_time.isoformat())
+        expected_end = (launch_time + timedelta(minutes=90)).isoformat()
+        self.assertEqual(sess["ended_at"], expected_end)
+
+    def test_sessions_do_not_share_identical_fallback_achievements(self):
+        """Regression test: multiple play sessions must not duplicate identical historical achievements."""
+        nov8_time = datetime(2026, 11, 8, 14, 0, 0, tzinfo=timezone.utc)
+        g = db.upsert_synced_game(
+            external_id="xbox:5001",
+            title="Gears 5",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=120,
+            db_path=self.db_path,
+        )
+        # Store achievements unlocked days earlier
+        db.upsert_game_achievements(
+            game_id=g["id"],
+            source="Xbox",
+            platform="Xbox",
+            achievements=[
+                {
+                    "external_ach_id": "nov8_ach1",
+                    "name": "Old Chapter 1",
+                    "description": "Completed chapter on Nov 8.",
+                    "unlocked": True,
+                    "unlock_time": nov8_time.isoformat(),
+                },
+                {
+                    "external_ach_id": "nov8_ach2",
+                    "name": "Old Chapter 2",
+                    "description": "Completed chapter on Nov 8.",
+                    "unlocked": True,
+                    "unlock_time": (nov8_time + timedelta(minutes=20)).isoformat(),
+                },
+            ],
+            db_path=self.db_path,
+        )
+
+        # Session 1 played on Nov 10 (+60 min, count = 2)
+        nov10_start = datetime(2026, 11, 10, 15, 0, 0, tzinfo=timezone.utc)
+        db.upsert_synced_game(
+            external_id="xbox:5001",
+            title="Gears 5",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=180,
+            last_played=nov10_start.isoformat(),
+            achievements_unlocked=2,
+            db_path=self.db_path,
+        )
+
+        # Session 2 played on Nov 11 (+60 min, cumulative unlocked = 4, so +2 more)
+        nov11_start = datetime(2026, 11, 11, 18, 0, 0, tzinfo=timezone.utc)
+        db.upsert_synced_game(
+            external_id="xbox:5001",
+            title="Gears 5",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=240,
+            last_played=nov11_start.isoformat(),
+            achievements_unlocked=4,
+            db_path=self.db_path,
+        )
+
+        sessions = db.get_play_sessions(game_id=g["id"], db_path=self.db_path)["sessions"]
+        self.assertEqual(len(sessions), 2)
+        sess_nov11, sess_nov10 = sessions[0], sessions[1]
+
+        # Nov 8 achievements MUST NOT be attached to Nov 10 or Nov 11 sessions
+        achs_11 = [a["name"] for a in sess_nov11.get("achievements", [])]
+        achs_10 = [a["name"] for a in sess_nov10.get("achievements", [])]
+
+        self.assertNotIn("Old Chapter 1", achs_11)
+        self.assertNotIn("Old Chapter 2", achs_11)
+        self.assertNotIn("Old Chapter 1", achs_10)
+        self.assertNotIn("Old Chapter 2", achs_10)
+
+        # Intersect must be empty (identical achievements can never appear across different sessions)
+        self.assertEqual(len(set(achs_11) & set(achs_10)), 0)
 
 
 if __name__ == "__main__":

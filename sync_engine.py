@@ -724,16 +724,28 @@ async def sync_xbox(
                         boxart_url = iurl
 
                 cover_url = poster_url or boxart_url or t.get("displayImage") or None
+                prev_ach_unl = 0
                 if not poster_url and cover_url:
                     # Never downgrade an existing cover to square BoxArt / displayImage:
                     # only fall back when the game has no cover yet.
                     with get_connection(db_path) as _cconn:
                         _row = _cconn.execute(
-                            "SELECT cover_url FROM games WHERE external_id = ?",
+                            "SELECT cover_url, achievements_unlocked FROM games WHERE external_id = ?",
                             (f"xbox:{title_id}",),
                         ).fetchone()
-                    if _row and _row["cover_url"]:
-                        cover_url = None
+                    if _row:
+                        if _row["cover_url"]:
+                            cover_url = None
+                        prev_ach_unl = int(_row["achievements_unlocked"] or 0)
+                else:
+                    with get_connection(db_path) as _cconn:
+                        _row = _cconn.execute(
+                            "SELECT achievements_unlocked FROM games WHERE external_id = ?",
+                            (f"xbox:{title_id}",),
+                        ).fetchone()
+                    if _row:
+                        prev_ach_unl = int(_row["achievements_unlocked"] or 0)
+
                 playtime_mins = playtime_map.get(str(title_id), float(t.get("minutesPlayed") or 0.0))
                 playtime_hours = round(playtime_mins / 60.0, 2)
 
@@ -742,6 +754,8 @@ async def sync_xbox(
                     str(title_id),
                     bool(gp_obj.get("isGamePass")) if isinstance(gp_obj, dict) else False,
                 )
+
+                has_new_ach = (unlocked > prev_ach_unl)
 
                 saved_game = upsert_synced_game(
                     external_id=f"xbox:{title_id}",
@@ -758,13 +772,14 @@ async def sync_xbox(
                     is_play_anywhere=is_xpa,
                     db_path=db_path,
                 )
-                upserted_xbox_games.append((saved_game["id"], str(title_id), platform, playtime_hours, total_ach))
+                upserted_xbox_games.append((saved_game["id"], str(title_id), platform, playtime_hours, total_ach, has_new_ach))
                 count += 1
 
-            # Sync detailed achievements for top played titles where totalAchievements is 0 or unpopulated (rate-limited)
+            # Sync detailed achievements for top played titles where totalAchievements is 0 or unpopulated (rate-limited),
+            # or any titles where new achievements were unlocked in this sync pass
             xbox_needing_ach = sorted(
-                [g for g in upserted_xbox_games if g[4] == 0 and g[3] > 0],
-                key=lambda x: x[3],
+                [g for g in upserted_xbox_games if (g[4] == 0 and g[3] > 0) or g[5]],
+                key=lambda x: (1 if x[5] else 0, x[3]),
                 reverse=True,
             )[:25]
             if xbox_needing_ach:
