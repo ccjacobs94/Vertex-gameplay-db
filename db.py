@@ -944,15 +944,34 @@ def upsert_synced_game(
             if delta_minutes > 0:
                 # Timestamp Resolution
                 ended_dt = None
+                started_dt = None
+                is_xbox = bool(
+                    (platform and "xbox" in str(platform).lower())
+                    or (source and "xbox" in str(source).lower())
+                )
+
                 if last_played:
                     inc_dt = _parse_utc_iso(last_played)
                     prev_dt = _parse_utc_iso(existing["last_played"]) if existing["last_played"] else None
                     if inc_dt and (prev_dt is None or inc_dt > prev_dt):
-                        ended_dt = inc_dt
-                if ended_dt is None:
-                    ended_dt = datetime.now(timezone.utc)
+                        if is_xbox:
+                            # Xbox titleHistory.lastTimePlayed is when the user launched/started the game
+                            started_dt = inc_dt
+                            now_utc = datetime.now(timezone.utc)
+                            ended_dt = started_dt + timedelta(minutes=delta_minutes)
+                            if ended_dt > now_utc:
+                                ended_dt = now_utc
+                                if started_dt > ended_dt:
+                                    started_dt = max(inc_dt, ended_dt - timedelta(minutes=delta_minutes))
+                        else:
+                            # Steam & PSN last_played is when the user exited/closed the game
+                            ended_dt = inc_dt
+                            started_dt = ended_dt - timedelta(minutes=delta_minutes)
 
-                started_dt = ended_dt - timedelta(minutes=delta_minutes)
+                if ended_dt is None or started_dt is None:
+                    ended_dt = datetime.now(timezone.utc)
+                    started_dt = ended_dt - timedelta(minutes=delta_minutes)
+
                 ended_at_str = ended_dt.isoformat()
                 started_at_str = started_dt.isoformat()
 
@@ -5315,11 +5334,13 @@ def get_sessions_analytics(
 def get_session_unlocked_achievements(
     conn: sqlite3.Connection,
     session: Dict[str, Any],
+    excluded_names: Optional[Set[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve achievements unlocked during a specific play session.
-    First checks for achievements unlocked within the session's time window (+/- 45m).
-    Falls back to achievements unlocked closest to/before ended_at if timestamps were estimated.
+    Matches achievements whose unlock_time falls within the session's timeframe (+/- 30m window).
+    Never attaches achievements unlocked days prior or outside the session window,
+    and deduplicates across sessions so identical achievements are never repeated.
     """
     limit_count = int(session.get("achievements_unlocked") or 0)
     if limit_count <= 0:
@@ -5335,8 +5356,38 @@ def get_session_unlocked_achievements(
         ).fetchall()
         target_ids = list({int(r["id"]) for r in linked_rows} | {int(session["game_id"])})
     placeholders = ",".join("?" for _ in target_ids)
+    excluded = set(excluded_names or ())
 
-    # 1. Direct window match (unlock_time within started_at - 45m and ended_at + 45m)
+    # 1. Direct window match (unlock_time within started_at - 30m and ended_at + 30m)
+    start_dt = _parse_utc_iso(session.get("started_at"))
+    end_dt = _parse_utc_iso(session.get("ended_at"))
+    if start_dt and end_dt:
+        min_iso = (start_dt - timedelta(minutes=30)).isoformat()
+        max_iso = (end_dt + timedelta(minutes=30)).isoformat()
+        try:
+            cur = conn.execute(
+                f"""
+                SELECT DISTINCT name, description, icon_url, unlock_time, rarity_pct
+                FROM game_achievements
+                WHERE game_id IN ({placeholders})
+                  AND unlocked = 1
+                  AND unlock_time IS NOT NULL
+                  AND unlock_time != ''
+                  AND unlock_time >= ?
+                  AND unlock_time <= ?
+                ORDER BY unlock_time DESC
+                """,
+                tuple(target_ids + [min_iso, max_iso]),
+            )
+            matches = [dict(r) for r in cur.fetchall() if r["name"] not in excluded]
+            if matches:
+                return matches[:limit_count]
+        except Exception:
+            pass
+
+    # 2. Dateless fallback: ONLY achievements where unlock_time is NULL/empty
+    # (for legacy imports or platforms without unlock timestamps). Never attach
+    # achievements that have an explicit timestamp outside this session's window.
     try:
         cur = conn.execute(
             f"""
@@ -5344,56 +5395,19 @@ def get_session_unlocked_achievements(
             FROM game_achievements
             WHERE game_id IN ({placeholders})
               AND unlocked = 1
-              AND unlock_time IS NOT NULL
-              AND unlock_time != ''
-              AND unlock_time >= datetime(?, '-45 minutes')
-              AND unlock_time <= datetime(?, '+45 minutes')
-            ORDER BY unlock_time DESC
+              AND (unlock_time IS NULL OR unlock_time = '')
+            ORDER BY id DESC
+            LIMIT ?
             """,
-            tuple(target_ids + [session["started_at"], session["ended_at"]]),
+            tuple(target_ids + [limit_count * 2]),
         )
-        matches = [dict(r) for r in cur.fetchall()]
+        matches = [dict(r) for r in cur.fetchall() if r["name"] not in excluded]
         if matches:
             return matches[:limit_count]
     except Exception:
         pass
 
-    # 2. Fallback: unlocked closest to/before ended_at (+1 day margin for sync delays)
-    try:
-        cur = conn.execute(
-            f"""
-            SELECT DISTINCT name, description, icon_url, unlock_time, rarity_pct
-            FROM game_achievements
-            WHERE game_id IN ({placeholders})
-              AND unlocked = 1
-              AND (unlock_time <= datetime(?, '+1 day') OR unlock_time IS NULL OR unlock_time = '')
-            ORDER BY CASE WHEN unlock_time IS NOT NULL AND unlock_time != '' THEN unlock_time ELSE '0000-00-00' END DESC
-            LIMIT ?
-            """,
-            tuple(target_ids + [session["ended_at"], limit_count]),
-        )
-        matches = [dict(r) for r in cur.fetchall()]
-        if matches:
-            return matches
-    except Exception:
-        pass
-
-    # 3. Super fallback: any unlocked for this game
-    try:
-        cur = conn.execute(
-            f"""
-            SELECT DISTINCT name, description, icon_url, unlock_time, rarity_pct
-            FROM game_achievements
-            WHERE game_id IN ({placeholders})
-              AND unlocked = 1
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            tuple(target_ids + [limit_count]),
-        )
-        return [dict(r) for r in cur.fetchall()]
-    except Exception:
-        return []
+    return []
 
 
 def get_play_sessions(
@@ -5450,9 +5464,18 @@ def get_play_sessions(
         rows = conn.execute(query_sql, tuple(params + [limit, offset])).fetchall()
         sessions = [dict(r) for r in rows]
 
+        used_ach_by_game: Dict[int, Set[str]] = {}
         for s in sessions:
+            g_id = int(s["game_id"])
+            if g_id not in used_ach_by_game:
+                used_ach_by_game[g_id] = set()
             if s.get("achievements_unlocked", 0) > 0:
-                s["achievements"] = get_session_unlocked_achievements(conn, s)
+                s["achievements"] = get_session_unlocked_achievements(
+                    conn, s, excluded_names=used_ach_by_game[g_id]
+                )
+                for a in s["achievements"]:
+                    if a.get("name"):
+                        used_ach_by_game[g_id].add(a["name"])
             else:
                 s["achievements"] = []
 
