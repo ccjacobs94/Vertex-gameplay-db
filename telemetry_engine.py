@@ -310,11 +310,16 @@ class XboxSessionMonitor:
                 db_path=self.db_path,
             )
             game_id = saved_game["id"]
+            game_platform = "Xbox"
             baseline_minutes = 0.0
             baseline_achs = 0
         else:
             game_id = game_row["id"]
-            baseline_minutes = round(float(game_row["playtime_hours"] or 0.0) * 60.0, 2)
+            game_platform = (game_row["platform"] if "platform" in game_row.keys() and game_row["platform"] else "Xbox")
+            if "playtime_minutes" in game_row.keys() and game_row["playtime_minutes"] is not None:
+                baseline_minutes = float(game_row["playtime_minutes"])
+            else:
+                baseline_minutes = round(float(game_row["playtime_hours"] or 0.0) * 60.0, 2)
             baseline_achs = int(game_row["achievements_unlocked"] or 0)
 
         started_dt = datetime.now(timezone.utc)
@@ -326,7 +331,7 @@ class XboxSessionMonitor:
             started_at=started_iso,
             detection_method="presence_poll",
             source="Xbox",
-            platform="Xbox",
+            platform=game_platform,
             db_path=self.db_path,
         )
 
@@ -335,6 +340,7 @@ class XboxSessionMonitor:
             "gameId": game_id,
             "titleId": str(title_id),
             "titleName": title_name,
+            "platform": game_platform,
             "startedAt": started_dt,
             "lastSeenAt": started_dt,
             "baselineMinutes": baseline_minutes,
@@ -390,13 +396,15 @@ class XboxSessionMonitor:
         # Update playtime_hours on games table if cloud minutes increased
         if cloud_delta > 0:
             new_total_hours = round(updated_minutes / 60.0, 2)
+            new_total_minutes = int(round(updated_minutes))
             upsert_synced_game(
                 external_id=f"xbox:{session['titleId']}",
                 title=session["titleName"],
-                platform="Xbox",
+                platform=session.get("platform") or "Xbox",
                 source="Xbox",
                 playtime_hours=new_total_hours,
-                last_played=ended_at.isoformat(),
+                playtime_minutes=new_total_minutes,
+                last_played=start_time.isoformat(),
                 achievements_unlocked=session.get("baselineAchievements", 0) + achievements_earned,
                 db_path=self.db_path,
             )

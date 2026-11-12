@@ -644,6 +644,12 @@ async def sync_xbox(
                 except Exception as exc:
                     logger.warning("Could not fetch Xbox account XUID: %s", exc)
 
+            if uid and xuid and not xbox_xuid:
+                try:
+                    system_db.set_user_connections(uid, xbox_xuid=str(xuid))
+                except Exception:
+                    pass
+
             # Bulk-fetch MinutesPlayed across all titleIds via POST /api/v2/player/stats
             playtime_map: Dict[str, float] = {}
             all_title_ids = [str(t.get("titleId")) for t in titles if t.get("titleId")]

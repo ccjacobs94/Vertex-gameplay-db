@@ -55,6 +55,7 @@ Vertex includes an automated play session delta engine and telemetry tracker:
 - **Play Sessions MCP Tool**: `get_play_sessions(game_title=None, platform=None, days_back=30, limit=25)` retrieves granular play sessions derived from sync deltas across Steam, Xbox, and PlayStation.
 - **Session Analytics MCP Tool**: `get_session_analytics(days_back=30)` returns aggregated playtime velocity, active gaming days, average session length, and top played titles in the window.
 - **Session Notes MCP Tool**: `update_session_notes(session_id, notes)` appends or updates personal journal notes on a session and automatically sets `is_locked = 1`.
+- **Home Assistant History MCP Tool**: `import_homeassistant_sessions(csv_content, platform="Xbox")` ingests Home Assistant history exports into verified play sessions.
 - **Session History MCP Tool**: `get_session_history(title=None, platform=None, days=30, limit=50)` retrieves detailed play session records with exact timestamps, active vs idle durations, achievement unlocks during the session, and daily telemetry metrics.
 - **REST Session APIs**:
   - `GET /api/sessions?days=30&platform=...`: Chronological list of play sessions joined with game title and cover art.

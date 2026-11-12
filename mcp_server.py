@@ -1118,6 +1118,23 @@ def update_session_notes(
     return _sanitize_output({"status": "ok", "session": updated})
 
 
+@mcp.tool()
+def import_homeassistant_sessions(
+    csv_content: str,
+    platform: str = "Xbox",
+) -> Dict[str, Any]:
+    """
+    Import video game play sessions from a Home Assistant history CSV export.
+    Parses contiguous play states (e.g. from sensor.<gamertag>_now_playing) into verified play sessions.
+    """
+    import homeassistant_sync
+    db_path = get_default_db_path()
+    spans = homeassistant_sync.parse_ha_csv_to_spans(csv_content)
+    res = homeassistant_sync.ingest_ha_spans(spans, platform=platform, db_path=db_path)
+    return _sanitize_output(res)
+
+
+
 @mcp.resource("vertex://wishlist/active")
 def resource_wishlist_active() -> str:
     """Active wishlist items, watched platform targets, and latest prices."""

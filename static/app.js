@@ -3752,6 +3752,18 @@ async function loadSettingsConnections() {
         ? (data.psn_npsso_masked || "Configured (enter new to change)")
         : "Enter 64-char token (leave blank to keep current)";
     }
+
+    const haUrlInput = document.getElementById("setting-ha-url");
+    const haEntityInput = document.getElementById("setting-ha-entity");
+    const haTokenInput = document.getElementById("setting-ha-token");
+    if (haUrlInput) haUrlInput.value = data.ha_url || "";
+    if (haEntityInput) haEntityInput.value = data.ha_entity_id || "";
+    if (haTokenInput) {
+      haTokenInput.value = "";
+      haTokenInput.placeholder = data.has_ha_token
+        ? (data.ha_token_masked || "Configured (enter new to change)")
+        : "Paste token (leave blank to keep current)";
+    }
   } catch (err) {
     console.error("Failed to load connections:", err);
   }
@@ -3773,6 +3785,13 @@ async function saveSettingsConnections() {
   if (psnInput && psnInput.value.trim()) {
     payload.psn_npsso = psnInput.value.trim();
   }
+
+  const haUrlInput = document.getElementById("setting-ha-url");
+  const haEntityInput = document.getElementById("setting-ha-entity");
+  const haTokenInput = document.getElementById("setting-ha-token");
+  if (haUrlInput) payload.ha_url = haUrlInput.value.trim();
+  if (haEntityInput) payload.ha_entity_id = haEntityInput.value.trim();
+  if (haTokenInput && haTokenInput.value.trim()) payload.ha_token = haTokenInput.value.trim();
 
   if (statusEl) {
     statusEl.className = "settings-status-msg";
@@ -3803,6 +3822,85 @@ async function saveSettingsConnections() {
     if (statusEl) {
       statusEl.className = "settings-status-msg error";
       statusEl.textContent = "Error saving connections";
+    }
+  }
+}
+
+async function triggerHaHistorySync() {
+  const statusEl = document.getElementById("settings-ha-status");
+  const btn = document.getElementById("btn-sync-ha-api");
+  if (btn) btn.disabled = true;
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.className = "verification-badge-card";
+    statusEl.textContent = "Pulling history from Home Assistant...";
+  }
+  try {
+    const res = await fetch("/api/integrations/homeassistant/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ha_url: document.getElementById("setting-ha-url")?.value?.trim() || undefined,
+        ha_token: document.getElementById("setting-ha-token")?.value?.trim() || undefined,
+        entity_id: document.getElementById("setting-ha-entity")?.value?.trim() || undefined,
+      }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      if (statusEl) {
+        statusEl.className = "verification-badge-card success";
+        statusEl.textContent = `✓ Imported ${data.result?.imported_count || 0} sessions (${data.result?.skipped_count || 0} duplicates skipped)!`;
+      }
+      fetchSessions();
+      fetchSessionsStats();
+    } else {
+      if (statusEl) {
+        statusEl.className = "verification-badge-card error";
+        statusEl.textContent = data.detail || "Failed to sync Home Assistant history.";
+      }
+    }
+  } catch (err) {
+    if (statusEl) {
+      statusEl.className = "verification-badge-card error";
+      statusEl.textContent = "Network error connecting to Home Assistant.";
+    }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function handleHaCsvImport(file) {
+  const statusEl = document.getElementById("settings-ha-status");
+  if (statusEl) {
+    statusEl.hidden = false;
+    statusEl.className = "verification-badge-card";
+    statusEl.textContent = `Importing ${file.name}...`;
+  }
+  try {
+    const text = await file.text();
+    const res = await fetch("/api/integrations/homeassistant/import-csv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ csv_content: text }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      if (statusEl) {
+        statusEl.className = "verification-badge-card success";
+        statusEl.textContent = `✓ Imported ${data.result?.imported_count || 0} sessions from CSV (${data.result?.skipped_count || 0} duplicates skipped)!`;
+      }
+      fetchSessions();
+      fetchSessionsStats();
+    } else {
+      if (statusEl) {
+        statusEl.className = "verification-badge-card error";
+        statusEl.textContent = data.detail || "Failed to import CSV.";
+      }
+    }
+  } catch (err) {
+    if (statusEl) {
+      statusEl.className = "verification-badge-card error";
+      statusEl.textContent = "Error reading or uploading CSV file.";
     }
   }
 }
@@ -7390,6 +7488,24 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnSaveConn = document.getElementById("btn-save-connections");
   if (btnSaveConn) {
     btnSaveConn.addEventListener("click", saveSettingsConnections);
+  }
+
+  const btnSyncHa = document.getElementById("btn-sync-ha-api");
+  if (btnSyncHa) {
+    btnSyncHa.addEventListener("click", triggerHaHistorySync);
+  }
+
+  const btnImportHaCsv = document.getElementById("btn-import-ha-csv");
+  const haCsvFileInput = document.getElementById("ha-csv-file-input");
+  if (btnImportHaCsv && haCsvFileInput) {
+    btnImportHaCsv.addEventListener("click", () => {
+      haCsvFileInput.value = "";
+      haCsvFileInput.click();
+    });
+    haCsvFileInput.addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) handleHaCsvImport(file);
+    });
   }
 
   const btnCopyMcp = document.getElementById("btn-copy-mcp-endpoint");
