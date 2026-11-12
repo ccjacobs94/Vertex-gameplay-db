@@ -945,6 +945,8 @@ def upsert_synced_game(
                 # Timestamp Resolution
                 ended_dt = None
                 started_dt = None
+                used_fresh_last_played = False
+                session_duration_mins = delta_minutes
                 is_xbox = bool(
                     (platform and "xbox" in str(platform).lower())
                     or (source and "xbox" in str(source).lower())
@@ -954,6 +956,7 @@ def upsert_synced_game(
                     inc_dt = _parse_utc_iso(last_played)
                     prev_dt = _parse_utc_iso(existing["last_played"]) if existing["last_played"] else None
                     if inc_dt and (prev_dt is None or inc_dt > prev_dt):
+                        used_fresh_last_played = True
                         if is_xbox:
                             # Xbox titleHistory.lastTimePlayed is when the user launched/started the game
                             started_dt = inc_dt
@@ -971,6 +974,71 @@ def upsert_synced_game(
                 if ended_dt is None or started_dt is None:
                     ended_dt = datetime.now(timezone.utc)
                     started_dt = ended_dt - timedelta(minutes=delta_minutes)
+
+                # Prevent cross-game overlapping play sessions
+                overlapping_others = conn.execute(
+                    """
+                    SELECT id, game_id, started_at, ended_at, duration_minutes, is_locked
+                    FROM play_sessions
+                    WHERE game_id != ?
+                      AND started_at < ?
+                      AND ended_at > ?
+                    ORDER BY ended_at DESC, id DESC
+                    """,
+                    (game_id, ended_dt.isoformat(), started_dt.isoformat()),
+                ).fetchall()
+
+                if overlapping_others:
+                    if not used_fresh_last_played:
+                        # Stale last_played fallback anchored to now_utc: clamp start to end of overlapping other game
+                        for other in overlapping_others:
+                            other_start = _parse_utc_iso(other["started_at"])
+                            other_end = _parse_utc_iso(other["ended_at"])
+                            if other_start and other_end and started_dt < other_end and (ended_dt - other_end).total_seconds() >= 60:
+                                post_minutes = max(1, int(round((ended_dt - other_end).total_seconds() / 60.0)))
+                                overflow_minutes = max(0, session_duration_mins - post_minutes)
+                                if overflow_minutes > 0:
+                                    prev_before = conn.execute(
+                                        """
+                                        SELECT id, started_at, ended_at, duration_minutes, is_locked
+                                        FROM play_sessions
+                                        WHERE game_id = ? AND platform = ? AND is_locked = 0
+                                          AND ended_at <= ?
+                                        ORDER BY ended_at DESC, id DESC
+                                        LIMIT 1
+                                        """,
+                                        (game_id, platform, other_start.isoformat()),
+                                    ).fetchone()
+                                    if prev_before:
+                                        pb_end = _parse_utc_iso(prev_before["ended_at"])
+                                        if pb_end and (other_start - pb_end).total_seconds() <= 12 * 3600:
+                                            new_pb_end = min(other_start, pb_end + timedelta(minutes=overflow_minutes))
+                                            new_pb_dur = int(prev_before["duration_minutes"]) + overflow_minutes
+                                            conn.execute(
+                                                "UPDATE play_sessions SET ended_at = ?, duration_minutes = ? WHERE id = ?",
+                                                (new_pb_end.isoformat(), new_pb_dur, prev_before["id"]),
+                                            )
+                                started_dt = other_end
+                                session_duration_mins = post_minutes
+                                break
+                    else:
+                        # Explicit platform timestamp: clamp overlap boundary between the two games
+                        for other in overlapping_others:
+                            other_start = _parse_utc_iso(other["started_at"])
+                            other_end = _parse_utc_iso(other["ended_at"])
+                            if not other_start or not other_end:
+                                continue
+                            if other_start < started_dt < other_end and not bool(other["is_locked"]):
+                                if (started_dt - other_start).total_seconds() >= 60:
+                                    trimmed_dur = max(1, int(round((started_dt - other_start).total_seconds() / 60.0)))
+                                    conn.execute(
+                                        "UPDATE play_sessions SET ended_at = ?, duration_minutes = ? WHERE id = ? AND is_locked = 0",
+                                        (started_dt.isoformat(), trimmed_dur, other["id"]),
+                                    )
+                            elif started_dt < other_start < ended_dt:
+                                if (other_start - started_dt).total_seconds() >= 60:
+                                    ended_dt = other_start
+                                    session_duration_mins = max(1, int(round((ended_dt - started_dt).total_seconds() / 60.0)))
 
                 ended_at_str = ended_dt.isoformat()
                 started_at_str = started_dt.isoformat()
@@ -1001,7 +1069,7 @@ def upsert_synced_game(
                         if gap_seconds <= 1800:
                             coalesced = True
                             merged_ended_dt = max(prev_ended_dt, ended_dt)
-                            merged_duration = int(prev_sess["duration_minutes"]) + delta_minutes
+                            merged_duration = int(prev_sess["duration_minutes"]) + session_duration_mins
                             merged_ach = int(prev_sess["achievements_unlocked"] or 0) + ach_delta
                             conn.execute(
                                 """
@@ -1022,7 +1090,7 @@ def upsert_synced_game(
                             source, notes, achievements_unlocked, is_locked
                         ) VALUES (?, ?, ?, ?, ?, 'sync', NULL, ?, 0)
                         """,
-                        (game_id, platform, started_at_str, ended_at_str, delta_minutes, ach_delta),
+                        (game_id, platform, started_at_str, ended_at_str, session_duration_mins, ach_delta),
                     )
 
                 # Automatic Status Transition

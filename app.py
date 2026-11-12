@@ -204,14 +204,14 @@ async def _periodic_telemetry_loop() -> None:
     await asyncio.sleep(5)
     while True:
         try:
+            default_user = get_auth_username()
             active_uids = system_db.list_active_user_ids()
             if not active_uids:
-                default_user = get_auth_username()
                 active_uids = [default_user]
             for uid in active_uids:
                 try:
                     conn = system_db.get_user_connections(uid)
-                    api_key = conn.get("xbl_api_key") or os.environ.get("XBL_API_KEY", "")
+                    api_key = conn.get("xbl_api_key") or (os.environ.get("XBL_API_KEY", "") if uid == default_user else "")
                     xuid = conn.get("xbox_xuid")
                     if not xuid and conn.get("xbox_gamertag") and api_key:
                         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -219,6 +219,18 @@ async def _periodic_telemetry_loop() -> None:
                             if gt_data and gt_data.get("xuid"):
                                 xuid = gt_data["xuid"]
                                 system_db.set_user_connections(uid, xbox_xuid=xuid)
+                    elif not xuid and api_key and uid == default_user:
+                        async with httpx.AsyncClient(
+                            timeout=10.0,
+                            headers={"X-Authorization": api_key, "Accept": "application/json"},
+                        ) as client:
+                            acc_resp = await client.get("https://xbl.io/api/v2/account")
+                            if acc_resp.status_code == 200:
+                                acc_data = acc_resp.json()
+                                users = (acc_data.get("content") or {}).get("profileUsers") or acc_data.get("profileUsers") or []
+                                if users and isinstance(users[0], dict) and users[0].get("id"):
+                                    xuid = str(users[0]["id"])
+                                    system_db.set_user_connections(uid, xbox_xuid=xuid)
                     if api_key and xuid:
                         user_db_path = str(_get_active_user_db_path(uid))
                         tz_settings = system_db.get_user_timezone_settings(uid) or {}

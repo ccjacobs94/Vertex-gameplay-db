@@ -536,6 +536,132 @@ class TestPlaySessionAPIAndMCP(unittest.TestCase):
         # Intersect must be empty (identical achievements can never appear across different sessions)
         self.assertEqual(len(set(achs_11) & set(achs_10)), 0)
 
+    def test_stale_last_played_fallback_does_not_overlap_other_game_session(self):
+        """Regression test: stale Xbox lastTimePlayed fallback must not overlap an active session of another game."""
+        gears = db.upsert_synced_game(
+            external_id="xbox:1810111157",
+            title="Gears of War: E-Day",
+            platform="Xbox / PC",
+            source="Xbox",
+            playtime_minutes=2618,
+            db_path=self.db_path,
+        )
+        quiet = db.upsert_synced_game(
+            external_id="xbox:1679168855",
+            title="A Quiet Place: The Road Ahead",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=355,
+            db_path=self.db_path,
+        )
+
+        now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+        # Afternoon session of Gears of War (started 7h31m ago, 100m duration)
+        afternoon_launch = now_utc - timedelta(hours=7, minutes=31)
+        db.upsert_synced_game(
+            external_id="xbox:1810111157",
+            title="Gears of War: E-Day",
+            platform="Xbox / PC",
+            source="Xbox",
+            playtime_minutes=2718,  # +100m
+            last_played=afternoon_launch.isoformat(),
+            db_path=self.db_path,
+        )
+
+        # Evening session of A Quiet Place (started 3h48m ago, 152m duration -> ends 1h16m ago)
+        evening_quiet_launch = now_utc - timedelta(hours=3, minutes=48)
+        quiet_expected_end = evening_quiet_launch + timedelta(minutes=152)
+        db.upsert_synced_game(
+            external_id="xbox:1679168855",
+            title="A Quiet Place: The Road Ahead",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=507,  # 355 + 152m
+            last_played=evening_quiet_launch.isoformat(),
+            db_path=self.db_path,
+        )
+
+        # Evening sync of Gears of War (+125m total delta, but Xbox API still reports afternoon_launch!)
+        db.upsert_synced_game(
+            external_id="xbox:1810111157",
+            title="Gears of War: E-Day",
+            platform="Xbox / PC",
+            source="Xbox",
+            playtime_minutes=2843,  # +125m
+            last_played=afternoon_launch.isoformat(),
+            db_path=self.db_path,
+        )
+
+        gears_sessions = db.get_play_sessions(game_id=gears["id"], db_path=self.db_path)["sessions"]
+        quiet_sessions = db.get_play_sessions(game_id=quiet["id"], db_path=self.db_path)["sessions"]
+        self.assertEqual(len(quiet_sessions), 1)
+        self.assertEqual(len(gears_sessions), 2)
+
+        evening_gears = gears_sessions[0]
+        afternoon_gears = gears_sessions[1]
+        evening_quiet = quiet_sessions[0]
+
+        # Evening Gears of War session must NOT start before Evening A Quiet Place ended
+        gears_start = datetime.fromisoformat(evening_gears["started_at"].replace("Z", "+00:00"))
+        quiet_end = datetime.fromisoformat(evening_quiet["ended_at"].replace("Z", "+00:00"))
+        self.assertGreaterEqual(gears_start, quiet_end)
+        self.assertEqual(gears_start, quiet_expected_end)
+        # Duration of evening Gears should be ~76m (1h 16m), and overflow (~49m) rolled into afternoon Gears (100 + 49 = 149m)
+        self.assertAlmostEqual(evening_gears["duration_minutes"], 76, delta=2)
+        self.assertAlmostEqual(afternoon_gears["duration_minutes"], 149, delta=2)
+
+    def test_fresh_launch_timestamps_across_games_clamp_overlap(self):
+        """Regression test: switching from Game A to Game B clamps Game A's end time so sessions do not overlap."""
+        g1 = db.upsert_synced_game(
+            external_id="xbox:6001",
+            title="Game Alpha",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=100,
+            db_path=self.db_path,
+        )
+        g2 = db.upsert_synced_game(
+            external_id="xbox:6002",
+            title="Game Beta",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=100,
+            db_path=self.db_path,
+        )
+
+        t_alpha = datetime(2026, 11, 11, 18, 0, 0, tzinfo=timezone.utc)
+        t_beta = datetime(2026, 11, 11, 19, 0, 0, tzinfo=timezone.utc)
+
+        # Alpha reports +90m (18:00 -> 19:30 due to background idle)
+        db.upsert_synced_game(
+            external_id="xbox:6001",
+            title="Game Alpha",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=190,
+            last_played=t_alpha.isoformat(),
+            db_path=self.db_path,
+        )
+        # Beta reports launch at 19:00 for 60m (19:00 -> 20:00)
+        db.upsert_synced_game(
+            external_id="xbox:6002",
+            title="Game Beta",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=160,
+            last_played=t_beta.isoformat(),
+            db_path=self.db_path,
+        )
+
+        s_alpha = db.get_play_sessions(game_id=g1["id"], db_path=self.db_path)["sessions"][0]
+        s_beta = db.get_play_sessions(game_id=g2["id"], db_path=self.db_path)["sessions"][0]
+
+        alpha_end = datetime.fromisoformat(s_alpha["ended_at"].replace("Z", "+00:00"))
+        beta_start = datetime.fromisoformat(s_beta["started_at"].replace("Z", "+00:00"))
+        self.assertLessEqual(alpha_end, beta_start)
+        self.assertEqual(s_alpha["ended_at"], t_beta.isoformat())
+        self.assertEqual(s_alpha["duration_minutes"], 60)
+
 
 if __name__ == "__main__":
     unittest.main()
