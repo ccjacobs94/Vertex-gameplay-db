@@ -868,6 +868,23 @@ class UserConnectionsUpdateRequest(BaseModel):
     xbox_gamertag: Optional[str] = None
     psn_npsso: Optional[str] = None
     xbl_watcher_api_key: Optional[str] = None
+    ha_url: Optional[str] = None
+    ha_token: Optional[str] = None
+    ha_entity_id: Optional[str] = None
+
+
+class HomeAssistantSyncRequest(BaseModel):
+    ha_url: Optional[str] = None
+    ha_token: Optional[str] = None
+    entity_id: Optional[str] = None
+    platform: Optional[str] = "Xbox"
+    days_back: Optional[int] = Field(default=7, ge=1, le=365)
+
+
+class HomeAssistantImportCSVRequest(BaseModel):
+    csv_content: str
+    platform: Optional[str] = "Xbox"
+    max_gap_seconds: Optional[int] = 1800
 
 
 class SessionTransitionRequest(BaseModel):
@@ -1574,6 +1591,60 @@ async def api_trigger_sync(platform: Optional[str] = None) -> Dict[str, Any]:
     return {"status": "completed", "results": results, "stats": get_library_stats()}
 
 
+@app.post("/api/integrations/homeassistant/import-csv")
+async def api_homeassistant_import_csv(
+    payload: HomeAssistantImportCSVRequest, request: Request
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user_db_path = str(_get_active_user_db_path(user_id))
+
+    import homeassistant_sync
+    spans = homeassistant_sync.parse_ha_csv_to_spans(
+        payload.csv_content, max_gap_seconds=payload.max_gap_seconds or 1800
+    )
+    res = homeassistant_sync.ingest_ha_spans(
+        spans, platform=payload.platform or "Xbox", db_path=user_db_path
+    )
+    return {"status": "ok", "result": res}
+
+
+@app.post("/api/integrations/homeassistant/sync")
+async def api_homeassistant_sync(
+    payload: HomeAssistantSyncRequest, request: Request
+) -> Dict[str, Any]:
+    user_id, _ = _get_active_user(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    user_db_path = str(_get_active_user_db_path(user_id))
+
+    conns = system_db.get_user_connections(user_id)
+    ha_url = payload.ha_url or conns.get("ha_url") or os.environ.get("HOMEASSISTANT_URL") or os.environ.get("HA_URL")
+    ha_token = payload.ha_token or conns.get("ha_token") or os.environ.get("HOMEASSISTANT_TOKEN") or os.environ.get("HA_TOKEN")
+    ha_entity = payload.entity_id or conns.get("ha_entity_id") or os.environ.get("HOMEASSISTANT_ENTITY_ID") or os.environ.get("HA_ENTITY_ID")
+
+    if not ha_url or not ha_token or not ha_entity:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing Home Assistant configuration: ha_url, ha_token, and entity_id are required.",
+        )
+
+    import homeassistant_sync
+    try:
+        res = await homeassistant_sync.sync_homeassistant_history(
+            ha_url=ha_url,
+            ha_token=ha_token,
+            entity_id=ha_entity,
+            platform=payload.platform or "Xbox",
+            days_back=payload.days_back or 7,
+            db_path=user_db_path,
+        )
+        return {"status": "ok", "result": res}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch Home Assistant history: {exc}")
+
+
 @app.post("/api/enrich-metadata")
 async def api_enrich_metadata(
     limit: int = Query(default=500, ge=1, le=2000),
@@ -2195,6 +2266,10 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
         except Exception:
             pass
 
+    ha_tok = conns.get("ha_token", "") or os.environ.get("HOMEASSISTANT_TOKEN", "") or os.environ.get("HA_TOKEN", "")
+    ha_url = conns.get("ha_url", "") or os.environ.get("HOMEASSISTANT_URL", "") or os.environ.get("HA_URL", "")
+    ha_entity = conns.get("ha_entity_id", "") or os.environ.get("HOMEASSISTANT_ENTITY_ID", "") or os.environ.get("HA_ENTITY_ID", "")
+
     return {
         "user_id": user_id,
         "username": username,
@@ -2203,13 +2278,18 @@ async def api_get_user_connections(request: Request) -> Dict[str, Any]:
         "xbox_gamertag": conns.get("xbox_gamertag", ""),
         "xbox_xuid": conns.get("xbox_xuid", ""),
         "has_psn_npsso": bool(psn_token),
+        "ha_url": ha_url,
+        "has_ha_token": bool(ha_tok),
+        "ha_entity_id": ha_entity,
         "onboarding_completed": onboarding_completed,
         "xbl_api_key_masked": (f"••••••••{xbl_key[-4:]}" if len(xbl_key) >= 4 else ("••••" if xbl_key else "")),
         "psn_npsso_masked": (f"••••••••{psn_token[-4:]}" if len(psn_token) >= 4 else ("••••" if psn_token else "")),
+        "ha_token_masked": (f"••••••••{ha_tok[-4:]}" if len(ha_tok) >= 4 else ("••••" if ha_tok else "")),
         "server_defaults": {
             "steam": bool(os.environ.get("STEAM_API_KEY") and (os.environ.get("STEAM_ID") if is_primary else False)),
             "xbox": bool(os.environ.get("XBL_API_KEY")),
             "psn": bool(os.environ.get("PSN_NPSSO") if is_primary else False),
+            "homeassistant": bool(os.environ.get("HOMEASSISTANT_TOKEN") or os.environ.get("HA_TOKEN")),
         },
     }
 
@@ -2249,6 +2329,9 @@ async def api_update_user_connections(
 
     psn = "" if payload.psn_npsso == "__CLEAR__" else (clean_psn_token(payload.psn_npsso) if payload.psn_npsso else None)
     xbl_watcher = "" if payload.xbl_watcher_api_key == "__CLEAR__" else (clean_xbl_key(payload.xbl_watcher_api_key) if payload.xbl_watcher_api_key else None)
+    ha_u = "" if payload.ha_url == "__CLEAR__" else (payload.ha_url.strip() if payload.ha_url is not None else None)
+    ha_tok = "" if payload.ha_token == "__CLEAR__" else (payload.ha_token.strip() if payload.ha_token is not None else None)
+    ha_ent = "" if payload.ha_entity_id == "__CLEAR__" else (payload.ha_entity_id.strip() if payload.ha_entity_id is not None else None)
 
     # Attempt to resolve xuid immediately if gamertag is configured and server has key
     resolved_xuid = None
@@ -2270,6 +2353,9 @@ async def api_update_user_connections(
         xbox_xuid=resolved_xuid,
         psn_npsso=psn,
         xbl_watcher_api_key=xbl_watcher,
+        ha_url=ha_u,
+        ha_token=ha_tok,
+        ha_entity_id=ha_ent,
     )
     return {
         "status": "ok",
@@ -2281,6 +2367,9 @@ async def api_update_user_connections(
             "xbox_xuid": updated.get("xbox_xuid", ""),
             "has_psn_npsso": bool(updated.get("psn_npsso")),
             "has_xbl_watcher_api_key": bool(updated.get("xbl_watcher_api_key")),
+            "ha_url": updated.get("ha_url", ""),
+            "has_ha_token": bool(updated.get("ha_token")),
+            "ha_entity_id": updated.get("ha_entity_id", ""),
             "onboarding_completed": bool(updated.get("onboarding_completed", False)),
         },
     }
