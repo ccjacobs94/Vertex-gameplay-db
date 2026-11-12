@@ -1611,6 +1611,35 @@
             <div id="settings-psn-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
           </div>
 
+          <div class="form-group" style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 1.25rem; margin-top: 1.25rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; flex-wrap: wrap; gap: 0.4rem;">
+              <label for="setting-ha-url" style="margin: 0; font-weight: 600;">Home Assistant History Sync</label>
+              <div style="display: flex; gap: 0.4rem;">
+                <button type="button" id="btn-import-ha-csv" class="btn btn-sm btn-secondary" title="Import history CSV">Import CSV</button>
+                <button type="button" id="btn-sync-ha-api" class="btn btn-sm btn-secondary" title="Fetch history via REST API">Pull History</button>
+              </div>
+            </div>
+            <span class="form-hint" style="margin-bottom: 0.75rem; display: block;">
+              Pull granular play sessions directly from your Home Assistant server (Option B).
+            </span>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin-bottom: 0.5rem;">
+              <div>
+                <label for="setting-ha-url" style="font-size: 0.75rem;">Server URL</label>
+                <input type="text" id="setting-ha-url" placeholder="http://192.168.x.x:8123" autocomplete="off" />
+              </div>
+              <div>
+                <label for="setting-ha-entity" style="font-size: 0.75rem;">Now Playing Entity ID</label>
+                <input type="text" id="setting-ha-entity" placeholder="sensor.chamelon94_now_playing" autocomplete="off" />
+              </div>
+            </div>
+            <div>
+              <label for="setting-ha-token" style="font-size: 0.75rem;">Long-Lived Access Token</label>
+              <input type="password" id="setting-ha-token" placeholder="Paste token (leave blank to keep current)" autocomplete="off" />
+            </div>
+            <input type="file" id="ha-csv-file-input" accept=".csv,text/csv" style="display: none;" />
+            <div id="settings-ha-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
+          </div>
+
           <div class="settings-actions">
             <button type="button" id="btn-save-connections" class="btn btn-primary">Save Platform Connections</button>
             <span id="connections-status-msg" class="settings-status-msg" aria-live="polite"></span>
@@ -2380,6 +2409,6 @@
     <button type="button" id="mnav-settings" class="mnav-item" aria-label="Settings" onclick="window.openSettingsModal && window.openSettingsModal()"></button>
   </div>
 
-  <script src="/static/app.js?v=61"></script>
+  <script src="/static/app.js?v=62"></script>
 </body>
 </html>

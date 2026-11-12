@@ -258,6 +258,12 @@ def init_system_db(db_path: Optional[str] = None) -> None:
             conn.execute("ALTER TABLE user_connections ADD COLUMN xbox_xuid TEXT")
         if "xbl_watcher_api_key_encrypted" not in conn_cols:
             conn.execute("ALTER TABLE user_connections ADD COLUMN xbl_watcher_api_key_encrypted TEXT")
+        if "ha_url" not in conn_cols:
+            conn.execute("ALTER TABLE user_connections ADD COLUMN ha_url TEXT")
+        if "ha_token_encrypted" not in conn_cols:
+            conn.execute("ALTER TABLE user_connections ADD COLUMN ha_token_encrypted TEXT")
+        if "ha_entity_id" not in conn_cols:
+            conn.execute("ALTER TABLE user_connections ADD COLUMN ha_entity_id TEXT")
 
         # Migrate legacy plaintext platform credentials to Fernet-encrypted format
         try:
@@ -924,6 +930,9 @@ def get_user_connections(user_id: str, db_path: Optional[str] = None) -> Dict[st
             "xbox_gamertag": str(row["xbox_gamertag"] or "") if "xbox_gamertag" in keys else "",
             "xbox_xuid": str(row["xbox_xuid"] or "") if "xbox_xuid" in keys else "",
             "psn_npsso": decrypt_credential(str(row["psn_npsso_encrypted"] or "")),
+            "ha_url": str(row["ha_url"] or "") if "ha_url" in keys else "",
+            "ha_token": decrypt_credential(str(row["ha_token_encrypted"] or "")) if "ha_token_encrypted" in keys else "",
+            "ha_entity_id": str(row["ha_entity_id"] or "") if "ha_entity_id" in keys else "",
             "onboarding_completed": bool(row["onboarding_completed"]),
         }
 
@@ -936,6 +945,9 @@ def set_user_connections(
     xbox_gamertag: Optional[str] = None,
     xbox_xuid: Optional[str] = None,
     psn_npsso: Optional[str] = None,
+    ha_url: Optional[str] = None,
+    ha_token: Optional[str] = None,
+    ha_entity_id: Optional[str] = None,
     onboarding_completed: Optional[bool] = None,
     db_path: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -956,22 +968,32 @@ def set_user_connections(
         existing_xbl = decrypt_credential(existing["xbl_api_key_encrypted"]) if existing else ""
         existing_watcher = decrypt_credential(existing["xbl_watcher_api_key_encrypted"]) if existing and "xbl_watcher_api_key_encrypted" in e_keys else ""
         existing_psn = decrypt_credential(existing["psn_npsso_encrypted"]) if existing else ""
+        existing_ha_token = decrypt_credential(existing["ha_token_encrypted"]) if existing and "ha_token_encrypted" in e_keys else ""
+
         final_steam = steam_id.strip() if steam_id is not None else (existing["steam_id"] if existing else "")
         final_xbl = xbl_api_key.strip() if xbl_api_key is not None else existing_xbl
         final_watcher = xbl_watcher_api_key.strip() if xbl_watcher_api_key is not None else existing_watcher
         final_gt = xbox_gamertag.strip() if xbox_gamertag is not None else (existing["xbox_gamertag"] if existing and "xbox_gamertag" in e_keys else "")
         final_xuid = xbox_xuid.strip() if xbox_xuid is not None else (existing["xbox_xuid"] if existing and "xbox_xuid" in e_keys else "")
         final_psn = psn_npsso.strip() if psn_npsso is not None else existing_psn
+        final_ha_url = ha_url.strip() if ha_url is not None else (existing["ha_url"] if existing and "ha_url" in e_keys else "")
+        final_ha_token = ha_token.strip() if ha_token is not None else existing_ha_token
+        final_ha_entity = ha_entity_id.strip() if ha_entity_id is not None else (existing["ha_entity_id"] if existing and "ha_entity_id" in e_keys else "")
         final_onboarding = int(onboarding_completed) if onboarding_completed is not None else (existing["onboarding_completed"] if existing else 0)
 
         enc_xbl = encrypt_credential(final_xbl) if final_xbl else ""
         enc_watcher = encrypt_credential(final_watcher) if final_watcher else ""
         enc_psn = encrypt_credential(final_psn) if final_psn else ""
+        enc_ha_token = encrypt_credential(final_ha_token) if final_ha_token else ""
 
         conn.execute(
             """
-            INSERT INTO user_connections (user_id, steam_id, xbl_api_key_encrypted, xbl_watcher_api_key_encrypted, xbox_gamertag, xbox_xuid, psn_npsso_encrypted, updated_at, onboarding_completed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO user_connections (
+                user_id, steam_id, xbl_api_key_encrypted, xbl_watcher_api_key_encrypted,
+                xbox_gamertag, xbox_xuid, psn_npsso_encrypted, ha_url, ha_token_encrypted,
+                ha_entity_id, updated_at, onboarding_completed
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
                 steam_id = excluded.steam_id,
                 xbl_api_key_encrypted = excluded.xbl_api_key_encrypted,
@@ -979,10 +1001,26 @@ def set_user_connections(
                 xbox_gamertag = excluded.xbox_gamertag,
                 xbox_xuid = excluded.xbox_xuid,
                 psn_npsso_encrypted = excluded.psn_npsso_encrypted,
+                ha_url = excluded.ha_url,
+                ha_token_encrypted = excluded.ha_token_encrypted,
+                ha_entity_id = excluded.ha_entity_id,
                 updated_at = excluded.updated_at,
                 onboarding_completed = excluded.onboarding_completed
             """,
-            (user_id, final_steam, enc_xbl, enc_watcher, final_gt, final_xuid, enc_psn, now, final_onboarding),
+            (
+                user_id,
+                final_steam,
+                enc_xbl,
+                enc_watcher,
+                final_gt,
+                final_xuid,
+                enc_psn,
+                final_ha_url,
+                enc_ha_token,
+                final_ha_entity,
+                now,
+                final_onboarding,
+            ),
         )
     return {
         "steam_id": final_steam,
@@ -991,6 +1029,9 @@ def set_user_connections(
         "xbox_gamertag": final_gt,
         "xbox_xuid": final_xuid,
         "psn_npsso": final_psn,
+        "ha_url": final_ha_url,
+        "ha_token": final_ha_token,
+        "ha_entity_id": final_ha_entity,
         "onboarding_completed": bool(final_onboarding),
     }
 
