@@ -78,6 +78,7 @@ from db import (
     get_sessions_analytics,
     init_db,
     query_games,
+    rebuild_daily_playtime_ledger,
     reconcile_games,
     record_reconciled_session,
     reset_reconcile_dismissals,
@@ -283,12 +284,14 @@ async def _periodic_daily_sweep_loop() -> None:
                         user_db_path = str(_get_active_user_db_path(uid))
                         tz_settings = system_db.get_user_timezone_settings(uid) or {}
                         tz = tz_settings.get("timezone") or "auto"
+                        eras = tz_settings.get("timezone_eras") or []
                         from telemetry_engine import run_daily_reconciliation_sweep
                         await run_daily_reconciliation_sweep(
                             api_key=api_key,
                             target_xuid=str(xuid),
                             db_path=user_db_path,
                             user_timezone=tz,
+                            user_timezone_eras=eras,
                         )
                 except Exception as sweep_err:
                     logger.debug("Daily sweep error for %s: %s", uid, sweep_err)
@@ -581,8 +584,27 @@ async def lifespan(app: FastAPI):
                 user_timezone=tz,
                 user_timezone_eras=eras,
             )
+            if tz.lower() != "auto" or eras:
+                rebuild_daily_playtime_ledger(
+                    db_path=str(u_db),
+                    user_timezone=tz,
+                    user_timezone_eras=eras,
+                )
         if Path(DEFAULT_DB_PATH).exists():
-            backfill_historical_sessions_from_achievements(db_path=DEFAULT_DB_PATH)
+            def_tz_settings = system_db.get_user_timezone_settings(default_user) or {}
+            def_tz = def_tz_settings.get("timezone") or "auto"
+            def_eras = def_tz_settings.get("timezone_eras") or []
+            backfill_historical_sessions_from_achievements(
+                db_path=DEFAULT_DB_PATH,
+                user_timezone=def_tz,
+                user_timezone_eras=def_eras,
+            )
+            if def_tz.lower() != "auto" or def_eras:
+                rebuild_daily_playtime_ledger(
+                    db_path=DEFAULT_DB_PATH,
+                    user_timezone=def_tz,
+                    user_timezone_eras=def_eras,
+                )
     except Exception as e:
         logger.warning("Could not backfill historical sessions: %s", e)
     sync_task = asyncio.create_task(_periodic_sync_loop())
@@ -1404,6 +1426,15 @@ async def api_session_transition(
 ) -> Dict[str, Any]:
     user_id, _ = _get_active_user(request)
     user_db_path = str(_get_active_user_db_path(user_id))
+    tz = "auto"
+    eras: List[Dict[str, Any]] = []
+    if user_id:
+        try:
+            tz_settings = system_db.get_user_timezone_settings(user_id) or {}
+            tz = tz_settings.get("timezone") or "auto"
+            eras = tz_settings.get("timezone_eras") or []
+        except Exception:
+            pass
 
     # Resolve game if title or external_id is given
     game_id = None
@@ -1471,6 +1502,8 @@ async def api_session_transition(
                 idle_minutes=idle_mins,
                 achievements_earned=payload.achievements_unlocked or 0,
                 status="completed",
+                user_timezone=tz,
+                user_timezone_eras=eras,
                 db_path=user_db_path,
             )
             return {"status": "committed", "session_id": matching["id"], "active_minutes": act_mins}
@@ -1483,6 +1516,8 @@ async def api_session_transition(
                 last_time_played_iso=end_iso,
                 detection_method=payload.source,
                 achievements_earned=payload.achievements_unlocked or 0,
+                user_timezone=tz,
+                user_timezone_eras=eras,
                 db_path=user_db_path,
             )
             return {"status": "recorded", "session_id": rec["id"] if rec else None}
@@ -1496,6 +1531,8 @@ async def api_session_transition(
             last_time_played_iso=end_iso,
             detection_method=payload.source,
             achievements_earned=payload.achievements_unlocked or 0,
+            user_timezone=tz,
+            user_timezone_eras=eras,
             db_path=user_db_path,
         )
         return {"status": "recorded", "session_id": rec["id"] if rec else None}
@@ -1790,6 +1827,19 @@ async def api_update_timezone(payload: TimezoneUpdateRequest, request: Request) 
         })
 
     res = system_db.update_user_timezone_settings(user_id, tz_name=tz, timezone_eras=cleaned_eras)
+    try:
+        user_db_path = str(_get_active_user_db_path(user_id))
+        rebuild_daily_playtime_ledger(
+            db_path=user_db_path,
+            user_timezone=tz,
+            user_timezone_eras=cleaned_eras,
+        )
+    except Exception as exc:
+        logger.warning("Failed rebuilding daily_playtime_ledger for %s: %s", user_id, exc)
+    monitor = _user_telemetry_monitors.get(user_id)
+    if monitor:
+        monitor.user_timezone = tz
+        monitor.user_timezone_eras = cleaned_eras
     return {"status": "ok", "settings": res}
 
 

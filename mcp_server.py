@@ -1025,12 +1025,27 @@ def get_session_history(
     streaks, AFK idle tax, and historical playtime breakdown by day or title.
     """
     db_path = get_default_db_path()
+    tz = "auto"
+    eras: List[Dict[str, Any]] = []
+    try:
+        from context import get_current_user_id
+        import system_db
+
+        uid = get_current_user_id()
+        if uid:
+            tz_settings = system_db.get_user_timezone_settings(uid) or {}
+            tz = tz_settings.get("timezone") or "auto"
+            eras = tz_settings.get("timezone_eras") or []
+    except Exception:
+        pass
     analytics = get_sessions_analytics(
         db_path=db_path,
         days=days,
         limit=limit,
         title=title,
         platform=platform,
+        user_timezone=tz,
+        user_timezone_eras=eras,
     )
     return _sanitize_output({
         "status": "ok",
