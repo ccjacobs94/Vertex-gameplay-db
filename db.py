@@ -4470,6 +4470,88 @@ def resolve_timezone_context(
     return base_tz, valid_eras, resolve_event_tz
 
 
+def _upsert_daily_ledger_entry(
+    conn: sqlite3.Connection,
+    game_id: int,
+    platform: Optional[str],
+    started_dt: datetime,
+    minutes_played: float,
+    achievements_earned: int,
+    resolve_tz: Any,
+) -> None:
+    """Upsert a session's contribution into daily_playtime_ledger using resolved local time."""
+    local_tz = resolve_tz(started_dt)
+    try:
+        local_dt = started_dt.astimezone(local_tz)
+    except Exception:
+        local_dt = started_dt
+    date_str = local_dt.strftime("%Y-%m-%d")
+    hour_int = local_dt.hour
+    platform_family = normalize_platform_family(platform or "Xbox")
+
+    conn.execute(
+        """
+        INSERT INTO daily_playtime_ledger (
+            date, game_id, platform_family, minutes_played, sessions_count, achievements_unlocked, first_session_hour
+        ) VALUES (?, ?, ?, ?, 1, ?, ?)
+        ON CONFLICT(date, game_id) DO UPDATE SET
+            minutes_played = ROUND(daily_playtime_ledger.minutes_played + excluded.minutes_played, 2),
+            sessions_count = daily_playtime_ledger.sessions_count + 1,
+            achievements_unlocked = daily_playtime_ledger.achievements_unlocked + excluded.achievements_unlocked,
+            first_session_hour = MIN(COALESCE(daily_playtime_ledger.first_session_hour, excluded.first_session_hour), excluded.first_session_hour)
+        """,
+        (
+            date_str,
+            game_id,
+            platform_family,
+            round(float(minutes_played or 0.0), 2),
+            int(achievements_earned or 0),
+            hour_int,
+        ),
+    )
+
+
+def rebuild_daily_playtime_ledger(
+    db_path: Optional[str] = None,
+    user_timezone: str = "auto",
+    user_timezone_eras: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    """
+    Rebuild daily_playtime_ledger from game_sessions using the given timezone/eras.
+    Safe no-op when no completed/reconciled sessions exist in game_sessions.
+    """
+    _, _, resolve_tz = resolve_timezone_context(user_timezone, user_timezone_eras)
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT game_id, platform, started_at, active_minutes, achievements_earned
+            FROM game_sessions
+            WHERE status IN ('completed', 'reconciled') AND active_minutes > 0 AND started_at IS NOT NULL
+            ORDER BY started_at ASC
+            """
+        ).fetchall()
+        if not rows:
+            return 0
+
+        conn.execute("DELETE FROM daily_playtime_ledger")
+        rebuilt = 0
+        for r in rows:
+            start_dt = parse_iso_datetime(r["started_at"])
+            if not start_dt:
+                continue
+            _upsert_daily_ledger_entry(
+                conn=conn,
+                game_id=r["game_id"],
+                platform=r["platform"],
+                started_dt=start_dt,
+                minutes_played=float(r["active_minutes"] or 0.0),
+                achievements_earned=int(r["achievements_earned"] or 0),
+                resolve_tz=resolve_tz,
+            )
+            rebuilt += 1
+        return rebuilt
+
+
 def start_session(
     game_id: int,
     external_title_id: str = "",
@@ -4603,34 +4685,14 @@ def commit_session_to_database(
 
         # Upsert daily_playtime_ledger
         _, _, resolve_tz = resolve_timezone_context(user_timezone, user_timezone_eras)
-        local_tz = resolve_tz(start_dt)
-        try:
-            local_dt = start_dt.astimezone(local_tz)
-        except Exception:
-            local_dt = start_dt
-        date_str = local_dt.strftime("%Y-%m-%d")
-        hour_int = local_dt.hour
-        platform_family = normalize_platform_family(session.get("platform") or "Xbox")
-
-        conn.execute(
-            """
-            INSERT INTO daily_playtime_ledger (
-                date, game_id, platform_family, minutes_played, sessions_count, achievements_unlocked, first_session_hour
-            ) VALUES (?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(date, game_id) DO UPDATE SET
-                minutes_played = ROUND(daily_playtime_ledger.minutes_played + excluded.minutes_played, 2),
-                sessions_count = daily_playtime_ledger.sessions_count + 1,
-                achievements_unlocked = daily_playtime_ledger.achievements_unlocked + excluded.achievements_unlocked,
-                first_session_hour = MIN(COALESCE(daily_playtime_ledger.first_session_hour, excluded.first_session_hour), excluded.first_session_hour)
-            """,
-            (
-                date_str,
-                game_id,
-                platform_family,
-                a_mins,
-                int(achievements_earned or 0),
-                hour_int,
-            ),
+        _upsert_daily_ledger_entry(
+            conn=conn,
+            game_id=game_id,
+            platform=session.get("platform"),
+            started_dt=start_dt,
+            minutes_played=a_mins,
+            achievements_earned=int(achievements_earned or 0),
+            resolve_tz=resolve_tz,
         )
 
         # Update last_played on games if later
@@ -4704,34 +4766,14 @@ def record_reconciled_session(
 
         # Upsert daily_playtime_ledger
         _, _, resolve_tz = resolve_timezone_context(user_timezone, user_timezone_eras)
-        local_tz = resolve_tz(start_dt)
-        try:
-            local_dt = start_dt.astimezone(local_tz)
-        except Exception:
-            local_dt = start_dt
-        date_str = local_dt.strftime("%Y-%m-%d")
-        hour_int = local_dt.hour
-        platform_family = normalize_platform_family(plat)
-
-        conn.execute(
-            """
-            INSERT INTO daily_playtime_ledger (
-                date, game_id, platform_family, minutes_played, sessions_count, achievements_unlocked, first_session_hour
-            ) VALUES (?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(date, game_id) DO UPDATE SET
-                minutes_played = ROUND(daily_playtime_ledger.minutes_played + excluded.minutes_played, 2),
-                sessions_count = daily_playtime_ledger.sessions_count + 1,
-                achievements_unlocked = daily_playtime_ledger.achievements_unlocked + excluded.achievements_unlocked,
-                first_session_hour = MIN(COALESCE(daily_playtime_ledger.first_session_hour, excluded.first_session_hour), excluded.first_session_hour)
-            """,
-            (
-                date_str,
-                game_id,
-                platform_family,
-                delta_mins,
-                achievements_earned,
-                hour_int,
-            ),
+        _upsert_daily_ledger_entry(
+            conn=conn,
+            game_id=game_id,
+            platform=plat,
+            started_dt=start_dt,
+            minutes_played=delta_mins,
+            achievements_earned=achievements_earned,
+            resolve_tz=resolve_tz,
         )
 
         row = conn.execute("SELECT * FROM game_sessions WHERE id = ?", (sess_id,)).fetchone()
@@ -4855,33 +4897,14 @@ def backfill_historical_sessions_from_achievements(
                 sessions_created += 1
                 games_backfilled.add(gid)
 
-                local_tz = resolve_tz(started_dt)
-                try:
-                    local_dt = started_dt.astimezone(local_tz)
-                except Exception:
-                    local_dt = started_dt
-                date_str = local_dt.strftime("%Y-%m-%d")
-                hour_int = local_dt.hour
-
-                conn.execute(
-                    """
-                    INSERT INTO daily_playtime_ledger (
-                        date, game_id, platform_family, minutes_played, sessions_count, achievements_unlocked, first_session_hour
-                    ) VALUES (?, ?, ?, ?, 1, ?, ?)
-                    ON CONFLICT(date, game_id) DO UPDATE SET
-                        minutes_played = ROUND(daily_playtime_ledger.minutes_played + excluded.minutes_played, 2),
-                        sessions_count = daily_playtime_ledger.sessions_count + 1,
-                        achievements_unlocked = daily_playtime_ledger.achievements_unlocked + excluded.achievements_unlocked,
-                        first_session_hour = MIN(COALESCE(daily_playtime_ledger.first_session_hour, excluded.first_session_hour), excluded.first_session_hour)
-                    """,
-                    (
-                        date_str,
-                        gid,
-                        platform_family,
-                        duration_minutes,
-                        ach_count,
-                        hour_int,
-                    ),
+                _upsert_daily_ledger_entry(
+                    conn=conn,
+                    game_id=gid,
+                    platform=plat,
+                    started_dt=started_dt,
+                    minutes_played=duration_minutes,
+                    achievements_earned=ach_count,
+                    resolve_tz=resolve_tz,
                 )
 
     return {
@@ -4902,6 +4925,55 @@ def get_active_sessions(db_path: Optional[str] = None) -> List[Dict[str, Any]]:
             """
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def _accumulate_session_circadian(
+    hours_acc: List[float],
+    days_acc: List[float],
+    started_at: Optional[str],
+    ended_at: Optional[str],
+    active_minutes: Any,
+    resolve_tz: Any,
+) -> bool:
+    """Apportion a session's active_minutes across local hours and weekdays."""
+    start_dt = parse_iso_datetime(started_at)
+    if not start_dt:
+        return False
+    active_mins = float(active_minutes or 0.0)
+    if active_mins <= 0:
+        return False
+
+    end_dt = parse_iso_datetime(ended_at) if ended_at else None
+    if not end_dt or end_dt <= start_dt or (end_dt - start_dt).total_seconds() > 48 * 3600:
+        try:
+            local_dt = start_dt.astimezone(resolve_tz(start_dt))
+        except Exception:
+            local_dt = start_dt
+        hours_acc[local_dt.hour] += active_mins
+        days_acc[local_dt.weekday()] += active_mins
+        return True
+
+    total_secs = (end_dt - start_dt).total_seconds()
+    cur_utc = start_dt
+    while cur_utc < end_dt:
+        try:
+            cur_local = cur_utc.astimezone(resolve_tz(cur_utc))
+        except Exception:
+            cur_local = cur_utc
+        secs_to_next_hour = 3600.0 - (
+            cur_local.minute * 60.0 + cur_local.second + cur_local.microsecond / 1_000_000.0
+        )
+        if secs_to_next_hour <= 1e-6:
+            secs_to_next_hour = 3600.0
+        remaining_secs = (end_dt - cur_utc).total_seconds()
+        step_secs = min(secs_to_next_hour, remaining_secs)
+        if step_secs <= 1e-6:
+            break
+        slice_mins = active_mins * (step_secs / total_secs)
+        hours_acc[cur_local.hour] += slice_mins
+        days_acc[cur_local.weekday()] += slice_mins
+        cur_utc = cur_utc + timedelta(seconds=step_secs)
+    return True
 
 
 def get_sessions_analytics(
@@ -5133,27 +5205,44 @@ def get_sessions_analytics(
             })
 
         # 6. Circadian 24-Hour & 7-Day Clock
-        circadian_hours = [0 for _ in range(24)]
-        circadian_days = [0 for _ in range(7)]  # 0=Mon .. 6=Sun
+        circadian_hours_f = [0.0 for _ in range(24)]
+        circadian_days_f = [0.0 for _ in range(7)]  # 0=Mon .. 6=Sun
         circadian_events_tot = 0
 
-        # Aggregate from daily_playtime_ledger first_session_hour & minutes_played
-        hour_rows = conn.execute(
-            """
-            SELECT date, first_session_hour, minutes_played FROM daily_playtime_ledger WHERE first_session_hour IS NOT NULL
-            """
-        ).fetchall()
-        for r in hour_rows:
-            h = r["first_session_hour"]
-            if 0 <= h < 24:
-                circadian_hours[h] += int(r["minutes_played"] or 1)
+        for r in all_completed_sessions:
+            if _accumulate_session_circadian(
+                circadian_hours_f,
+                circadian_days_f,
+                r["started_at"],
+                r["ended_at"],
+                r["active_minutes"],
+                resolve_tz,
+            ):
                 circadian_events_tot += 1
-            try:
-                dt_obj = datetime.strptime(r["date"], "%Y-%m-%d")
-                w = dt_obj.weekday()
-                circadian_days[w] += int(r["minutes_played"] or 1)
-            except Exception:
-                pass
+
+        # Fallback to daily_playtime_ledger only when no game_sessions exist (e.g. legacy/seeded DBs)
+        if circadian_events_tot == 0:
+            hour_rows = conn.execute(
+                f"""
+                SELECT date, first_session_hour, minutes_played
+                FROM daily_playtime_ledger
+                {l_where}
+                """
+            , l_params).fetchall()
+            for r in hour_rows:
+                h = r["first_session_hour"]
+                if h is not None and 0 <= h < 24:
+                    circadian_hours_f[h] += float(r["minutes_played"] or 1)
+                    circadian_events_tot += 1
+                try:
+                    dt_obj = datetime.strptime(r["date"], "%Y-%m-%d")
+                    w = dt_obj.weekday()
+                    circadian_days_f[w] += float(r["minutes_played"] or 1)
+                except Exception:
+                    pass
+
+        circadian_hours = [int(round(v)) for v in circadian_hours_f]
+        circadian_days = [int(round(v)) for v in circadian_days_f]
 
         peak_hour_idx = max(range(24), key=lambda x: circadian_hours[x]) if any(circadian_hours) else 20
         ampm = "AM" if peak_hour_idx < 12 else "PM"
@@ -5221,7 +5310,14 @@ def get_sessions_analytics(
         ).fetchone()
         if longest_row and float(longest_row["active_minutes"] or 0) > 0:
             m_dt = parse_iso_datetime(longest_row["started_at"])
-            date_str = m_dt.strftime("%b %-d, %Y") if m_dt else str(longest_row["started_at"])[:10]
+            if m_dt:
+                try:
+                    m_dt = m_dt.astimezone(resolve_tz(m_dt))
+                except Exception:
+                    pass
+                date_str = m_dt.strftime("%b %-d, %Y")
+            else:
+                date_str = str(longest_row["started_at"])[:10]
             hrs_val = round(float(longest_row["active_minutes"]) / 60.0, 1)
             snack_vs_binge["longest_marathon"] = {
                 "session_id": longest_row["id"],

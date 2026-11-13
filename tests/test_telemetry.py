@@ -405,6 +405,117 @@ class TestNerdStatsAndEndpoints(unittest.TestCase):
         self.assertIn("snack_vs_binge", analytics)
         self.assertIn("rotation_gantt_30d", analytics)
 
+    def test_circadian_respects_user_timezone_and_avoids_min_hour_collapse(self):
+        """
+        Regression test (2026-11-13):
+        1) Ledger rows originally baked in UTC must not lock circadian hours to UTC
+           when user_timezone is passed to get_sessions_analytics().
+        2) Multiple sessions on the same UTC date must not collapse all minutes into
+           MIN(first_session_hour).
+        """
+        g = db.add_manual_game(title="Dispatch", platform="Xbox", playtime_hours=10.0, db_path=self.db_path)
+
+        # Simulate initial backfill/recording in UTC before user set America/Chicago:
+        # Session 1: 2025-12-04 01:47 UTC -> 2025-12-04 03:47 UTC (120m)
+        #            In America/Chicago (CST, UTC-6): Dec 3, 19:47 - 21:47
+        # Session 2: 2025-12-04 18:32 UTC -> 2025-12-05 00:32 UTC (360m)
+        #            In America/Chicago (CST, UTC-6): Dec 4, 12:32 - 18:32
+        db.record_reconciled_session(
+            game_id=g["id"],
+            delta_minutes=120.0,
+            last_time_played_iso="2025-12-04T03:47:00+00:00",
+            detection_method="achievement_backfill",
+            user_timezone="UTC",
+            db_path=self.db_path,
+        )
+        db.record_reconciled_session(
+            game_id=g["id"],
+            delta_minutes=360.0,
+            last_time_played_iso="2025-12-05T00:32:00+00:00",
+            detection_method="achievement_backfill",
+            user_timezone="UTC",
+            db_path=self.db_path,
+        )
+
+        # In America/Chicago, ZERO minutes occurred between 12am and 4am!
+        analytics_chi = db.get_sessions_analytics(
+            user_timezone="America/Chicago",
+            db_path=self.db_path,
+        )
+        chi_hours = analytics_chi["circadian"]["hours"]
+        self.assertEqual(sum(chi_hours[0:4]), 0)
+        self.assertGreater(sum(chi_hours[12:19]), 300)
+        self.assertGreater(sum(chi_hours[19:22]), 100)
+        self.assertNotIn(analytics_chi["circadian"]["peak_hour"], ("12 AM", "1 AM", "2 AM", "3 AM"))
+
+        # Even in UTC, Session 2's 360m (18:32-00:32 UTC) must NOT be dumped into hour 1!
+        analytics_utc = db.get_sessions_analytics(
+            user_timezone="UTC",
+            db_path=self.db_path,
+        )
+        utc_hours = analytics_utc["circadian"]["hours"]
+        self.assertLessEqual(utc_hours[1], 75)
+        self.assertGreater(sum(utc_hours[18:24]), 250)
+
+    def test_circadian_respects_game_and_platform_filters(self):
+        """Regression test (2026-11-13): circadian clock must honor game_id/platform filters."""
+        g1 = db.add_manual_game(title="Night Game", platform="Xbox", playtime_hours=2.0, db_path=self.db_path)
+        g2 = db.add_manual_game(title="Noon Game", platform="PC (Steam)", playtime_hours=2.0, db_path=self.db_path)
+
+        db.record_reconciled_session(
+            game_id=g1["id"],
+            delta_minutes=60.0,
+            last_time_played_iso="2026-10-10T02:00:00+00:00",
+            user_timezone="UTC",
+            db_path=self.db_path,
+        )
+        db.record_reconciled_session(
+            game_id=g2["id"],
+            delta_minutes=60.0,
+            last_time_played_iso="2026-10-10T14:00:00+00:00",
+            user_timezone="UTC",
+            db_path=self.db_path,
+        )
+
+        filtered = db.get_sessions_analytics(
+            platform="Steam",
+            user_timezone="UTC",
+            db_path=self.db_path,
+        )
+        hours = filtered["circadian"]["hours"]
+        self.assertEqual(hours[1], 0)
+        self.assertEqual(hours[13], 60)
+
+    def test_rebuild_daily_playtime_ledger_realigns_dates_and_hours(self):
+        """Regression test (2026-11-13): rebuilding ledger updates stale UTC dates/hours."""
+        g = db.add_manual_game(title="Alan Wake 2", platform="Xbox", playtime_hours=3.0, db_path=self.db_path)
+        # 2025-10-11 02:11 UTC -> 2025-10-11 03:11 UTC (in America/Chicago CDT UTC-5: Oct 10, 21:11 - 22:11)
+        db.record_reconciled_session(
+            game_id=g["id"],
+            delta_minutes=60.0,
+            last_time_played_iso="2025-10-11T03:11:00+00:00",
+            user_timezone="UTC",
+            db_path=self.db_path,
+        )
+
+        with db.get_connection(self.db_path) as conn:
+            before = dict(conn.execute("SELECT * FROM daily_playtime_ledger WHERE game_id = ?", (g["id"],)).fetchone())
+            self.assertEqual(before["date"], "2025-10-11")
+            self.assertEqual(before["first_session_hour"], 2)
+
+        db.rebuild_daily_playtime_ledger(
+            user_timezone="America/Chicago",
+            db_path=self.db_path,
+        )
+
+        with db.get_connection(self.db_path) as conn:
+            rows = conn.execute("SELECT * FROM daily_playtime_ledger WHERE game_id = ?", (g["id"],)).fetchall()
+            self.assertEqual(len(rows), 1)
+            after = dict(rows[0])
+            self.assertEqual(after["date"], "2025-10-10")
+            self.assertEqual(after["first_session_hour"], 21)
+            self.assertEqual(after["minutes_played"], 60.0)
+
 
 class TestTelemetryEndpointsAndMCP(unittest.TestCase):
     def setUp(self):
@@ -614,6 +725,50 @@ class TestTelemetryEndpointsAndMCP(unittest.TestCase):
                 self.assertIsNotNone(sess_row)
                 self.assertEqual(sess_row["status"], "reconciled")
                 self.assertEqual(sess_row["active_minutes"], 180.0)
+
+    def test_timezone_patch_rebuilds_ledger_and_webhooks_respect_timezone(self):
+        """Regression test (2026-11-13): PATCH /api/account/timezone rebuilds daily_playtime_ledger."""
+        self.client.cookies.set("vertex_session", self.session_cookie)
+        g = db.add_manual_game("Control", "Xbox", playtime_hours=4.0, db_path=self.user_db_path)
+        # 2025-12-04 02:00 UTC -> 03:00 UTC (60m). In America/Chicago (UTC-6): Dec 3, 20:00 - 21:00
+        db.record_reconciled_session(
+            game_id=g["id"],
+            delta_minutes=60.0,
+            last_time_played_iso="2025-12-04T03:00:00+00:00",
+            user_timezone="UTC",
+            db_path=self.user_db_path,
+        )
+
+        res = self.client.patch(
+            "/api/account/timezone",
+            json={"timezone": "America/Chicago", "timezone_eras": []},
+        )
+        self.assertEqual(res.status_code, 200)
+
+        with db.get_connection(self.user_db_path) as conn:
+            row = conn.execute("SELECT * FROM daily_playtime_ledger WHERE game_id = ?", (g["id"],)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["date"], "2025-12-03")
+            self.assertEqual(row["first_session_hour"], 20)
+
+        # Also verify webhook record uses user's saved timezone
+        res_rec = self.client.post(
+            "/api/webhooks/session-transition",
+            json={
+                "source": "playnite",
+                "event": "record",
+                "title": "Prey",
+                "platform": "PC",
+                "active_minutes": 60,
+                "ended_at": "2025-12-05T03:00:00+00:00",
+            },
+        )
+        self.assertEqual(res_rec.status_code, 200)
+        with db.get_connection(self.user_db_path) as conn:
+            prey = conn.execute("SELECT id FROM games WHERE title = 'Prey'").fetchone()
+            prey_ledger = conn.execute("SELECT * FROM daily_playtime_ledger WHERE game_id = ?", (prey["id"],)).fetchone()
+            self.assertEqual(prey_ledger["date"], "2025-12-04")
+            self.assertEqual(prey_ledger["first_session_hour"], 20)
 
 
 if __name__ == "__main__":
