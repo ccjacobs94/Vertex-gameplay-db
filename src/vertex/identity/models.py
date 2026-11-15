@@ -27,6 +27,10 @@ class UserAccount:
     updated_at: str
     last_login_at: str | None
 
+    @property
+    def is_active(self) -> bool:
+        return self.status == "active"
+
     def to_scope(self) -> UserScope:
         return UserScope(
             user_id=self.id,

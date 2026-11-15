@@ -410,7 +410,7 @@ class ActivityService:
             else:
                 rows = conn.execute(
                     "SELECT * FROM play_sessions ORDER BY ended_at DESC, id DESC LIMIT ?",
-                    (max(1, min(200, limit))),
+                    (max(1, min(200, limit)),),
                 ).fetchall()
             return [row_to_session(r) for r in rows]
 
