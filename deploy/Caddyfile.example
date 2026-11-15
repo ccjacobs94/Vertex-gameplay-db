@@ -1,0 +1,10 @@
+# Private HTTPS reverse proxy example for LAN or Tailscale access.
+# Service Worker & secure cookies require trusted HTTPS for non-localhost LAN hostnames.
+
+games.home.arpa {
+    tls internal
+    reverse_proxy 127.0.0.1:8095 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+    }
+}

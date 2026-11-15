@@ -1,0 +1,1 @@
+"""FastAPI modular HTTP interface."""

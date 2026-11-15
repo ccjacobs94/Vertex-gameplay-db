@@ -1,0 +1,25 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends sqlite3 && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt pyproject.toml /app/
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src /app/src
+COPY migrations /app/migrations
+COPY frontend /app/frontend
+COPY scripts /app/scripts
+
+ENV PYTHONPATH=/app/src
+RUN python scripts/build_frontend.py
+
+ENV VERTEX_BIND_HOST=0.0.0.0
+ENV VERTEX_PORT=8090
+ENV VERTEX_DATA_DIR=/app/data
+
+EXPOSE 8090
+
+# Never ignore migration or startup failures.
+CMD ["sh", "-c", "python -m vertex migrate && exec python -m vertex serve"]
