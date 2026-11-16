@@ -1,13 +1,15 @@
 /* Static-only Service Worker: NEVER caches private /api/* routes and wipes caches on logout. */
 
-const STATIC_CACHE = "vertex-v2-static-7";
+const STATIC_CACHE = "vertex-v2-static-8";
 const STATIC_ASSETS = [
   "/",
   "/manifest.webmanifest",
+  "/assets/vertex_logo.png",
   "/assets/styles/main.css",
   "/assets/main.js",
   "/assets/shared/api.js",
   "/assets/shared/dom.js",
+  "/assets/shared/media.js",
   "/assets/features/auth/authView.js",
   "/assets/features/library/libraryView.js",
   "/assets/features/activity/activityView.js",

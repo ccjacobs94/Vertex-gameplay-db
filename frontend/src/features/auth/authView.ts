@@ -6,8 +6,13 @@ export async function renderAuthView(container: HTMLElement, onAuthenticated: (a
   clearEl(container);
   const bannerBox = el("div");
   const card = el("section", { class: "auth-card" }, [
-    el("h1", {}, ["Vertex"]),
-    el("p", { class: "muted" }, ["Private self-hosted game library"]),
+    el("div", { class: "auth-brand" }, [
+      el("img", { src: "/assets/vertex_logo.png", alt: "Vertex", class: "brand-logo", width: "42", height: "42" }),
+      el("div", { class: "brand-text" }, [
+        el("h1", { class: "brand-title" }, ["Vertex"]),
+        el("p", { class: "subtitle" }, ["Private self-hosted game library"]),
+      ]),
+    ]),
     bannerBox,
   ]);
   container.appendChild(card);

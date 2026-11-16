@@ -84,7 +84,7 @@ class TestPhase4And5Contracts(unittest.TestCase):
 
     def test_frontend_sw_cache_bumped_and_bypasses_mcp_and_compose_private(self) -> None:
         sw_text = (REPO_ROOT / "frontend" / "src" / "sw.js").read_text(encoding="utf-8")
-        self.assertIn("vertex-v2-static-7", sw_text)
+        self.assertIn("vertex-v2-static-8", sw_text)
         self.assertIn("/mcp", sw_text)
 
         compose_text = (REPO_ROOT / "deploy" / "docker-compose.yml").read_text(encoding="utf-8")

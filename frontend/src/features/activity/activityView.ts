@@ -1,10 +1,11 @@
-import type { PlaySessionResponse, PlaytimePromptResponse } from "../../shared/api-types.ts";
+import type { GameResponse, PlaySessionResponse, PlaytimePromptResponse } from "../../shared/api-types.ts";
 import {
   backfillAchievementSessions,
   deleteSession,
   getDailyLedger,
   importHomeAssistantCsv,
   ingestHomeAssistantEvent,
+  listGames,
   listPlaytimePrompts,
   listSessions,
   rebuildDailyLedger,
@@ -13,6 +14,7 @@ import {
   updateSession,
 } from "../../shared/api.ts";
 import { clearEl, el, openModalDialog, showBanner } from "../../shared/dom.ts";
+import { createCoverElement, createPlatformBrandIcons, formatCardPlatformLabel } from "../../shared/media.ts";
 
 export async function renderActivityView(container: HTMLElement): Promise<void> {
   clearEl(container);
@@ -20,6 +22,7 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
   const promptsBox = el("div", { class: "stack" });
   const sessionsBox = el("div", { class: "table-scroll" });
   const ledgerBox = el("div", { class: "table-scroll" });
+  const gameMap = new Map<number, GameResponse>();
 
   function drawPrompts(prompts: Array<PlaytimePromptResponse>): void {
     clearEl(promptsBox);
@@ -28,11 +31,19 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
       return;
     }
     for (const p of prompts) {
-      const msg = `${p.title} (${p.platform}) recorded +${p.delta_hours}h while marked "${p.current_status}" (${p.previous_hours}h -> ${p.new_hours}h).`;
-      promptsBox.appendChild(el("div", { class: "prompt-card row-between" }, [
-        el("div", { class: "stack" }, [
-          el("strong", {}, [p.title]),
-          el("span", { class: "muted" }, [msg]),
+      const msg = `Recorded +${p.delta_hours}h while marked "${p.current_status}" (${p.previous_hours}h -> ${p.new_hours}h).`;
+      const coverThumb = createCoverElement(p.title, p.platform, p.cover_url, 10, [], "cover-thumb-sm");
+      promptsBox.appendChild(el("div", { class: "playtime-prompt-card row-between" }, [
+        el("div", { class: "playtime-prompt-left" }, [
+          coverThumb,
+          el("div", { class: "stack", style: "gap:0.15rem" }, [
+            el("div", { class: "row-actions" }, [
+              el("strong", {}, [p.title]),
+              el("span", { class: "playtime-prompt-delta" }, [`+${p.delta_hours}h`]),
+              el("span", { class: "muted" }, [formatCardPlatformLabel(p.platform)]),
+            ]),
+            el("span", { class: "muted" }, [msg]),
+          ]),
         ]),
         el("div", { class: "row-actions" }, [
           el("button", { type: "button", class: "btn btn-primary", onClick: () => handlePrompt(p.id, "accept") }, ["Set Playing"]),
@@ -106,9 +117,22 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
     }
     const tbody = el("tbody");
     for (const s of sessions) {
+      const gm = gameMap.get(s.game_id);
+      const titleText = gm ? gm.title : `Game #${s.game_id}`;
+      const coverThumb = createCoverElement(titleText, s.platform, gm ? gm.cover_url : null, 10, [], "cover-thumb-sm");
       tbody.appendChild(el("tr", {}, [
-        el("td", {}, [String(s.game_id)]),
-        el("td", {}, [s.platform]),
+        el("td", {}, [
+          el("div", { class: "media-row-left" }, [
+            coverThumb,
+            el("strong", {}, [titleText]),
+          ]),
+        ]),
+        el("td", {}, [
+          el("span", { class: "card-plat-indicator" }, [
+            createPlatformBrandIcons(s.platform),
+            formatCardPlatformLabel(s.platform),
+          ]),
+        ]),
         el("td", {}, [s.started_at.slice(0, 16).replace("T", " ")]),
         el("td", {}, [`${s.duration_minutes}m`]),
         el("td", {}, [`${s.source} (${s.precision_level})${s.is_locked ? " [Locked]" : ""}`]),
@@ -134,7 +158,7 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
       el("caption", { class: "sr-only" }, ["Recent Play Sessions"]),
       el("thead", {}, [
         el("tr", {}, [
-          el("th", { scope: "col" }, ["Game ID"]),
+          el("th", { scope: "col" }, ["Game"]),
           el("th", { scope: "col" }, ["Platform"]),
           el("th", { scope: "col" }, ["Started"]),
           el("th", { scope: "col" }, ["Duration"]),
@@ -180,11 +204,14 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
 
   async function refresh(): Promise<void> {
     try {
-      const [prompts, sessions, ledger] = await Promise.all([
+      const [prompts, sessions, ledger, games] = await Promise.all([
         listPlaytimePrompts(),
         listSessions(undefined, 50),
         getDailyLedger(),
+        listGames("", "", "").catch(() => [] as Array<GameResponse>),
       ]);
+      gameMap.clear();
+      for (const g of games) gameMap.set(g.id, g);
       drawPrompts(prompts);
       drawSessions(sessions);
       drawLedger(ledger);
