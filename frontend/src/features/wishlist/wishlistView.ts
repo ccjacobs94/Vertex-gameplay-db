@@ -20,6 +20,7 @@ import {
   updateWishlistPlatforms,
 } from "../../shared/api.ts";
 import { clearEl, el, openModalDialog, showBanner } from "../../shared/dom.ts";
+import { createCoverElement, createPlatformBrandIcons } from "../../shared/media.ts";
 
 const PLATFORM_FAMILIES = ["PC", "Xbox", "PlayStation", "Nintendo Switch"];
 
@@ -27,7 +28,7 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
   clearEl(container);
   const bannerBox = el("div");
   const dealsBox = el("div", { class: "stack" });
-  const itemsBox = el("div", { class: "games-grid" });
+  const itemsBox = el("div", { class: "wishlist-grid" });
 
   const statusSel = el("select", { "aria-label": "Wishlist status" }, [
     el("option", { value: "active", selected: "selected" }, ["Active"]),
@@ -46,16 +47,24 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
       dealsBox.appendChild(el("p", { class: "muted" }, ["No active deals match your current target thresholds."]));
       return;
     }
-    const grid = el("div", { class: "games-grid" });
-    for (const d of evalRes.deals) {
-      grid.appendChild(el("article", { class: "game-card" }, [
-        el("div", { class: "game-card-head" }, [
-          el("h3", {}, [d.game_title]),
-          d.is_all_time_low ? el("span", { class: "badge badge-fav" }, ["ATL"]) : null,
+    const grid = el("div", { class: "wishlist-grid" });
+    for (let i = 0; i < evalRes.deals.length; i += 1) {
+      const d = evalRes.deals[i];
+      const coverThumb = createCoverElement(d.game_title, d.platform_family, d.cover_url, i, [], "cover-thumb-md");
+      grid.appendChild(el("article", { class: "wishlist-card" }, [
+        coverThumb,
+        el("div", { class: "wishlist-card-body" }, [
+          el("div", { class: "row-between" }, [
+            el("strong", {}, [d.game_title]),
+            d.is_all_time_low ? el("span", { class: "badge badge-fav" }, ["ATL"]) : null,
+          ]),
+          el("p", { style: "margin:0" }, [d.deal_headline]),
+          el("div", { class: "row-actions" }, [
+            createPlatformBrandIcons(d.platform_family),
+            el("span", { class: "muted" }, [`${d.storefront} • ${d.edition_name}${d.is_smart_upgrade ? " (Smart Upgrade)" : ""}`]),
+          ]),
+          el("span", { class: "muted" }, [`$${d.current_price_usd.toFixed(2)} (target $${d.target_price_usd.toFixed(2)}) • -${d.discount_pct}%`]),
         ]),
-        el("p", {}, [d.deal_headline]),
-        el("p", { class: "muted" }, [`${d.platform_family} • ${d.storefront} • ${d.edition_name}${d.is_smart_upgrade ? " (Smart Upgrade)" : ""}`]),
-        el("p", { class: "muted" }, [`$${d.current_price_usd.toFixed(2)} (target $${d.target_price_usd.toFixed(2)}) • -${d.discount_pct}%`]),
       ]));
     }
     dealsBox.appendChild(grid);
@@ -81,7 +90,7 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
       smartIn.checked = true;
       const forceIn = el("input", { type: "checkbox" }) as HTMLInputElement;
       const notesIn = el("textarea", { rows: "2" }) as HTMLTextAreaElement;
-      const searchOut = el("div", { class: "row-actions" });
+      const searchOut = el("div", { class: "catalog-pick-list" });
 
       const lookupBtn = el("button", {
         type: "button",
@@ -105,7 +114,7 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
               for (const h of hits) {
                 searchOut.appendChild(el("button", {
                   type: "button",
-                  class: "btn btn-ghost",
+                  class: "catalog-pick-item",
                   onClick: () => {
                     titleIn.value = h.title;
                     selectedCoverUrl = h.cover_url || null;
@@ -114,7 +123,13 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
                     if (h.release_year) yearIn.value = String(h.release_year);
                     if (h.genres.length) genresIn.value = h.genres.join(", ");
                   },
-                }, [`Use: ${h.title}${h.cached ? " (cached)" : ""}`]));
+                }, [
+                  createCoverElement(h.title, "Catalog", h.cover_url, 10, [], "catalog-pick-thumb"),
+                  el("div", { class: "stack", style: "gap:0.1rem" }, [
+                    el("strong", {}, [h.title]),
+                    el("span", { class: "muted" }, [h.cached ? "Catalog (cached)" : "Steam Store"]),
+                  ]),
+                ]));
               }
               return;
             }
@@ -127,7 +142,7 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
                 : "";
               searchOut.appendChild(el("button", {
                 type: "button",
-                class: "btn btn-ghost",
+                class: "catalog-pick-item",
                 onClick: () => {
                   titleIn.value = c.title;
                   selectedCoverUrl = c.cover_url || null;
@@ -139,7 +154,13 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
                     showBanner(modalBanner, c.ownership_conflict.conflict_warning, "info");
                   }
                 },
-              }, [`Use: ${c.title} (${c.storefront}${priceLabel}${conflictLabel})`]));
+              }, [
+                createCoverElement(c.title, c.storefront, c.cover_url, 10, [], "catalog-pick-thumb"),
+                el("div", { class: "stack", style: "gap:0.1rem" }, [
+                  el("strong", {}, [c.title]),
+                  el("span", { class: "muted" }, [`${c.storefront}${priceLabel}${conflictLabel}`]),
+                ]),
+              ]));
             }
           } catch (err) {
             showBanner(modalBanner, err instanceof Error ? err.message : "Candidate lookup failed", "error");
@@ -399,37 +420,43 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
       itemsBox.appendChild(el("p", { class: "muted" }, ["No wishlist items match this filter."]));
       return;
     }
-    for (const item of items) {
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
       const targetsLine = item.targets.map((t) => `${t.platform_family}: $${t.target_price_usd.toFixed(2)}${t.muted_owned_conflict ? " [Muted Owned]" : ""}`).join(" | ");
       const skusLine = item.skus.map((s) => `${s.storefront}: ${s.current_price_usd != null ? `$${s.current_price_usd.toFixed(2)}` : "-"} (ATL ${s.historical_low_usd != null ? `$${s.historical_low_usd.toFixed(2)}` : "-"})`).join(" | ");
-      itemsBox.appendChild(el("article", { class: "game-card" }, [
-        el("div", { class: "game-card-head" }, [
-          el("h3", {}, [item.canonical_game.title]),
-          el("span", { class: "badge" }, [item.status]),
-        ]),
-        item.conflict.conflict_warning ? el("p", { class: "error-text" }, [item.conflict.conflict_warning]) : null,
-        targetsLine ? el("p", { class: "muted" }, [`Targets: ${targetsLine}`]) : null,
-        skusLine ? el("p", { class: "muted" }, [`Prices: ${skusLine}`]) : null,
-        item.notes ? el("p", { class: "notes-preview" }, [item.notes]) : null,
-        el("div", { class: "row-actions" }, [
-          el("button", { type: "button", class: "btn btn-secondary", onClick: () => openPriceModal(item) }, ["+ Price"]),
-          el("button", { type: "button", class: "btn btn-secondary", onClick: () => openHistoryModal(item) }, ["History"]),
-          el("button", { type: "button", class: "btn btn-secondary", onClick: () => openTargetsModal(item) }, ["Targets"]),
-          item.status === "active"
-            ? el("button", { type: "button", class: "btn btn-primary", onClick: () => openPurchaseModal(item) }, ["Mark Purchased"])
-            : null,
-          el("button", {
-            type: "button",
-            class: "btn btn-ghost",
-            onClick: async () => {
-              try {
-                await deleteWishlistItem(item.id);
-                await refresh();
-              } catch (err) {
-                showBanner(bannerBox, err instanceof Error ? err.message : "Could not delete item", "error");
-              }
-            },
-          }, ["Delete"]),
+      const primaryPlat = item.targets.length ? item.targets[0].platform_family : "PC";
+      const coverThumb = createCoverElement(item.canonical_game.title, primaryPlat, item.canonical_game.cover_url, i, [], "cover-thumb-md");
+      itemsBox.appendChild(el("article", { class: "wishlist-card" }, [
+        coverThumb,
+        el("div", { class: "wishlist-card-body" }, [
+          el("div", { class: "row-between" }, [
+            el("h3", { style: "margin:0;font-size:1rem" }, [item.canonical_game.title]),
+            el("span", { class: "badge" }, [item.status]),
+          ]),
+          item.conflict.conflict_warning ? el("span", { class: "error-text" }, [item.conflict.conflict_warning]) : null,
+          targetsLine ? el("span", { class: "muted" }, [`Targets: ${targetsLine}`]) : null,
+          skusLine ? el("span", { class: "muted" }, [`Prices: ${skusLine}`]) : null,
+          item.notes ? el("span", { class: "muted" }, [item.notes]) : null,
+          el("div", { class: "row-actions", style: "margin-top:0.3rem" }, [
+            el("button", { type: "button", class: "btn btn-secondary", onClick: () => openPriceModal(item) }, ["+ Price"]),
+            el("button", { type: "button", class: "btn btn-secondary", onClick: () => openHistoryModal(item) }, ["History"]),
+            el("button", { type: "button", class: "btn btn-secondary", onClick: () => openTargetsModal(item) }, ["Targets"]),
+            item.status === "active"
+              ? el("button", { type: "button", class: "btn btn-primary", onClick: () => openPurchaseModal(item) }, ["Mark Purchased"])
+              : null,
+            el("button", {
+              type: "button",
+              class: "btn btn-ghost",
+              onClick: async () => {
+                try {
+                  await deleteWishlistItem(item.id);
+                  await refresh();
+                } catch (err) {
+                  showBanner(bannerBox, err instanceof Error ? err.message : "Could not delete item", "error");
+                }
+              },
+            }, ["Delete"]),
+          ]),
         ]),
       ]));
     }

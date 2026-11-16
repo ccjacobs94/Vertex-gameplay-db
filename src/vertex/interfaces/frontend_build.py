@@ -266,6 +266,20 @@ def build_frontend(out_dir: Path | None = None, repo_root: Path | None = None) -
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(css_file, target)
 
+    # Copy Vertex brand logos and PWA icons from static/ when present
+    static_root = root / "static"
+    for logo_name in ("vertex_logo.svg", "vertex_logo.png", "vertex_logo.jpg"):
+        logo_src = static_root / logo_name
+        if logo_src.is_file():
+            shutil.copy2(logo_src, assets_out / logo_name)
+    icons_src = static_root / "icons"
+    if icons_src.is_dir():
+        icons_out = assets_out / "icons"
+        icons_out.mkdir(parents=True, exist_ok=True)
+        for icon_file in sorted(icons_src.iterdir()):
+            if icon_file.is_file():
+                shutil.copy2(icon_file, icons_out / icon_file.name)
+
     shutil.copy2(src_root / "sw.js", target_root / "sw.js")
     shutil.copy2(root / "frontend" / "index.html", target_root / "index.html")
     shutil.copy2(root / "frontend" / "manifest.webmanifest", target_root / "manifest.webmanifest")
