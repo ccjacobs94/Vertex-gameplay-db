@@ -13,7 +13,12 @@ from vertex.interfaces.http.deps import (
     require_read_scope,
     require_sync_scope,
 )
-from vertex.interfaces.http.schemas import ConnectionsSummaryResponse, UpdateConnectionsRequest
+from vertex.interfaces.http.schemas import (
+    ConnectionsSummaryResponse,
+    ConnectionTestRequest,
+    ConnectionTestResponse,
+    UpdateConnectionsRequest,
+)
 
 router = APIRouter(prefix="/api/connections", tags=["connections"])
 
@@ -42,11 +47,42 @@ def update_connections(
         xbox_xuid=body.xbox_xuid,
         xbl_api_key=body.xbl_api_key,
         clear_xbl_api_key=body.clear_xbl_api_key,
+        xbl_watcher_api_key=body.xbl_watcher_api_key,
+        clear_xbl_watcher_api_key=body.clear_xbl_watcher_api_key,
         psn_npsso=body.psn_npsso,
         clear_psn_npsso=body.clear_psn_npsso,
+        gog_user_id=body.gog_user_id,
+        gog_username=body.gog_username,
+        gog_access_token=body.gog_access_token,
+        gog_refresh_token=body.gog_refresh_token,
+        clear_gog_tokens=body.clear_gog_tokens,
         ha_url=body.ha_url,
         ha_token=body.ha_token,
         clear_ha_token=body.clear_ha_token,
         ha_entity_id=body.ha_entity_id,
     )
     return ConnectionsSummaryResponse(**asdict(summary))
+
+
+@router.post("/test", response_model=ConnectionTestResponse)
+async def test_connection(
+    body: ConnectionTestRequest,
+    scope: UserScope = Depends(require_sync_scope),
+    services: AppServices = Depends(get_services),
+) -> ConnectionTestResponse:
+    raw = await services.platform_sync.verify_connection(
+        scope,
+        provider=body.provider,
+        credential=body.credential,
+        secondary_credential=body.secondary_credential,
+    )
+    status = str(raw.get("status") or "error")
+    platform = str(raw.get("platform") or body.provider)
+    message = str(raw.get("message") or "")
+    details = {k: v for k, v in raw.items() if k not in {"status", "platform", "message"}}
+    return ConnectionTestResponse(
+        status=status,
+        platform=platform,
+        message=message,
+        details=details,
+    )

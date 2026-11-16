@@ -28,3 +28,12 @@ class HomeAssistantEventResult:
     session_id: int | None
     duration_minutes: int
     idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class HomeAssistantSyncResult:
+    status: str
+    states_retrieved: int
+    imported_count: int
+    skipped_count: int
+    total_spans: int

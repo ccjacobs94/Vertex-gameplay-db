@@ -43,9 +43,18 @@ class Settings:
     trusted_proxies: tuple[str, ...] = ()
     outbound_sync_enabled: bool = True
     steam_api_key: str = ""
+    xbl_api_key: str = ""
+    gog_client_id: str = "46899977096215655"
+    gog_client_secret: str = "9d85c43b1482497dbbce61f6e4aa173a433796eeae2ca8c5f6129f2dc4de46d9"
     worker_enabled: bool = True
     worker_poll_interval_seconds: float = 1.0
     worker_lease_seconds: int = 120
+    scheduled_sync_enabled: bool = True
+    scheduled_sync_interval_seconds: float = 6 * 3600.0
+    telemetry_enabled: bool = True
+    telemetry_poll_interval_seconds: float = 900.0
+    telemetry_flush_delay_seconds: float = 45.0
+    daily_sweep_interval_seconds: float = 24 * 3600.0
     login_max_attempts: int = 8
     login_window_seconds: int = 300
     max_import_bytes: int = 64 * 1024 * 1024
@@ -91,6 +100,12 @@ class Settings:
         )
         trusted_proxies = _parse_csv(env.get("VERTEX_TRUSTED_PROXIES"))
 
+        sync_hours_raw = env.get("VERTEX_SYNC_INTERVAL_HOURS") or env.get("SYNC_INTERVAL_HOURS") or "6"
+        sync_interval_secs = max(60.0, float(sync_hours_raw) * 3600.0)
+        telem_poll_secs = max(10.0, float(env.get("VERTEX_TELEMETRY_POLL_INTERVAL") or "900.0"))
+        telem_flush_secs = max(0.0, float(env.get("VERTEX_TELEMETRY_FLUSH_DELAY") or "45.0"))
+        daily_sweep_secs = max(60.0, float(env.get("VERTEX_DAILY_SWEEP_INTERVAL") or str(24 * 3600.0)))
+
         return cls(
             data_dir=resolved_data,
             migrations_dir=resolved_migrations,
@@ -105,9 +120,21 @@ class Settings:
             trusted_proxies=trusted_proxies,
             outbound_sync_enabled=_parse_bool(env.get("VERTEX_OUTBOUND_SYNC_ENABLED"), True),
             steam_api_key=(env.get("STEAM_API_KEY") or "").strip(),
+            xbl_api_key=(env.get("XBL_API_KEY") or "").strip(),
+            gog_client_id=(env.get("GOG_CLIENT_ID") or "46899977096215655").strip(),
+            gog_client_secret=(
+                env.get("GOG_CLIENT_SECRET")
+                or "9d85c43b1482497dbbce61f6e4aa173a433796eeae2ca8c5f6129f2dc4de46d9"
+            ).strip(),
             worker_enabled=_parse_bool(env.get("VERTEX_WORKER_ENABLED"), True),
             worker_poll_interval_seconds=float(env.get("VERTEX_WORKER_POLL_INTERVAL") or "1.0"),
             worker_lease_seconds=max(10, int(env.get("VERTEX_WORKER_LEASE_SECONDS") or "120")),
+            scheduled_sync_enabled=_parse_bool(env.get("VERTEX_SCHEDULED_SYNC_ENABLED"), True),
+            scheduled_sync_interval_seconds=sync_interval_secs,
+            telemetry_enabled=_parse_bool(env.get("VERTEX_TELEMETRY_ENABLED"), True),
+            telemetry_poll_interval_seconds=telem_poll_secs,
+            telemetry_flush_delay_seconds=telem_flush_secs,
+            daily_sweep_interval_seconds=daily_sweep_secs,
             login_max_attempts=max(1, int(env.get("VERTEX_LOGIN_MAX_ATTEMPTS") or "8")),
             login_window_seconds=max(10, int(env.get("VERTEX_LOGIN_WINDOW_SECONDS") or "300")),
             max_import_bytes=max(1024, int(env.get("VERTEX_MAX_IMPORT_BYTES") or str(64 * 1024 * 1024))),

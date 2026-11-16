@@ -16,6 +16,7 @@ from vertex.interfaces.http.schemas import (
     JobResponse,
     JobsOverviewResponse,
     ProviderStatusResponse,
+    SyncAllResponse,
 )
 
 router = APIRouter(tags=["jobs"])
@@ -46,6 +47,46 @@ def enqueue_steam_sync(
 ) -> JobResponse:
     job = services.platform_sync.enqueue_steam_sync(scope)
     return _to_job_response(job)
+
+
+@router.post("/api/sync/xbox", response_model=JobResponse, status_code=202)
+def enqueue_xbox_sync(
+    scope: UserScope = Depends(require_sync_scope),
+    services: AppServices = Depends(get_services),
+) -> JobResponse:
+    job = services.platform_sync.enqueue_xbox_sync(scope)
+    return _to_job_response(job)
+
+
+@router.post("/api/sync/psn", response_model=JobResponse, status_code=202)
+def enqueue_psn_sync(
+    scope: UserScope = Depends(require_sync_scope),
+    services: AppServices = Depends(get_services),
+) -> JobResponse:
+    job = services.platform_sync.enqueue_psn_sync(scope)
+    return _to_job_response(job)
+
+
+@router.post("/api/sync/gog", response_model=JobResponse, status_code=202)
+def enqueue_gog_sync(
+    scope: UserScope = Depends(require_sync_scope),
+    services: AppServices = Depends(get_services),
+) -> JobResponse:
+    job = services.platform_sync.enqueue_gog_sync(scope)
+    return _to_job_response(job)
+
+
+@router.post("/api/sync", response_model=SyncAllResponse, status_code=202)
+def enqueue_all_syncs(
+    scope: UserScope = Depends(require_sync_scope),
+    services: AppServices = Depends(get_services),
+) -> SyncAllResponse:
+    jobs = services.platform_sync.enqueue_all_configured_syncs(scope)
+    return SyncAllResponse(
+        queued_count=len(jobs),
+        providers=[j.provider for j in jobs],
+        jobs=[_to_job_response(j) for j in jobs],
+    )
 
 
 @router.get("/api/jobs", response_model=JobsOverviewResponse)

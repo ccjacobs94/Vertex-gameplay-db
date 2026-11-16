@@ -1,5 +1,6 @@
 import type {
   AcceptInviteRequest,
+  AchievementBackfillResponse,
   AdminCreateUserRequest,
   AdminResetPasswordRequest,
   AdminUpdateUserRequest,
@@ -10,11 +11,14 @@ import type {
   CatalogEnrichRequest,
   CatalogSearchResultResponse,
   ConnectionsSummaryResponse,
+  ConnectionTestRequest,
+  ConnectionTestResponse,
   CreatedInviteResponse,
   CreatedPatResponse,
   CreateInviteRequest,
   CreatePatRequest,
   GameAchievementsResponse,
+  GameAchievementsSyncResponse,
   GameCreateRequest,
   GameResponse,
   GameUpdateRequest,
@@ -22,6 +26,8 @@ import type {
   HomeAssistantEventResponse,
   HomeAssistantImportCsvRequest,
   HomeAssistantImportResponse,
+  HomeAssistantSyncRequest,
+  HomeAssistantSyncResponse,
   ImportReportResponse,
   InviteResponse,
   JobResponse,
@@ -37,6 +43,10 @@ import type {
   ResetDismissalsResponse,
   SessionAnalyticsResponse,
   SessionWindowStatsResponse,
+  SyncAllResponse,
+  TelemetryPollResponse,
+  TelemetryStatusResponse,
+  TelemetrySweepResponse,
   UpdateConnectionsRequest,
   UpdateSessionRequest,
   UserAccountResponse,
@@ -233,8 +243,31 @@ export function updateConnections(body: UpdateConnectionsRequest): Promise<Conne
   });
 }
 
+export function testConnection(body: ConnectionTestRequest): Promise<ConnectionTestResponse> {
+  return apiFetch<ConnectionTestResponse>("/api/connections/test", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export function enqueueSteamSync(): Promise<JobResponse> {
   return apiFetch<JobResponse>("/api/sync/steam", { method: "POST" });
+}
+
+export function enqueueXboxSync(): Promise<JobResponse> {
+  return apiFetch<JobResponse>("/api/sync/xbox", { method: "POST" });
+}
+
+export function enqueuePsnSync(): Promise<JobResponse> {
+  return apiFetch<JobResponse>("/api/sync/psn", { method: "POST" });
+}
+
+export function enqueueGogSync(): Promise<JobResponse> {
+  return apiFetch<JobResponse>("/api/sync/gog", { method: "POST" });
+}
+
+export function enqueueAllSyncs(): Promise<SyncAllResponse> {
+  return apiFetch<SyncAllResponse>("/api/sync", { method: "POST" });
 }
 
 export function getJobs(): Promise<JobsOverviewResponse> {
@@ -285,8 +318,14 @@ export function adminRevokeInvite(codeHash: string): Promise<void> {
   return apiFetch<void>(`/api/admin/invites/${encodeURIComponent(codeHash)}`, { method: "DELETE" });
 }
 
-export function getGameAchievements(gameId: number): Promise<GameAchievementsResponse> {
-  return apiFetch<GameAchievementsResponse>(`/api/games/${gameId}/achievements`);
+export function getGameAchievements(gameId: number, autoSync = true): Promise<GameAchievementsResponse> {
+  return apiFetch<GameAchievementsResponse>(`/api/games/${gameId}/achievements?auto_sync=${String(autoSync)}`);
+}
+
+export function syncGameAchievements(gameId: number): Promise<GameAchievementsSyncResponse> {
+  return apiFetch<GameAchievementsSyncResponse>(`/api/games/${gameId}/achievements/sync`, {
+    method: "POST",
+  });
 }
 
 export function getReconcileCandidates(): Promise<Array<ReconcileCandidateResponse>> {
@@ -368,6 +407,31 @@ export function importHomeAssistantCsv(body: HomeAssistantImportCsvRequest): Pro
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export function syncHomeAssistantHistory(body: HomeAssistantSyncRequest): Promise<HomeAssistantSyncResponse> {
+  return apiFetch<HomeAssistantSyncResponse>("/api/integrations/homeassistant/sync", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function backfillAchievementSessions(): Promise<AchievementBackfillResponse> {
+  return apiFetch<AchievementBackfillResponse>("/api/sessions/backfill-achievements", {
+    method: "POST",
+  });
+}
+
+export function getTelemetryStatus(): Promise<TelemetryStatusResponse> {
+  return apiFetch<TelemetryStatusResponse>("/api/telemetry/status");
+}
+
+export function pollTelemetry(): Promise<TelemetryPollResponse> {
+  return apiFetch<TelemetryPollResponse>("/api/telemetry/poll", { method: "POST" });
+}
+
+export function runTelemetrySweep(): Promise<TelemetrySweepResponse> {
+  return apiFetch<TelemetrySweepResponse>("/api/telemetry/sweep", { method: "POST" });
 }
 
 export function getLibraryAnalytics(search = "", platform = "", status = ""): Promise<LibraryAnalyticsResponse> {

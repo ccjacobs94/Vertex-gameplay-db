@@ -7,12 +7,19 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends
 
 from vertex.infrastructure.scope import UserScope
-from vertex.interfaces.http.deps import AppServices, get_services, require_write_scope
+from vertex.interfaces.http.deps import (
+    AppServices,
+    get_services,
+    require_sync_scope,
+    require_write_scope,
+)
 from vertex.interfaces.http.schemas import (
     HomeAssistantEventRequest,
     HomeAssistantEventResponse,
     HomeAssistantImportCsvRequest,
     HomeAssistantImportResponse,
+    HomeAssistantSyncRequest,
+    HomeAssistantSyncResponse,
 )
 
 router = APIRouter(prefix="/api/integrations/homeassistant", tags=["homeassistant"])
@@ -57,3 +64,24 @@ def import_ha_csv(
         max_gap_seconds=body.max_gap_seconds,
     )
     return HomeAssistantImportResponse(**asdict(res))
+
+
+@router.post("/sync", response_model=HomeAssistantSyncResponse)
+async def sync_ha_history(
+    body: HomeAssistantSyncRequest | None = None,
+    scope: UserScope = Depends(require_sync_scope),
+    services: AppServices = Depends(get_services),
+) -> HomeAssistantSyncResponse:
+    req = body or HomeAssistantSyncRequest()
+    creds = services.identity.get_decrypted_connections(scope)
+    res = await services.homeassistant.sync_history(
+        scope,
+        ha_url=req.ha_url,
+        ha_token=req.ha_token,
+        entity_id=req.entity_id,
+        platform=req.platform,
+        days_back=req.days_back,
+        max_gap_seconds=req.max_gap_seconds,
+        creds=creds,
+    )
+    return HomeAssistantSyncResponse(**asdict(res))

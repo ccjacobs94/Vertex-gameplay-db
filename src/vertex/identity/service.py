@@ -95,6 +95,40 @@ def _validate_timezone(tz_name: str) -> str:
     return cleaned
 
 
+def _clean_psn_token(raw: str) -> str:
+    text = (raw or "").strip()
+    if not text:
+        return ""
+    try:
+        data = json.loads(text)
+        if isinstance(data, dict) and data.get("npsso"):
+            return str(data["npsso"]).strip()
+    except Exception:
+        pass
+    match = re.search(r'["\']?npsso["\']?\s*[:=]\s*["\']?([a-zA-Z0-9_-]+)["\']?', text)
+    if match:
+        return match.group(1).strip()
+    return text.strip("\"' ")
+
+
+def _parse_gog_token_bundle(raw: str) -> tuple[str | None, str | None, str | None]:
+    """Return (refresh_token, access_token, user_id) from raw token string or OAuth JSON bundle."""
+    text = (raw or "").strip()
+    if not text:
+        return None, None, None
+    if text.startswith("{"):
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                ref = str(data.get("refresh_token") or "").strip() or None
+                acc = str(data.get("access_token") or "").strip() or None
+                uid = str(data.get("user_id") or "").strip() or None
+                return ref, acc, uid
+        except Exception:
+            pass
+    return text, None, None
+
+
 class IdentityService:
     """Manages local users, bootstrap, sessions, invites, PATs, and encrypted connections."""
 
@@ -922,6 +956,21 @@ class IdentityService:
 
     # ── Per-User Connections & Encrypted Credentials ────────────────────────
 
+    def list_active_user_scopes(self) -> list[UserScope]:
+        with self.db_manager.system_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, username, role, status FROM users WHERE status = 'active' ORDER BY created_at ASC"
+            ).fetchall()
+        return [
+            UserScope(
+                user_id=r["id"],
+                username=r["username"],
+                role=r["role"],
+                status=r["status"],
+            )
+            for r in rows
+        ]
+
     def get_connections_summary(self, scope: UserScope) -> ConnectionSummary:
         scope.require_active()
         with self.db_manager.system_connection() as conn:
@@ -935,6 +984,9 @@ class IdentityService:
                     xbl_api_key_configured=False,
                     xbl_watcher_api_key_configured=False,
                     psn_configured=False,
+                    gog_user_id=None,
+                    gog_username=None,
+                    gog_token_configured=False,
                     ha_url=None,
                     ha_token_configured=False,
                     ha_entity_id=None,
@@ -946,15 +998,22 @@ class IdentityService:
                 "xbl_api_key_encrypted",
                 "xbl_watcher_api_key_encrypted",
                 "psn_npsso_encrypted",
+                "gog_access_token_encrypted",
+                "gog_refresh_token_encrypted",
                 "ha_token_encrypted",
             ):
-                val = row[col]
+                val = row[col] if col in row.keys() else None
                 if val:
                     try:
                         self.secret_box.decrypt(val)
                     except (MissingSecretKeyError, SecretDecryptionError) as exc:
                         decrypt_err = str(exc)
                         break
+
+            gog_uid = row["gog_user_id"] if "gog_user_id" in row.keys() else None
+            gog_uname = row["gog_username"] if "gog_username" in row.keys() else None
+            gog_acc = row["gog_access_token_encrypted"] if "gog_access_token_encrypted" in row.keys() else None
+            gog_ref = row["gog_refresh_token_encrypted"] if "gog_refresh_token_encrypted" in row.keys() else None
 
             return ConnectionSummary(
                 steam_id=row["steam_id"],
@@ -964,6 +1023,9 @@ class IdentityService:
                 xbl_api_key_configured=bool(row["xbl_api_key_encrypted"]),
                 xbl_watcher_api_key_configured=bool(row["xbl_watcher_api_key_encrypted"]),
                 psn_configured=bool(row["psn_npsso_encrypted"]),
+                gog_user_id=gog_uid,
+                gog_username=gog_uname,
+                gog_token_configured=bool(gog_ref or gog_acc),
                 ha_url=row["ha_url"],
                 ha_token_configured=bool(row["ha_token_encrypted"]),
                 ha_entity_id=row["ha_entity_id"],
@@ -982,8 +1044,15 @@ class IdentityService:
         xbox_xuid: str | None = None,
         xbl_api_key: str | None = None,
         clear_xbl_api_key: bool = False,
+        xbl_watcher_api_key: str | None = None,
+        clear_xbl_watcher_api_key: bool = False,
         psn_npsso: str | None = None,
         clear_psn_npsso: bool = False,
+        gog_user_id: str | None = None,
+        gog_username: str | None = None,
+        gog_access_token: str | None = None,
+        gog_refresh_token: str | None = None,
+        clear_gog_tokens: bool = False,
         ha_url: str | None = None,
         ha_token: str | None = None,
         clear_ha_token: bool = False,
@@ -1019,10 +1088,38 @@ class IdentityService:
             elif xbl_api_key is not None and xbl_api_key.strip():
                 updates["xbl_api_key_encrypted"] = self.secret_box.encrypt(xbl_api_key.strip())
 
+            if clear_xbl_watcher_api_key:
+                updates["xbl_watcher_api_key_encrypted"] = None
+            elif xbl_watcher_api_key is not None and xbl_watcher_api_key.strip():
+                updates["xbl_watcher_api_key_encrypted"] = self.secret_box.encrypt(
+                    xbl_watcher_api_key.strip()
+                )
+
             if clear_psn_npsso:
                 updates["psn_npsso_encrypted"] = None
             elif psn_npsso is not None and psn_npsso.strip():
-                updates["psn_npsso_encrypted"] = self.secret_box.encrypt(psn_npsso.strip())
+                cleaned_psn = _clean_psn_token(psn_npsso)
+                if cleaned_psn:
+                    updates["psn_npsso_encrypted"] = self.secret_box.encrypt(cleaned_psn)
+
+            if gog_user_id is not None:
+                updates["gog_user_id"] = gog_user_id.strip() or None
+            if gog_username is not None:
+                updates["gog_username"] = gog_username.strip() or None
+            if clear_gog_tokens:
+                updates["gog_access_token_encrypted"] = None
+                updates["gog_refresh_token_encrypted"] = None
+            else:
+                if gog_refresh_token is not None and gog_refresh_token.strip():
+                    ref_tok, bundled_acc, bundled_uid = _parse_gog_token_bundle(gog_refresh_token)
+                    if ref_tok:
+                        updates["gog_refresh_token_encrypted"] = self.secret_box.encrypt(ref_tok)
+                    if bundled_acc and not (gog_access_token and gog_access_token.strip()):
+                        updates["gog_access_token_encrypted"] = self.secret_box.encrypt(bundled_acc)
+                    if bundled_uid and not (gog_user_id and gog_user_id.strip()):
+                        updates["gog_user_id"] = bundled_uid
+                if gog_access_token is not None and gog_access_token.strip():
+                    updates["gog_access_token_encrypted"] = self.secret_box.encrypt(gog_access_token.strip())
 
             if ha_url is not None:
                 updates["ha_url"] = ha_url.strip() or None
@@ -1048,6 +1145,47 @@ class IdentityService:
 
         return self.get_connections_summary(scope)
 
+    def save_resolved_provider_state(
+        self,
+        scope: UserScope,
+        *,
+        xbox_xuid: str | None = None,
+        gog_user_id: str | None = None,
+        gog_username: str | None = None,
+        gog_access_token: str | None = None,
+        gog_refresh_token: str | None = None,
+    ) -> None:
+        """Persist auto-resolved provider identifiers or refreshed OAuth tokens without resetting other fields."""
+        scope.require_active()
+        now_iso = _iso(_utc_now())
+        updates: dict[str, Any] = {}
+        if xbox_xuid and xbox_xuid.strip():
+            updates["xbox_xuid"] = xbox_xuid.strip()
+        if gog_user_id and gog_user_id.strip():
+            updates["gog_user_id"] = gog_user_id.strip()
+        if gog_username and gog_username.strip():
+            updates["gog_username"] = gog_username.strip()
+        if gog_access_token and gog_access_token.strip():
+            updates["gog_access_token_encrypted"] = self.secret_box.encrypt(gog_access_token.strip())
+        if gog_refresh_token and gog_refresh_token.strip():
+            updates["gog_refresh_token_encrypted"] = self.secret_box.encrypt(gog_refresh_token.strip())
+        if not updates:
+            return
+        updates["updated_at"] = now_iso
+
+        with self.db_manager.system_connection(immediate=True) as conn:
+            row = get_connection_row(conn, scope.user_id)
+            if row is None:
+                conn.execute(
+                    "INSERT INTO user_connections (user_id, updated_at) VALUES (?, ?)",
+                    (scope.user_id, now_iso),
+                )
+            assigns = ", ".join(f"{col} = ?" for col in updates)
+            conn.execute(
+                f"UPDATE user_connections SET {assigns} WHERE user_id = ?",
+                (*updates.values(), scope.user_id),
+            )
+
     def get_decrypted_connections(self, scope: UserScope) -> DecryptedConnections:
         """Internal credential resolver for sync adapters; never falls back to another user."""
         scope.require_active()
@@ -1063,6 +1201,10 @@ class IdentityService:
                     xbl_api_key=None,
                     xbl_watcher_api_key=None,
                     psn_npsso=None,
+                    gog_user_id=None,
+                    gog_username=None,
+                    gog_access_token=None,
+                    gog_refresh_token=None,
                     ha_url=None,
                     ha_token=None,
                     ha_entity_id=None,
@@ -1073,21 +1215,34 @@ class IdentityService:
                 if row["steam_api_key_encrypted"]
                 else (self.db_manager.settings.steam_api_key or None)
             )
+            has_xbox_identity = bool(row["xbox_gamertag"] or row["xbox_xuid"])
+            user_xbl_key = (
+                self.secret_box.decrypt(row["xbl_api_key_encrypted"])
+                if row["xbl_api_key_encrypted"]
+                else ((self.db_manager.settings.xbl_api_key or None) if has_xbox_identity else None)
+            )
+            gog_acc_enc = row["gog_access_token_encrypted"] if "gog_access_token_encrypted" in row.keys() else None
+            gog_ref_enc = row["gog_refresh_token_encrypted"] if "gog_refresh_token_encrypted" in row.keys() else None
+            gog_uid = row["gog_user_id"] if "gog_user_id" in row.keys() else None
+            gog_uname = row["gog_username"] if "gog_username" in row.keys() else None
+
             return DecryptedConnections(
                 user_id=scope.user_id,
                 steam_id=row["steam_id"],
                 steam_api_key=user_steam_key,
                 xbox_gamertag=row["xbox_gamertag"],
                 xbox_xuid=row["xbox_xuid"],
-                xbl_api_key=self.secret_box.decrypt(row["xbl_api_key_encrypted"])
-                if row["xbl_api_key_encrypted"]
-                else None,
+                xbl_api_key=user_xbl_key,
                 xbl_watcher_api_key=self.secret_box.decrypt(row["xbl_watcher_api_key_encrypted"])
                 if row["xbl_watcher_api_key_encrypted"]
                 else None,
                 psn_npsso=self.secret_box.decrypt(row["psn_npsso_encrypted"])
                 if row["psn_npsso_encrypted"]
                 else None,
+                gog_user_id=gog_uid,
+                gog_username=gog_uname,
+                gog_access_token=self.secret_box.decrypt(gog_acc_enc) if gog_acc_enc else None,
+                gog_refresh_token=self.secret_box.decrypt(gog_ref_enc) if gog_ref_enc else None,
                 ha_url=row["ha_url"],
                 ha_token=self.secret_box.decrypt(row["ha_token_encrypted"])
                 if row["ha_token_encrypted"]

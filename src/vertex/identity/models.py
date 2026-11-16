@@ -88,9 +88,12 @@ class ConnectionSummary:
     xbl_api_key_configured: bool
     xbl_watcher_api_key_configured: bool
     psn_configured: bool
-    ha_url: str | None
-    ha_token_configured: bool
-    ha_entity_id: str | None
+    gog_user_id: str | None = None
+    gog_username: str | None = None
+    gog_token_configured: bool = False
+    ha_url: str | None = None
+    ha_token_configured: bool = False
+    ha_entity_id: str | None = None
     credential_decryption_error: str | None = None
     updated_at: str | None = None
 
@@ -105,9 +108,13 @@ class DecryptedConnections:
     xbl_api_key: str | None
     xbl_watcher_api_key: str | None
     psn_npsso: str | None
-    ha_url: str | None
-    ha_token: str | None
-    ha_entity_id: str | None
+    gog_user_id: str | None = None
+    gog_username: str | None = None
+    gog_access_token: str | None = None
+    gog_refresh_token: str | None = None
+    ha_url: str | None = None
+    ha_token: str | None = None
+    ha_entity_id: str | None = None
 
 
 class LoginRateLimiter:

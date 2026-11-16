@@ -139,6 +139,9 @@ class ConnectionsSummaryResponse(BaseModel):
     xbl_api_key_configured: bool
     xbl_watcher_api_key_configured: bool
     psn_configured: bool
+    gog_user_id: str | None = None
+    gog_username: str | None = None
+    gog_token_configured: bool = False
     ha_url: str | None = None
     ha_token_configured: bool
     ha_entity_id: str | None = None
@@ -154,8 +157,15 @@ class UpdateConnectionsRequest(BaseModel):
     xbox_xuid: str | None = None
     xbl_api_key: str | None = None
     clear_xbl_api_key: bool = False
+    xbl_watcher_api_key: str | None = None
+    clear_xbl_watcher_api_key: bool = False
     psn_npsso: str | None = None
     clear_psn_npsso: bool = False
+    gog_user_id: str | None = None
+    gog_username: str | None = None
+    gog_access_token: str | None = None
+    gog_refresh_token: str | None = None
+    clear_gog_tokens: bool = False
     ha_url: str | None = None
     ha_token: str | None = None
     clear_ha_token: bool = False
@@ -807,3 +817,100 @@ class PriceHistoryEntryResponse(BaseModel):
 class WishlistHistoryResponse(BaseModel):
     item: WishlistItemResponse
     price_history_by_sku: dict[str, list[PriceHistoryEntryResponse]]
+
+
+class ConnectionTestRequest(BaseModel):
+    provider: str = Field(pattern="^(steam|xbox|psn|gog|homeassistant)$")
+    credential: str | None = None
+    secondary_credential: str | None = None
+
+
+class ConnectionTestResponse(BaseModel):
+    status: str
+    platform: str
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class SyncAllResponse(BaseModel):
+    queued_count: int
+    providers: list[str]
+    jobs: list[JobResponse]
+
+
+class GameAchievementsSyncResponse(BaseModel):
+    game_id: int
+    unified_summary: UnifiedAchievementSummaryResponse
+    per_platform_summary: list[PlatformAchievementSummaryResponse]
+    achievements: list[GroupedAchievementResponse]
+    synced_copies: int
+    synced_providers: list[str]
+    warnings: list[str]
+
+
+class HomeAssistantSyncRequest(BaseModel):
+    ha_url: str | None = None
+    ha_token: str | None = None
+    entity_id: str | None = None
+    platform: str = Field(default="Xbox", max_length=80)
+    days_back: int = Field(default=7, ge=1, le=90)
+    max_gap_seconds: int = Field(default=1800, ge=0, le=86400)
+
+
+class HomeAssistantSyncResponse(BaseModel):
+    status: str
+    states_retrieved: int
+    imported_count: int
+    skipped_count: int
+    total_spans: int
+
+
+class ActiveTelemetrySessionResponse(BaseModel):
+    provider: str
+    external_title_id: str
+    game_id: int
+    title: str
+    platform: str
+    source: str
+    started_at: str
+    last_seen_at: str
+    baseline_minutes: int
+    baseline_achievements: int
+    rich_presence: str | None = None
+    detection_method: str
+
+
+class TelemetryProvidersResponse(BaseModel):
+    xbox: bool
+    xbox_rta: bool
+    gog: bool
+
+
+class TelemetryStatusResponse(BaseModel):
+    telemetry_enabled: bool
+    outbound_sync_enabled: bool
+    poll_interval_seconds: float
+    daily_sweep_interval_seconds: float
+    flush_delay_seconds: float
+    providers: TelemetryProvidersResponse
+    active_sessions: list[ActiveTelemetrySessionResponse]
+
+
+class TelemetryPollResponse(BaseModel):
+    status: str
+    events: list[dict[str, Any]]
+    active_sessions: list[ActiveTelemetrySessionResponse]
+    errors: list[str]
+
+
+class TelemetrySweepResponse(BaseModel):
+    status: str
+    reconciled_count: int
+    titles_checked: int
+    providers: list[str]
+    errors: list[str]
+
+
+class AchievementBackfillResponse(BaseModel):
+    sessions_created: int
+    games_backfilled: int

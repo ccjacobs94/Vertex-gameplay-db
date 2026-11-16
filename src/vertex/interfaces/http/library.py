@@ -13,10 +13,13 @@ from vertex.interfaces.http.deps import (
     AppServices,
     get_services,
     require_read_scope,
+    require_sync_scope,
     require_write_scope,
 )
 from vertex.interfaces.http.schemas import (
+    AchievementBackfillResponse,
     GameAchievementsResponse,
+    GameAchievementsSyncResponse,
     GameCreateRequest,
     GameResponse,
     GameUpdateRequest,
@@ -151,13 +154,40 @@ def delete_game(
 
 
 @router.get("/games/{game_id}/achievements", response_model=GameAchievementsResponse)
-def get_game_achievements(
+async def get_game_achievements(
     game_id: int,
+    auto_sync: bool = Query(default=True),
     scope: UserScope = Depends(require_read_scope),
     services: AppServices = Depends(get_services),
 ) -> GameAchievementsResponse:
+    if auto_sync:
+        res = await services.platform_sync.sync_game_achievements_on_demand(
+            scope,
+            game_id,
+            force=False,
+        )
+        return GameAchievementsResponse(**asdict(res["detail"]))
     detail = services.library.get_game_achievements(scope, game_id)
     return GameAchievementsResponse(**asdict(detail))
+
+
+@router.post("/games/{game_id}/achievements/sync", response_model=GameAchievementsSyncResponse)
+async def sync_game_achievements(
+    game_id: int,
+    scope: UserScope = Depends(require_sync_scope),
+    services: AppServices = Depends(get_services),
+) -> GameAchievementsSyncResponse:
+    res = await services.platform_sync.sync_game_achievements_on_demand(
+        scope,
+        game_id,
+        force=True,
+    )
+    return GameAchievementsSyncResponse(
+        **asdict(res["detail"]),
+        synced_copies=res["synced_copies"],
+        synced_providers=res["synced_providers"],
+        warnings=res["warnings"],
+    )
 
 
 @router.get("/reconcile/candidates", response_model=list[ReconcileCandidateResponse])
@@ -286,3 +316,12 @@ def rebuild_daily_ledger(
     services: AppServices = Depends(get_services),
 ) -> list[dict[str, Any]]:
     return [asdict(entry) for entry in services.activity.rebuild_daily_ledger(scope)]
+
+
+@router.post("/sessions/backfill-achievements", response_model=AchievementBackfillResponse)
+def backfill_sessions_from_achievements(
+    scope: UserScope = Depends(require_write_scope),
+    services: AppServices = Depends(get_services),
+) -> AchievementBackfillResponse:
+    res = services.activity.backfill_historical_sessions_from_achievements(scope)
+    return AchievementBackfillResponse(**asdict(res))

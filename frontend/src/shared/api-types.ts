@@ -6,6 +6,11 @@ export interface AcceptInviteRequest {
   password: string;
 }
 
+export interface AchievementBackfillResponse {
+  sessions_created: number;
+  games_backfilled: number;
+}
+
 export interface AchievementPlatformStatusResponse {
   game_id: number;
   platform: string;
@@ -16,6 +21,21 @@ export interface AchievementPlatformStatusResponse {
   reward_type?: string | null;
   reward_value?: string | null;
   rarity_pct?: number | null;
+}
+
+export interface ActiveTelemetrySessionResponse {
+  provider: string;
+  external_title_id: string;
+  game_id: number;
+  title: string;
+  platform: string;
+  source: string;
+  started_at: string;
+  last_seen_at: string;
+  baseline_minutes: number;
+  baseline_achievements: number;
+  rich_presence?: string | null;
+  detection_method: string;
 }
 
 export interface AdminCreateUserRequest {
@@ -136,6 +156,19 @@ export interface CircadianRhythmResponse {
   eras_count: number;
 }
 
+export interface ConnectionTestRequest {
+  provider: string;
+  credential?: string | null;
+  secondary_credential?: string | null;
+}
+
+export interface ConnectionTestResponse {
+  status: string;
+  platform: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
 export interface ConnectionsSummaryResponse {
   steam_id?: string | null;
   steam_api_key_configured: boolean;
@@ -144,6 +177,9 @@ export interface ConnectionsSummaryResponse {
   xbl_api_key_configured: boolean;
   xbl_watcher_api_key_configured: boolean;
   psn_configured: boolean;
+  gog_user_id?: string | null;
+  gog_username?: string | null;
+  gog_token_configured?: boolean;
   ha_url?: string | null;
   ha_token_configured: boolean;
   ha_entity_id?: string | null;
@@ -199,6 +235,16 @@ export interface GameAchievementsResponse {
   unified_summary: UnifiedAchievementSummaryResponse;
   per_platform_summary: Array<PlatformAchievementSummaryResponse>;
   achievements: Array<GroupedAchievementResponse>;
+}
+
+export interface GameAchievementsSyncResponse {
+  game_id: number;
+  unified_summary: UnifiedAchievementSummaryResponse;
+  per_platform_summary: Array<PlatformAchievementSummaryResponse>;
+  achievements: Array<GroupedAchievementResponse>;
+  synced_copies: number;
+  synced_providers: Array<string>;
+  warnings: Array<string>;
 }
 
 export interface GameCreateRequest {
@@ -357,6 +403,23 @@ export interface HomeAssistantImportCsvRequest {
 
 export interface HomeAssistantImportResponse {
   status: string;
+  imported_count: number;
+  skipped_count: number;
+  total_spans: number;
+}
+
+export interface HomeAssistantSyncRequest {
+  ha_url?: string | null;
+  ha_token?: string | null;
+  entity_id?: string | null;
+  platform?: string;
+  days_back?: number;
+  max_gap_seconds?: number;
+}
+
+export interface HomeAssistantSyncResponse {
+  status: string;
+  states_retrieved: number;
   imported_count: number;
   skipped_count: number;
   total_spans: number;
@@ -606,6 +669,12 @@ export interface StatusAnalyticsItemResponse {
   hours_pct: number;
 }
 
+export interface SyncAllResponse {
+  queued_count: number;
+  providers: Array<string>;
+  jobs: Array<JobResponse>;
+}
+
 export interface TagAnalyticsItemResponse {
   tag: string;
   count: number;
@@ -613,6 +682,37 @@ export interface TagAnalyticsItemResponse {
   dropped_count: number;
   drop_rate: number;
   completion_rate: number;
+}
+
+export interface TelemetryPollResponse {
+  status: string;
+  events: Array<Record<string, unknown>>;
+  active_sessions: Array<ActiveTelemetrySessionResponse>;
+  errors: Array<string>;
+}
+
+export interface TelemetryProvidersResponse {
+  xbox: boolean;
+  xbox_rta: boolean;
+  gog: boolean;
+}
+
+export interface TelemetryStatusResponse {
+  telemetry_enabled: boolean;
+  outbound_sync_enabled: boolean;
+  poll_interval_seconds: number;
+  daily_sweep_interval_seconds: number;
+  flush_delay_seconds: number;
+  providers: TelemetryProvidersResponse;
+  active_sessions: Array<ActiveTelemetrySessionResponse>;
+}
+
+export interface TelemetrySweepResponse {
+  status: string;
+  reconciled_count: number;
+  titles_checked: number;
+  providers: Array<string>;
+  errors: Array<string>;
 }
 
 export interface TimezoneUpdateRequest {
@@ -635,8 +735,15 @@ export interface UpdateConnectionsRequest {
   xbox_xuid?: string | null;
   xbl_api_key?: string | null;
   clear_xbl_api_key?: boolean;
+  xbl_watcher_api_key?: string | null;
+  clear_xbl_watcher_api_key?: boolean;
   psn_npsso?: string | null;
   clear_psn_npsso?: boolean;
+  gog_user_id?: string | null;
+  gog_username?: string | null;
+  gog_access_token?: string | null;
+  gog_refresh_token?: string | null;
+  clear_gog_tokens?: boolean;
   ha_url?: string | null;
   ha_token?: string | null;
   clear_ha_token?: boolean;

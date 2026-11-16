@@ -9,6 +9,8 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from vertex.activity.models import (
+    AchievementBackfillResult,
+    ActiveTelemetrySession,
     DailyLedgerEntry,
     ObservationOutcome,
     PlaySession,
@@ -41,10 +43,10 @@ def _utc_now_iso() -> str:
 
 def _platform_family(platform: str) -> str:
     p = (platform or "").lower()
-    if "steam" in p or "pc" in p:
-        return "PC"
     if "xbox" in p:
         return "Xbox"
+    if any(k in p for k in ("steam", "gog", "pc")):
+        return "PC"
     if any(k in p for k in ("playstation", "psn", "ps1", "ps2", "ps3", "ps4", "ps5", "psp", "ps vita")):
         return "PlayStation"
     if "switch" in p or "nintendo" in p:
@@ -431,8 +433,9 @@ class ActivityService:
                     ),
                 )
 
-            # Avoid double-counting time already recorded by exact interval sources (e.g. Home Assistant).
+            # Avoid double-counting time already recorded by exact interval sources (e.g. Home Assistant / Telemetry).
             exact_covered = 0
+            exact_window_end = obs_dt + timedelta(minutes=5)
             exact_rows = conn.execute(
                 """
                 SELECT duration_minutes, started_at, ended_at, source
@@ -443,7 +446,7 @@ class ActivityService:
             ).fetchall()
             for er in exact_rows:
                 e_end = _parse_iso(er["ended_at"])
-                if prev_obs_dt < e_end <= obs_dt:
+                if prev_obs_dt < e_end <= exact_window_end:
                     exact_covered += int(er["duration_minutes"] or 0)
 
             effective_delta = max(0, delta - exact_covered)
@@ -581,6 +584,8 @@ class ActivityService:
                 (game_id,),
             ).fetchall()
 
+            precision_rank = {"coarse": 1, "estimated": 2, "exact": 3}
+            incoming_rank = precision_rank[precision_level]
             overlap_blocking_id: int | None = None
             unlocked_estimated_overlaps: list[tuple[sqlite3.Row, int]] = []
             for es in existing_sessions:
@@ -590,7 +595,8 @@ class ActivityService:
                 overlap_start = max(start_dt, es_start)
                 overlap_end = min(end_dt, es_end)
                 if overlap_end > overlap_start or (es_start == start_dt and es_end == end_dt):
-                    if es["precision_level"] == "exact" or bool(es["is_locked"]):
+                    existing_rank = precision_rank.get(es["precision_level"], 2)
+                    if bool(es["is_locked"]) or existing_rank >= incoming_rank:
                         overlap_blocking_id = int(es["id"])
                         break
                     overlap_mins = max(1, int(round((overlap_end - overlap_start).total_seconds() / 60.0)))
@@ -915,3 +921,281 @@ class ActivityService:
                 status_locked=bool(updated["status_locked"]),
                 playtime_prompt_muted=bool(updated["playtime_prompt_muted"]),
             )
+
+    # ── Telemetry Active Sessions & Historical Backfill ─────────────────────
+
+    def seed_baseline_if_absent(
+        self,
+        scope: UserScope,
+        *,
+        game_id: int,
+        source: str,
+        baseline_minutes: int,
+        observed_at: str,
+    ) -> bool:
+        scope.require_active()
+        obs_dt = _parse_user_iso(observed_at, "observed_at")
+        obs_iso = obs_dt.isoformat()
+        now_iso = _utc_now_iso()
+        mins = max(0, int(baseline_minutes))
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM provider_baselines WHERE game_id = ? AND source = ?",
+                (game_id, source),
+            ).fetchone()
+            if existing is not None:
+                return False
+            conn.execute(
+                """
+                INSERT INTO provider_baselines (
+                    game_id, source, baseline_minutes, last_observed_at, reset_count, updated_at
+                ) VALUES (?, ?, ?, ?, 0, ?)
+                """,
+                (game_id, source, mins, obs_iso, now_iso),
+            )
+            return True
+
+    def get_provider_baseline_minutes(
+        self,
+        scope: UserScope,
+        *,
+        game_id: int,
+        source: str,
+    ) -> int | None:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            row = conn.execute(
+                "SELECT baseline_minutes FROM provider_baselines WHERE game_id = ? AND source = ?",
+                (game_id, source),
+            ).fetchone()
+            return int(row["baseline_minutes"]) if row is not None else None
+
+    def get_active_telemetry_session(
+        self,
+        scope: UserScope,
+        provider: str,
+    ) -> ActiveTelemetrySession | None:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            row = conn.execute(
+                "SELECT * FROM telemetry_active_sessions WHERE provider = ?",
+                (provider,),
+            ).fetchone()
+            if row is None:
+                return None
+            return ActiveTelemetrySession(
+                provider=row["provider"],
+                external_title_id=row["external_title_id"],
+                game_id=int(row["game_id"]),
+                title=row["title"],
+                platform=row["platform"],
+                source=row["source"],
+                started_at=row["started_at"],
+                last_seen_at=row["last_seen_at"],
+                baseline_minutes=int(row["baseline_minutes"] or 0),
+                baseline_achievements=int(row["baseline_achievements"] or 0),
+                rich_presence=row["rich_presence"],
+                detection_method=row["detection_method"] or "presence_poll",
+            )
+
+    def list_active_telemetry_sessions(self, scope: UserScope) -> list[ActiveTelemetrySession]:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            rows = conn.execute(
+                "SELECT * FROM telemetry_active_sessions ORDER BY started_at DESC"
+            ).fetchall()
+            return [
+                ActiveTelemetrySession(
+                    provider=r["provider"],
+                    external_title_id=r["external_title_id"],
+                    game_id=int(r["game_id"]),
+                    title=r["title"],
+                    platform=r["platform"],
+                    source=r["source"],
+                    started_at=r["started_at"],
+                    last_seen_at=r["last_seen_at"],
+                    baseline_minutes=int(r["baseline_minutes"] or 0),
+                    baseline_achievements=int(r["baseline_achievements"] or 0),
+                    rich_presence=r["rich_presence"],
+                    detection_method=r["detection_method"] or "presence_poll",
+                )
+                for r in rows
+            ]
+
+    def upsert_active_telemetry_session(
+        self,
+        scope: UserScope,
+        *,
+        provider: str,
+        external_title_id: str,
+        game_id: int,
+        title: str,
+        platform: str,
+        source: str,
+        started_at: str,
+        last_seen_at: str,
+        baseline_minutes: int,
+        baseline_achievements: int,
+        rich_presence: str | None = None,
+        detection_method: str = "presence_poll",
+    ) -> ActiveTelemetrySession:
+        scope.require_active()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            conn.execute(
+                """
+                INSERT INTO telemetry_active_sessions (
+                    provider, external_title_id, game_id, title, platform, source,
+                    started_at, last_seen_at, baseline_minutes, baseline_achievements,
+                    rich_presence, detection_method
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(provider) DO UPDATE SET
+                    external_title_id = excluded.external_title_id,
+                    game_id = excluded.game_id,
+                    title = excluded.title,
+                    platform = excluded.platform,
+                    source = excluded.source,
+                    started_at = excluded.started_at,
+                    last_seen_at = excluded.last_seen_at,
+                    baseline_minutes = excluded.baseline_minutes,
+                    baseline_achievements = excluded.baseline_achievements,
+                    rich_presence = excluded.rich_presence,
+                    detection_method = excluded.detection_method
+                """,
+                (
+                    provider,
+                    external_title_id,
+                    game_id,
+                    title,
+                    platform,
+                    source,
+                    started_at,
+                    last_seen_at,
+                    max(0, int(baseline_minutes)),
+                    max(0, int(baseline_achievements)),
+                    rich_presence,
+                    detection_method,
+                ),
+            )
+        return ActiveTelemetrySession(
+            provider=provider,
+            external_title_id=external_title_id,
+            game_id=game_id,
+            title=title,
+            platform=platform,
+            source=source,
+            started_at=started_at,
+            last_seen_at=last_seen_at,
+            baseline_minutes=max(0, int(baseline_minutes)),
+            baseline_achievements=max(0, int(baseline_achievements)),
+            rich_presence=rich_presence,
+            detection_method=detection_method,
+        )
+
+    def touch_active_telemetry_session(
+        self,
+        scope: UserScope,
+        provider: str,
+        *,
+        last_seen_at: str,
+        rich_presence: str | None = None,
+    ) -> None:
+        scope.require_active()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            conn.execute(
+                """
+                UPDATE telemetry_active_sessions
+                SET last_seen_at = ?, rich_presence = COALESCE(?, rich_presence)
+                WHERE provider = ?
+                """,
+                (last_seen_at, rich_presence, provider),
+            )
+
+    def delete_active_telemetry_session(self, scope: UserScope, provider: str) -> None:
+        scope.require_active()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            conn.execute("DELETE FROM telemetry_active_sessions WHERE provider = ?", (provider,))
+
+    def backfill_historical_sessions_from_achievements(
+        self,
+        scope: UserScope,
+    ) -> AchievementBackfillResult:
+        """Cluster unlocked achievement timestamps (<=180m gap) into coarse historical sessions idempotently."""
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            already_games = {
+                int(r["game_id"])
+                for r in conn.execute(
+                    """
+                    SELECT DISTINCT game_id FROM play_sessions WHERE source = 'achievement_backfill'
+                    UNION
+                    SELECT DISTINCT game_id FROM play_observations WHERE source = 'achievement_backfill'
+                    """
+                ).fetchall()
+            }
+            rows = conn.execute(
+                """
+                SELECT ga.game_id, ga.unlock_time, g.platform
+                FROM game_achievements ga
+                JOIN games g ON g.id = ga.game_id
+                WHERE ga.unlocked = 1 AND ga.unlock_time IS NOT NULL AND ga.unlock_time != ''
+                ORDER BY ga.game_id ASC, ga.unlock_time ASC
+                """
+            ).fetchall()
+
+        by_game: dict[int, tuple[str, list[datetime]]] = {}
+        for r in rows:
+            gid = int(r["game_id"])
+            if gid in already_games:
+                continue
+            try:
+                dt = _parse_iso(str(r["unlock_time"]))
+            except Exception:
+                continue
+            plat = str(r["platform"] or "PC")
+            entry = by_game.get(gid)
+            if entry is None:
+                by_game[gid] = (plat, [dt])
+            else:
+                entry[1].append(dt)
+
+        sessions_created = 0
+        backfilled_games: set[int] = set()
+        for gid, (plat, dts) in by_game.items():
+            if not dts:
+                continue
+            dts.sort()
+            clusters: list[list[datetime]] = [[dts[0]]]
+            for nxt in dts[1:]:
+                if (nxt - clusters[-1][-1]).total_seconds() / 60.0 <= 180.0:
+                    clusters[-1].append(nxt)
+                else:
+                    clusters.append([nxt])
+
+            for cl in clusters:
+                started_dt = cl[0] - timedelta(minutes=30)
+                ended_dt = cl[-1] + timedelta(minutes=15)
+                dur_mins = max(15, int(round((ended_dt - started_dt).total_seconds() / 60.0)))
+                started_iso = started_dt.isoformat()
+                ended_iso = ended_dt.isoformat()
+                idem_key = f"ach_backfill:{gid}:{started_iso}:{ended_iso}:{len(cl)}"
+                outcome = self.record_interval_observation(
+                    scope,
+                    game_id=gid,
+                    source="achievement_backfill",
+                    platform=plat,
+                    started_at=started_iso,
+                    ended_at=ended_iso,
+                    duration_minutes=dur_mins,
+                    idempotency_key=idem_key,
+                    precision_level="coarse",
+                    achievements_unlocked=len(cl),
+                    payload={"cluster_size": len(cl)},
+                )
+                if outcome.status == "session_created":
+                    sessions_created += 1
+                    backfilled_games.add(gid)
+
+        return AchievementBackfillResult(
+            sessions_created=sessions_created,
+            games_backfilled=len(backfilled_games),
+        )

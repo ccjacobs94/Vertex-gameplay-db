@@ -9,10 +9,10 @@ from typing import Protocol
 import httpx
 
 _SECRET_PATTERN = re.compile(
-    r"(?i)(key|api_key|token|authorization|npsso|password|secret)=([^&\s]+)"
+    r"(?i)(key|api_key|token|access_token|refresh_token|client_secret|code|authorization|npsso|password|secret)=([^&\s]+)"
 )
 _HEADER_SECRET_PATTERN = re.compile(
-    r"(?i)(authorization:\s*bearer\s+|bearer\s+|x-api-key:\s*|authorization:\s*)([^\s,;]+)"
+    r"(?i)(authorization:\s*bearer\s+|bearer\s+|x-api-key:\s*|x-authorization:\s*|authorization:\s*)([^\s,;]+)"
 )
 
 
@@ -30,6 +30,7 @@ class AdapterCapabilities:
     supports_achievements: bool
     supports_game_pass: bool
     auth_modes: tuple[str, ...]
+    supports_telemetry: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +46,26 @@ class PlatformGameSnapshot:
     tags: tuple[str, ...] = ()
     is_game_pass: bool | None = None
     is_play_anywhere: bool | None = None
+    achievements_unlocked: int | None = None
+    achievements_total: int | None = None
+    release_year: int | None = None
+    critic_score: int | None = None
+    cover_is_poster: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class AchievementSnapshot:
+    external_ach_id: str
+    name: str
+    description: str = ""
+    icon_url: str | None = None
+    icon_gray_url: str | None = None
+    unlocked: bool = False
+    unlock_time: str | None = None
+    reward_type: str | None = None
+    reward_value: str | None = None
+    rarity_pct: float | None = None
+    is_hidden: bool = False
 
 
 class PlatformAdapterError(Exception):

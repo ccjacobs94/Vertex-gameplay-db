@@ -42,6 +42,8 @@ def _short_platform_label(platform: str) -> str:
     p = (platform or "").strip()
     mapping = {
         "PC (Steam)": "Steam",
+        "PC (GOG)": "GOG",
+        "GOG": "GOG",
         "PC (Xbox)": "PC (Xbox)",
         "Xbox / PC": "Xbox/PC",
         "Xbox": "Xbox",
@@ -172,6 +174,27 @@ class LibraryService:
         with self.db_manager.library_connection(scope) as conn:
             row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
             return row_to_game(row) if row is not None else None
+
+    def find_game_by_external_id(self, scope: UserScope, external_id: str) -> GameRecord | None:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            row = conn.execute("SELECT * FROM games WHERE external_id = ?", (external_id,)).fetchone()
+            return row_to_game(row) if row is not None else None
+
+    def get_linked_games(self, scope: UserScope, game_id: int) -> list[GameRecord]:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            target = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+            if target is None:
+                raise NotFoundError(f"Game {game_id} not found")
+            cid = target["canonical_id"]
+            if cid is not None:
+                rows = conn.execute(
+                    "SELECT * FROM games WHERE canonical_id = ? ORDER BY playtime_hours DESC, id ASC",
+                    (cid,),
+                ).fetchall()
+                return [row_to_game(r) for r in rows]
+            return [row_to_game(target)]
 
     def find_or_create_by_title(
         self,
@@ -572,10 +595,13 @@ class LibraryService:
         genres: list[str] | None = None,
         tags: list[str] | None = None,
         cover_url: str | None = None,
+        allow_cover_upgrade: bool = False,
         release_year: int | None = None,
         critic_score: int | None = None,
         is_game_pass: bool | None = None,
         is_play_anywhere: bool | None = None,
+        achievements_unlocked: int | None = None,
+        achievements_total: int | None = None,
     ) -> tuple[GameRecord, bool]:
         """Apply external snapshot safely: never clobbers locks, ownership, notes, rating, favorite, or labels."""
         scope.require_active()
@@ -583,6 +609,7 @@ class LibraryService:
         obs_mins = max(0, int(playtime_minutes))
         valid_g = validate_genres(genres)
         valid_t = validate_tags(tags)
+        clean_cover = (cover_url or "").strip() or None
 
         with self.db_manager.library_connection(scope, immediate=True) as conn:
             existing = conn.execute(
@@ -594,15 +621,18 @@ class LibraryService:
                 init_status = "Playing" if obs_mins > 0 else "Not Played"
                 gp = 1 if is_game_pass else 0
                 pa = 1 if is_play_anywhere else 0
+                ach_u = max(0, int(achievements_unlocked or 0))
+                ach_t = max(0, int(achievements_total or 0))
                 cur = conn.execute(
                     """
                     INSERT INTO games (
                         external_id, title, platform, source, playtime_hours, playtime_minutes,
                         last_synced_playtime_minutes, last_played, completion_status, status_locked,
                         ownership_status, ownership_locked, is_game_pass, is_play_anywhere,
+                        achievements_unlocked, achievements_total,
                         genres_json, tags_json, critic_score, release_year, cover_url,
                         created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Owned', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'Owned', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         external_id,
@@ -616,11 +646,13 @@ class LibraryService:
                         init_status,
                         gp,
                         pa,
+                        ach_u,
+                        ach_t,
                         json.dumps(valid_g),
                         json.dumps(valid_t),
                         critic_score,
                         release_year,
-                        cover_url,
+                        clean_cover,
                         now_iso,
                         now_iso,
                     ),
@@ -657,6 +689,25 @@ class LibraryService:
                 gp = int(existing["is_game_pass"]) if is_game_pass is None else (1 if is_game_pass else 0)
                 pa = int(existing["is_play_anywhere"]) if is_play_anywhere is None else (1 if is_play_anywhere else 0)
 
+                prev_ach_u = int(existing["achievements_unlocked"] or 0)
+                prev_ach_t = int(existing["achievements_total"] or 0)
+                if achievements_total is not None and int(achievements_total) > 0:
+                    next_ach_t = max(prev_ach_t, int(achievements_total))
+                    next_ach_u = (
+                        max(prev_ach_u, int(achievements_unlocked or 0))
+                        if achievements_unlocked is not None
+                        else prev_ach_u
+                    )
+                else:
+                    next_ach_u = prev_ach_u
+                    next_ach_t = prev_ach_t
+
+                if allow_cover_upgrade and clean_cover:
+                    next_cover = clean_cover
+                else:
+                    existing_cov = (existing["cover_url"] or "").strip() if existing["cover_url"] else ""
+                    next_cover = existing_cov or clean_cover
+
                 conn.execute(
                     """
                     UPDATE games
@@ -668,11 +719,13 @@ class LibraryService:
                         completion_status = ?,
                         is_game_pass = ?,
                         is_play_anywhere = ?,
+                        achievements_unlocked = ?,
+                        achievements_total = ?,
                         genres_json = ?,
                         tags_json = ?,
                         critic_score = COALESCE(critic_score, ?),
                         release_year = COALESCE(release_year, ?),
-                        cover_url = COALESCE(cover_url, ?),
+                        cover_url = ?,
                         updated_at = ?
                     WHERE id = ?
                     """,
@@ -685,11 +738,13 @@ class LibraryService:
                         new_status,
                         gp,
                         pa,
+                        next_ach_u,
+                        next_ach_t,
                         json.dumps(merged_g),
                         json.dumps(merged_t),
                         critic_score,
                         release_year,
-                        cover_url,
+                        next_cover,
                         now_iso,
                         game_id,
                     ),
@@ -952,6 +1007,132 @@ class LibraryService:
                     cover_changed = True
 
             return meta_changed, cover_changed
+
+    def upsert_game_achievements(
+        self,
+        scope: UserScope,
+        *,
+        game_id: int,
+        source: str,
+        platform: str,
+        achievements: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        """Insert or update achievements for a game and refresh summary counts safely."""
+        scope.require_active()
+        now_iso = _utc_now_iso()
+        unlocked_count = 0
+        total_count = len(achievements)
+
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            game_row = conn.execute(
+                "SELECT id, status_locked, completion_status FROM games WHERE id = ?",
+                (game_id,),
+            ).fetchone()
+            if game_row is None:
+                raise NotFoundError(f"Game {game_id} not found")
+
+            for ach in achievements:
+                ext_id = str(
+                    ach.get("external_ach_id") or ach.get("id") or ach.get("apiname") or ""
+                ).strip()
+                if not ext_id:
+                    continue
+                name = str(ach.get("name") or ext_id).strip()
+                desc = str(ach.get("description") or "").strip()
+                icon_url = ach.get("icon_url")
+                icon_gray_url = ach.get("icon_gray_url")
+                unlocked = 1 if ach.get("unlocked") else 0
+                if unlocked:
+                    unlocked_count += 1
+                unlock_time = ach.get("unlock_time")
+                reward_type = ach.get("reward_type")
+                reward_value = str(ach["reward_value"]) if ach.get("reward_value") is not None else None
+                rarity_pct = float(ach["rarity_pct"]) if ach.get("rarity_pct") is not None else None
+                is_hidden = 1 if ach.get("is_hidden") else 0
+
+                conn.execute(
+                    """
+                    INSERT INTO game_achievements (
+                        game_id, external_ach_id, source, platform, name, description,
+                        icon_url, icon_gray_url, unlocked, unlock_time, reward_type,
+                        reward_value, rarity_pct, is_hidden, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(game_id, external_ach_id) DO UPDATE SET
+                        name = excluded.name,
+                        description = CASE
+                            WHEN excluded.description != '' THEN excluded.description
+                            ELSE game_achievements.description
+                        END,
+                        icon_url = COALESCE(excluded.icon_url, game_achievements.icon_url),
+                        icon_gray_url = COALESCE(excluded.icon_gray_url, game_achievements.icon_gray_url),
+                        unlocked = MAX(game_achievements.unlocked, excluded.unlocked),
+                        unlock_time = COALESCE(excluded.unlock_time, game_achievements.unlock_time),
+                        reward_type = COALESCE(excluded.reward_type, game_achievements.reward_type),
+                        reward_value = COALESCE(excluded.reward_value, game_achievements.reward_value),
+                        rarity_pct = COALESCE(excluded.rarity_pct, game_achievements.rarity_pct),
+                        is_hidden = excluded.is_hidden,
+                        updated_at = excluded.updated_at
+                    """,
+                    (
+                        game_id,
+                        ext_id,
+                        source,
+                        platform,
+                        name,
+                        desc,
+                        icon_url,
+                        icon_gray_url,
+                        unlocked,
+                        unlock_time,
+                        reward_type,
+                        reward_value,
+                        rarity_pct,
+                        is_hidden,
+                        now_iso,
+                    ),
+                )
+
+            agg = conn.execute(
+                "SELECT COUNT(*) AS tot, COALESCE(SUM(unlocked), 0) AS unl FROM game_achievements WHERE game_id = ?",
+                (game_id,),
+            ).fetchone()
+            final_total = int(agg["tot"]) if agg else total_count
+            final_unlocked = int(agg["unl"]) if agg else unlocked_count
+
+            inferred_completion = None
+            if (
+                not game_row["status_locked"]
+                and final_total > 0
+                and final_unlocked >= final_total
+            ):
+                inferred_completion = "Completed"
+
+            if inferred_completion:
+                conn.execute(
+                    """
+                    UPDATE games
+                    SET achievements_unlocked = ?,
+                        achievements_total = ?,
+                        achievements_synced_at = ?,
+                        completion_status = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (final_unlocked, final_total, now_iso, inferred_completion, now_iso, game_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE games
+                    SET achievements_unlocked = ?,
+                        achievements_total = ?,
+                        achievements_synced_at = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (final_unlocked, final_total, now_iso, now_iso, game_id),
+                )
+        return {"unlocked": final_unlocked, "total": final_total}
 
     def get_game_achievements(self, scope: UserScope, game_id: int) -> GameAchievementsDetail:
         scope.require_active()

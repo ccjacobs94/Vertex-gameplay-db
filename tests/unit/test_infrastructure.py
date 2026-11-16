@@ -88,7 +88,9 @@ class TestInfrastructure(unittest.TestCase):
             conn = sqlite3.connect(str(db_path))
             conn.row_factory = sqlite3.Row
             applied = apply_migrations(conn, mig_dir)
-            self.assertEqual(applied, ["0001_initial"])
+            expected_versions = sorted(p.stem for p in mig_dir.glob("*.sql"))
+            self.assertIn("0001_initial", applied)
+            self.assertEqual(applied, expected_versions)
             # Idempotent second run
             self.assertEqual(apply_migrations(conn, mig_dir), [])
             # Tamper with applied migration

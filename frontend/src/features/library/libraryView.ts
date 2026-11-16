@@ -14,6 +14,7 @@ import {
   importLibraryJson,
   listGames,
   resetReconcileDismissals,
+  syncGameAchievements,
   updateGame,
 } from "../../shared/api.ts";
 import { clearEl, el, openModalDialog, showBanner } from "../../shared/dom.ts";
@@ -320,22 +321,58 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
 
   async function openAchievementsModal(game: GameResponse): Promise<void> {
     try {
-      const detail = await getGameAchievements(game.id);
+      const initialDetail = await getGameAchievements(game.id);
       openModalDialog(`Achievements: ${game.title}`, (dialog, body) => {
-        const platBox = el("div", { class: "stack" });
-        for (const ps of detail.per_platform_summary) {
-          platBox.appendChild(el("p", { class: "muted" }, [`${ps.platform}: ${ps.unlocked}/${ps.total} (${ps.percentage}%)`]));
+        const modalBanner = el("div");
+        const contentBox = el("div", { class: "stack" });
+
+        function renderDetail(detail: typeof initialDetail): void {
+          clearEl(contentBox);
+          const platBox = el("div", { class: "stack" });
+          for (const ps of detail.per_platform_summary) {
+            platBox.appendChild(el("p", { class: "muted" }, [`${ps.platform}: ${ps.unlocked}/${ps.total} (${ps.percentage}%)`]));
+          }
+          const achList = el("ul", { class: "bullet-list" });
+          for (const a of detail.achievements.slice(0, 80)) {
+            const plats = a.unlocked_platforms.length ? ` [${a.unlocked_platforms.join(", ")}]` : "";
+            achList.appendChild(el("li", {}, [`${a.unlocked ? "[x]" : "[ ]"} ${a.name}${plats}${a.description ? ` — ${a.description}` : ""}`]));
+          }
+          contentBox.appendChild(el("p", {}, [
+            `Unified Total: ${detail.unified_summary.unlocked}/${detail.unified_summary.total} (${detail.unified_summary.percentage}%) • Cross-platform overlap: ${detail.unified_summary.overlap_count}`,
+          ]));
+          contentBox.appendChild(platBox);
+          contentBox.appendChild(
+            detail.achievements.length
+              ? achList
+              : el("p", { class: "muted" }, ["No detailed achievement records cached for this game."])
+          );
         }
-        const achList = el("ul", { class: "bullet-list" });
-        for (const a of detail.achievements.slice(0, 60)) {
-          const plats = a.unlocked_platforms.length ? ` [${a.unlocked_platforms.join(", ")}]` : "";
-          achList.appendChild(el("li", {}, [`${a.unlocked ? "[x]" : "[ ]"} ${a.name}${plats}${a.description ? ` — ${a.description}` : ""}`]));
-        }
+
+        renderDetail(initialDetail);
         body.appendChild(el("div", { class: "stack" }, [
-          el("p", {}, [`Unified Total: ${detail.unified_summary.unlocked}/${detail.unified_summary.total} (${detail.unified_summary.percentage}%) • Cross-platform overlap: ${detail.unified_summary.overlap_count}`]),
-          platBox,
-          detail.achievements.length ? achList : el("p", { class: "muted" }, ["No detailed achievement records cached for this game."]),
-          el("button", { type: "button", class: "btn btn-ghost", onClick: () => dialog.close() }, ["Close"]),
+          modalBanner,
+          el("div", { class: "row-actions" }, [
+            el("button", {
+              type: "button",
+              class: "btn btn-primary",
+              onClick: async () => {
+                showBanner(modalBanner, "");
+                try {
+                  const synced = await syncGameAchievements(game.id);
+                  renderDetail(synced);
+                  const msg = synced.synced_copies > 0
+                    ? `Synced achievements from ${synced.synced_providers.join(", ")}`
+                    : (synced.warnings.join("; ") || "No new achievements synced");
+                  showBanner(modalBanner, msg, synced.synced_copies > 0 ? "info" : "error");
+                  await refresh();
+                } catch (err) {
+                  showBanner(modalBanner, err instanceof Error ? err.message : "Failed syncing achievements", "error");
+                }
+              },
+            }, ["Sync Achievements"]),
+            el("button", { type: "button", class: "btn btn-ghost", onClick: () => dialog.close() }, ["Close"]),
+          ]),
+          contentBox,
         ]));
       });
     } catch (err) {

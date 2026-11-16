@@ -1,5 +1,6 @@
 import type { PlaySessionResponse, PlaytimePromptResponse } from "../../shared/api-types.ts";
 import {
+  backfillAchievementSessions,
   deleteSession,
   getDailyLedger,
   importHomeAssistantCsv,
@@ -8,6 +9,7 @@ import {
   listSessions,
   rebuildDailyLedger,
   resolvePlaytimePrompt,
+  syncHomeAssistantHistory,
   updateSession,
 } from "../../shared/api.ts";
 import { clearEl, el, openModalDialog, showBanner } from "../../shared/dom.ts";
@@ -217,6 +219,9 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
     rows: "4",
     placeholder: "entity_id,state,last_changed\nsensor.xbox_game,Halo Infinite,2026-10-01T18:00:00Z\nsensor.xbox_game,off,2026-10-01T19:00:00Z",
   }) as HTMLTextAreaElement;
+  const syncPlatformIn = el("input", { type: "text", value: "Xbox" }) as HTMLInputElement;
+  const syncDaysIn = el("input", { type: "number", min: "1", max: "90", value: "7" }) as HTMLInputElement;
+  const syncEntityIn = el("input", { type: "text", placeholder: "Optional override entity_id" }) as HTMLInputElement;
 
   container.appendChild(el("section", { class: "stack" }, [
     el("h1", {}, ["Activity & Sessions"]),
@@ -261,7 +266,35 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
       ]),
     ]),
     el("div", { class: "panel stack" }, [
-      el("h2", {}, ["Import Home Assistant History CSV"]),
+      el("h2", {}, ["Pull Home Assistant History"]),
+      el("form", {
+        class: "toolbar",
+        onSubmit: async (ev: Event) => {
+          ev.preventDefault();
+          showBanner(bannerBox, "");
+          try {
+            const rep = await syncHomeAssistantHistory({
+              platform: syncPlatformIn.value.trim() || "Xbox",
+              days_back: Number(syncDaysIn.value || 7),
+              entity_id: syncEntityIn.value.trim() || null,
+            });
+            showBanner(
+              bannerBox,
+              `HA history pull: ${rep.states_retrieved} states -> ${rep.imported_count} imported, ${rep.skipped_count} skipped`,
+              "info"
+            );
+            await refresh();
+          } catch (err) {
+            showBanner(bannerBox, err instanceof Error ? err.message : "HA history pull failed", "error");
+          }
+        },
+      }, [
+        syncPlatformIn,
+        syncDaysIn,
+        syncEntityIn,
+        el("button", { type: "submit", class: "btn btn-primary" }, ["Pull History"]),
+      ]),
+      el("h3", {}, ["Import Home Assistant History CSV"]),
       el("form", {
         class: "stack",
         onSubmit: async (ev: Event) => {
@@ -293,19 +326,38 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
     el("div", { class: "panel stack" }, [
       el("div", { class: "row-between" }, [
         el("h2", {}, ["Daily Playtime Ledger"]),
-        el("button", {
-          type: "button",
-          class: "btn btn-secondary",
-          onClick: async () => {
-            try {
-              const rows = await rebuildDailyLedger();
-              drawLedger(rows);
-              showBanner(bannerBox, `Daily playtime ledger rebuilt (${rows.length} entries)`, "info");
-            } catch (err) {
-              showBanner(bannerBox, err instanceof Error ? err.message : "Failed rebuilding ledger", "error");
-            }
-          },
-        }, ["Rebuild Ledger"]),
+        el("div", { class: "row-actions" }, [
+          el("button", {
+            type: "button",
+            class: "btn btn-secondary",
+            onClick: async () => {
+              try {
+                const res = await backfillAchievementSessions();
+                showBanner(
+                  bannerBox,
+                  `Achievement backfill: created ${res.sessions_created} coarse session(s) across ${res.games_backfilled} game(s)`,
+                  "info"
+                );
+                await refresh();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed backfilling sessions", "error");
+              }
+            },
+          }, ["Backfill From Achievements"]),
+          el("button", {
+            type: "button",
+            class: "btn btn-secondary",
+            onClick: async () => {
+              try {
+                const rows = await rebuildDailyLedger();
+                drawLedger(rows);
+                showBanner(bannerBox, `Daily playtime ledger rebuilt (${rows.length} entries)`, "info");
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed rebuilding ledger", "error");
+              }
+            },
+          }, ["Rebuild Ledger"]),
+        ]),
       ]),
       ledgerBox,
     ]),

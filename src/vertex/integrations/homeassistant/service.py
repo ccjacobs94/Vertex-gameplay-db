@@ -7,9 +7,10 @@ import hashlib
 import io
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Protocol
 
 from vertex.activity.service import ActivityService
+from vertex.identity.models import DecryptedConnections
 from vertex.infrastructure.errors import ValidationError
 from vertex.infrastructure.scope import UserScope
 from vertex.infrastructure.sqlite import DatabaseManager
@@ -17,6 +18,7 @@ from vertex.integrations.homeassistant.models import (
     HomeAssistantEventResult,
     HomeAssistantImportResult,
     HomeAssistantSpan,
+    HomeAssistantSyncResult,
 )
 from vertex.library.service import LibraryService
 
@@ -146,8 +148,20 @@ def parse_ha_csv_to_spans(
     return parse_ha_state_entries(entries, max_gap_seconds=max_gap_seconds)
 
 
+class HomeAssistantHistoryProvider(Protocol):
+    async def fetch_history(
+        self,
+        *,
+        ha_url: str,
+        ha_token: str,
+        entity_id: str,
+        start_time: datetime,
+        end_time: datetime | None = None,
+    ) -> list[dict[str, Any]]: ...
+
+
 class HomeAssistantService:
-    """Ingests Home Assistant CSV exports and authenticated webhook transition events."""
+    """Ingests Home Assistant history pulls, CSV exports, and webhook events."""
 
     _ACTIVE_PREF_KEY = "ha_active_sessions"
 
@@ -156,21 +170,22 @@ class HomeAssistantService:
         db_manager: DatabaseManager,
         library_service: LibraryService,
         activity_service: ActivityService,
+        history_provider: HomeAssistantHistoryProvider | None = None,
     ) -> None:
         self.db_manager = db_manager
         self.library_service = library_service
         self.activity_service = activity_service
+        self.history_provider = history_provider
 
-    def import_csv(
+    def _ingest_spans(
         self,
         scope: UserScope,
+        spans: list[HomeAssistantSpan],
         *,
-        csv_content: str,
-        platform: str = "Xbox",
-        max_gap_seconds: int = 1800,
-    ) -> HomeAssistantImportResult:
-        scope.require_active()
-        spans = parse_ha_csv_to_spans(csv_content, max_gap_seconds=max_gap_seconds)
+        platform: str,
+        import_kind: str,
+        key_prefix: str,
+    ) -> tuple[int, int]:
         imported = 0
         skipped = 0
 
@@ -186,7 +201,7 @@ class HomeAssistantService:
             digest = hashlib.sha256(
                 f"{game.id}|{span.started_at}|{span.ended_at}|{span.duration_minutes}".encode("utf-8")
             ).hexdigest()[:24]
-            idem_key = f"ha_csv:{digest}"
+            idem_key = f"{key_prefix}:{digest}"
             outcome = self.activity_service.record_interval_observation(
                 scope,
                 game_id=game.id,
@@ -197,15 +212,84 @@ class HomeAssistantService:
                 duration_minutes=span.duration_minutes,
                 idempotency_key=idem_key,
                 precision_level="exact",
-                payload={"import_kind": "csv", "title": span.title},
+                payload={"import_kind": import_kind, "title": span.title},
             )
             if outcome.status == "session_created":
                 imported += 1
             else:
                 skipped += 1
 
+        return imported, skipped
+
+    def import_csv(
+        self,
+        scope: UserScope,
+        *,
+        csv_content: str,
+        platform: str = "Xbox",
+        max_gap_seconds: int = 1800,
+    ) -> HomeAssistantImportResult:
+        scope.require_active()
+        spans = parse_ha_csv_to_spans(csv_content, max_gap_seconds=max_gap_seconds)
+        imported, skipped = self._ingest_spans(
+            scope,
+            spans,
+            platform=platform,
+            import_kind="csv",
+            key_prefix="ha_csv",
+        )
         return HomeAssistantImportResult(
             status="ok",
+            imported_count=imported,
+            skipped_count=skipped,
+            total_spans=len(spans),
+        )
+
+    async def sync_history(
+        self,
+        scope: UserScope,
+        *,
+        ha_url: str | None = None,
+        ha_token: str | None = None,
+        entity_id: str | None = None,
+        platform: str = "Xbox",
+        days_back: int = 7,
+        max_gap_seconds: int = 1800,
+        creds: DecryptedConnections | None = None,
+    ) -> HomeAssistantSyncResult:
+        scope.require_active()
+        if not self.db_manager.settings.outbound_sync_enabled:
+            raise ValidationError("Outbound network sync is disabled on this instance")
+
+        eff_url = (ha_url or (creds.ha_url if creds else "") or "").strip()
+        eff_token = (ha_token or (creds.ha_token if creds else "") or "").strip()
+        eff_entity = (entity_id or (creds.ha_entity_id if creds else "") or "").strip()
+        if not eff_url or not eff_token or not eff_entity:
+            raise ValidationError(
+                "Configure Home Assistant URL, Access Token, and Entity ID before syncing history"
+            )
+        if self.history_provider is None:
+            raise ValidationError("Home Assistant history client is not configured")
+
+        clamped_days = max(1, min(int(days_back), 90))
+        start_dt = datetime.now(timezone.utc) - timedelta(days=clamped_days)
+        entries = await self.history_provider.fetch_history(
+            ha_url=eff_url,
+            ha_token=eff_token,
+            entity_id=eff_entity,
+            start_time=start_dt,
+        )
+        spans = parse_ha_state_entries(entries, max_gap_seconds=max_gap_seconds)
+        imported, skipped = self._ingest_spans(
+            scope,
+            spans,
+            platform=platform,
+            import_kind="history",
+            key_prefix="ha_hist",
+        )
+        return HomeAssistantSyncResult(
+            status="ok",
+            states_retrieved=len(entries),
             imported_count=imported,
             skipped_count=skipped,
             total_spans=len(spans),

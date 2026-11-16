@@ -2,22 +2,41 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from typing import Any
 
 import httpx
 
 from vertex.integrations.platforms.base import (
+    AchievementSnapshot,
     AdapterCapabilities,
     PlatformAdapterError,
     PlatformGameSnapshot,
 )
 
 
+def clean_steam_input(raw: str | None) -> str:
+    if not raw:
+        return ""
+    text = raw.strip().split("?")[0].split("#")[0].strip()
+    text = re.sub(
+        r"^https?://(?:www\.)?steamcommunity\.com/(?:id|profiles)/",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return text.rstrip("/").strip()
+
+
 class SteamAdapter:
     """Translates Steam Web API responses into normalized PlatformGameSnapshot items."""
 
     BASE_URL = "https://api.steampowered.com"
+
+    def __init__(self) -> None:
+        self._schema_cache: dict[int, dict[str, dict[str, Any]]] = {}
 
     def capabilities(self) -> AdapterCapabilities:
         return AdapterCapabilities(
@@ -27,6 +46,7 @@ class SteamAdapter:
             supports_achievements=True,
             supports_game_pass=False,
             auth_modes=("api_key+steam_id",),
+            supports_telemetry=False,
         )
 
     async def resolve_steam_id(
@@ -36,9 +56,7 @@ class SteamAdapter:
         api_key: str,
         client: httpx.AsyncClient,
     ) -> str:
-        cleaned = (raw_identifier or "").strip().rstrip("/")
-        if "/" in cleaned:
-            cleaned = cleaned.rsplit("/", 1)[-1].strip()
+        cleaned = clean_steam_input(raw_identifier)
         if cleaned.isdigit() and len(cleaned) >= 16:
             return cleaned
         if not cleaned:
@@ -216,3 +234,166 @@ class SteamAdapter:
                 )
             )
         return snapshots
+
+    async def fetch_game_schema(
+        self,
+        *,
+        appid: int,
+        api_key: str,
+        client: httpx.AsyncClient,
+    ) -> dict[str, dict[str, Any]]:
+        if appid in self._schema_cache:
+            return self._schema_cache[appid]
+        try:
+            resp = await client.get(
+                f"{self.BASE_URL}/ISteamUserStats/GetSchemaForGame/v2/",
+                params={"key": api_key, "appid": str(appid), "l": "english"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                schema_achs = (
+                    (data.get("game") or {}).get("availableGameStats") or {}
+                ).get("achievements") or []
+                schema_map = {
+                    str(a["name"]): {
+                        "displayName": a.get("displayName") or a["name"],
+                        "description": a.get("description") or "",
+                        "icon": a.get("icon"),
+                        "icongray": a.get("icongray"),
+                        "hidden": bool(a.get("hidden")),
+                    }
+                    for a in schema_achs
+                    if isinstance(a, dict) and a.get("name")
+                }
+                self._schema_cache[appid] = schema_map
+                return schema_map
+        except Exception:
+            pass
+        return {}
+
+    async def fetch_achievements(
+        self,
+        *,
+        steam_id: str,
+        appid: int,
+        api_key: str,
+        client: httpx.AsyncClient,
+    ) -> list[AchievementSnapshot]:
+        if not api_key or not steam_id:
+            return []
+        try:
+            resp = await client.get(
+                f"{self.BASE_URL}/ISteamUserStats/GetPlayerAchievements/v1/",
+                params={"key": api_key, "steamid": steam_id, "appid": str(appid), "l": "english"},
+            )
+        except httpx.HTTPError:
+            return []
+
+        if resp.status_code != 200:
+            return []
+        try:
+            payload = resp.json()
+        except Exception:
+            return []
+        playerstats = payload.get("playerstats") if isinstance(payload, dict) else None
+        if not isinstance(playerstats, dict) or not playerstats.get("success"):
+            return []
+        raw_achs = playerstats.get("achievements") or []
+        if not isinstance(raw_achs, list) or not raw_achs:
+            return []
+
+        schema_map = await self.fetch_game_schema(appid=appid, api_key=api_key, client=client)
+        out: list[AchievementSnapshot] = []
+        for a in raw_achs:
+            if not isinstance(a, dict):
+                continue
+            api_name = str(a.get("apiname") or "").strip()
+            if not api_name:
+                continue
+            sch = schema_map.get(api_name, {})
+            name = str(a.get("name") or sch.get("displayName") or api_name).strip()
+            desc = str(a.get("description") or sch.get("description") or "").strip()
+            utime = int(a.get("unlocktime") or 0)
+            unlock_time = (
+                datetime.fromtimestamp(utime, tz=timezone.utc).isoformat() if utime > 0 else None
+            )
+            out.append(
+                AchievementSnapshot(
+                    external_ach_id=api_name,
+                    name=name,
+                    description=desc,
+                    icon_url=sch.get("icon"),
+                    icon_gray_url=sch.get("icongray"),
+                    unlocked=a.get("achieved") == 1,
+                    unlock_time=unlock_time,
+                    is_hidden=bool(sch.get("hidden")),
+                )
+            )
+        return out
+
+    async def verify_connection(
+        self,
+        *,
+        credential: str,
+        api_key: str,
+        client: httpx.AsyncClient,
+    ) -> dict[str, Any]:
+        cleaned = clean_steam_input(credential)
+        if not cleaned:
+            return {
+                "status": "error",
+                "platform": "steam",
+                "message": "Steam ID or Profile URL cannot be empty",
+            }
+        if api_key:
+            try:
+                steam_id = await self.resolve_steam_id(
+                    raw_identifier=cleaned,
+                    api_key=api_key,
+                    client=client,
+                )
+                r_player = await client.get(
+                    f"{self.BASE_URL}/ISteamUser/GetPlayerSummaries/v2/",
+                    params={"key": api_key, "steamids": steam_id},
+                )
+                if r_player.status_code == 200:
+                    players = (r_player.json().get("response") or {}).get("players") or []
+                    if players:
+                        p = players[0]
+                        persona_name = str(p.get("personaname") or steam_id)
+                        avatar = str(p.get("avatarfull") or p.get("avatarmedium") or "")
+                        return {
+                            "status": "ok",
+                            "platform": "steam",
+                            "steam_id": steam_id,
+                            "persona_name": persona_name,
+                            "avatar_url": avatar,
+                            "message": f"Steam account verified successfully as {persona_name}",
+                        }
+                return {
+                    "status": "ok",
+                    "platform": "steam",
+                    "steam_id": steam_id,
+                    "persona_name": steam_id,
+                    "avatar_url": "",
+                    "message": f"Steam ID verified as {steam_id}",
+                }
+            except PlatformAdapterError as exc:
+                return {"status": "error", "platform": "steam", "message": exc.safe_message}
+            except Exception as exc:
+                return {"status": "error", "platform": "steam", "message": f"Steam verification error: {exc}"}
+
+        if cleaned.isdigit() and len(cleaned) >= 16:
+            return {
+                "status": "ok",
+                "platform": "steam",
+                "steam_id": cleaned,
+                "persona_name": cleaned,
+                "avatar_url": "",
+                "message": "SteamID recorded (live persona lookup requires Steam Web API key)",
+            }
+        return {
+            "status": "error",
+            "platform": "steam",
+            "message": "Custom profile URLs require a Steam Web API key. Please provide a 17-digit numeric SteamID64.",
+        }

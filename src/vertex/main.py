@@ -36,8 +36,11 @@ from vertex.infrastructure.jobs import JobQueue
 from vertex.infrastructure.secrets import SecretBox
 from vertex.infrastructure.sqlite import DatabaseManager
 from vertex.integrations.catalog_lookup import HttpCatalogLookupProvider
+from vertex.integrations.homeassistant.client import HttpHomeAssistantHistoryProvider
 from vertex.integrations.homeassistant.service import HomeAssistantService
+from vertex.integrations.platforms.base import PlatformAdapterError
 from vertex.integrations.platforms.sync_service import PlatformSyncService
+from vertex.integrations.platforms.telemetry import TelemetryService, XboxRtaClient
 from vertex.interfaces.http import (
     account,
     admin,
@@ -50,6 +53,7 @@ from vertex.interfaces.http import (
     jobs,
     library,
     portability,
+    telemetry as telemetry_http,
     wishlist as wishlist_http,
 )
 from vertex.interfaces.http.deps import AppServices, validate_request_host_and_csrf
@@ -81,7 +85,13 @@ def create_app(
     activity_svc = ActivityService(db_manager)
     analytics_svc = AnalyticsService(db_manager)
     wishlist_svc = WishlistService(db_manager, library_svc)
-    ha_svc = HomeAssistantService(db_manager, library_svc, activity_svc)
+    ha_history_provider = HttpHomeAssistantHistoryProvider(client_factory=client_factory)
+    ha_svc = HomeAssistantService(
+        db_manager,
+        library_svc,
+        activity_svc,
+        history_provider=ha_history_provider,
+    )
     platform_sync = PlatformSyncService(
         db_manager=db_manager,
         job_queue=job_queue,
@@ -89,6 +99,15 @@ def create_app(
         catalog_service=catalog,
         library_service=library_svc,
         activity_service=activity_svc,
+        client_factory=client_factory,
+    )
+    telemetry_svc = TelemetryService(
+        db_manager=db_manager,
+        identity_service=identity,
+        library_service=library_svc,
+        activity_service=activity_svc,
+        xbox_adapter=platform_sync.xbox_adapter,
+        gog_adapter=platform_sync.gog_adapter,
         client_factory=client_factory,
     )
 
@@ -106,12 +125,14 @@ def create_app(
         wishlist=wishlist_svc,
         homeassistant=ha_svc,
         platform_sync=platform_sync,
+        telemetry=telemetry_svc,
     )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         db_manager.ensure_system_ready()
-        worker_task: asyncio.Task[None] | None = None
+        background_tasks: list[asyncio.Task[None]] = []
+        rta_clients: list[XboxRtaClient] = []
         stop_event = asyncio.Event()
 
         async def _worker_loop() -> None:
@@ -130,17 +151,88 @@ def create_app(
                 except TimeoutError:
                     pass
 
+        async def _scheduled_sync_loop() -> None:
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(),
+                        timeout=max(0.2, cfg.scheduled_sync_interval_seconds),
+                    )
+                except TimeoutError:
+                    pass
+                if stop_event.is_set():
+                    break
+                try:
+                    platform_sync.enqueue_scheduled_sync_iteration()
+                except Exception as exc:
+                    logger.warning("Scheduled sync enqueue error: %s", exc)
+
+        async def _telemetry_loop() -> None:
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(),
+                        timeout=max(0.2, cfg.telemetry_poll_interval_seconds),
+                    )
+                except TimeoutError:
+                    pass
+                if stop_event.is_set():
+                    break
+                try:
+                    await telemetry_svc.poll_all_users(sleep_before_flush=True)
+                except Exception as exc:
+                    logger.warning("Telemetry poll loop error: %s", exc)
+
+        async def _daily_sweep_loop() -> None:
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(),
+                        timeout=max(0.2, cfg.daily_sweep_interval_seconds),
+                    )
+                except TimeoutError:
+                    pass
+                if stop_event.is_set():
+                    break
+                try:
+                    await telemetry_svc.run_daily_sweep_all_users()
+                except Exception as exc:
+                    logger.warning("Daily sweep loop error: %s", exc)
+
         if cfg.worker_enabled:
-            worker_task = asyncio.create_task(_worker_loop())
+            background_tasks.append(asyncio.create_task(_worker_loop()))
+            if cfg.scheduled_sync_enabled and cfg.outbound_sync_enabled:
+                background_tasks.append(asyncio.create_task(_scheduled_sync_loop()))
+        if cfg.telemetry_enabled and cfg.outbound_sync_enabled:
+            background_tasks.append(asyncio.create_task(_telemetry_loop()))
+            background_tasks.append(asyncio.create_task(_daily_sweep_loop()))
+            if cfg.worker_enabled:
+                for user_scope in identity.list_active_user_scopes():
+                    try:
+                        u_creds = identity.get_decrypted_connections(user_scope)
+                        if u_creds.xbl_watcher_api_key and u_creds.xbox_xuid:
+                            rta = XboxRtaClient(
+                                scope=user_scope,
+                                watcher_api_key=u_creds.xbl_watcher_api_key,
+                                xuid=u_creds.xbox_xuid,
+                                telemetry_service=telemetry_svc,
+                            )
+                            rta_clients.append(rta)
+                            background_tasks.append(asyncio.create_task(rta.run()))
+                    except Exception:
+                        continue
 
         try:
             yield
         finally:
             stop_event.set()
-            if worker_task is not None:
-                worker_task.cancel()
+            for rta in rta_clients:
+                rta.stop()
+            for task in background_tasks:
+                task.cancel()
+            for task in background_tasks:
                 try:
-                    await worker_task
+                    await task
                 except asyncio.CancelledError:
                     pass
 
@@ -188,6 +280,28 @@ def create_app(
                 break
         return JSONResponse(status_code=status_code, content={"code": exc.code, "detail": str(exc)})
 
+    @app.exception_handler(PlatformAdapterError)
+    async def platform_adapter_error_handler(
+        _request: Request, exc: PlatformAdapterError
+    ) -> JSONResponse:
+        if exc.throttle_seconds > 0:
+            status_code = 429
+        elif exc.code in {
+            "missing_credentials",
+            "invalid_credentials",
+            "auth_failed",
+            "outbound_sync_disabled",
+        }:
+            status_code = 400
+        elif exc.retryable:
+            status_code = 502
+        else:
+            status_code = 400
+        return JSONResponse(
+            status_code=status_code,
+            content={"code": exc.code, "detail": exc.safe_message},
+        )
+
     app.include_router(health.router)
     app.include_router(auth.router)
     app.include_router(account.router)
@@ -198,6 +312,7 @@ def create_app(
     app.include_router(analytics.router)
     app.include_router(catalog_http.router)
     app.include_router(homeassistant.router)
+    app.include_router(telemetry_http.router)
     app.include_router(wishlist_http.router)
     app.include_router(portability.router)
 
