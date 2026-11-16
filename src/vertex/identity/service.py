@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from vertex.identity.models import (
@@ -63,6 +65,13 @@ def _utc_now() -> datetime:
 
 def _iso(dt: datetime) -> str:
     return dt.isoformat()
+
+
+def _parse_utc_dt(raw: str) -> datetime:
+    dt = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _validate_username(username: str) -> tuple[str, str]:
@@ -233,6 +242,7 @@ class IdentityService:
             return None
         session_hash = hash_opaque_token(raw_session_token)
         now_ts = time.time()
+        should_delete = False
         with self.db_manager.system_connection() as conn:
             row = conn.execute(
                 """
@@ -246,14 +256,18 @@ class IdentityService:
             if row is None:
                 return None
             if float(row["expires_at"]) <= now_ts or row["status"] != "active":
+                should_delete = True
+            else:
+                return UserScope(
+                    user_id=row["id"],
+                    username=row["username"],
+                    role=row["role"],
+                    status=row["status"],
+                )
+        if should_delete:
+            with self.db_manager.system_connection(immediate=True) as conn:
                 conn.execute("DELETE FROM web_sessions WHERE session_id = ?", (session_hash,))
-                return None
-            return UserScope(
-                user_id=row["id"],
-                username=row["username"],
-                role=row["role"],
-                status=row["status"],
-            )
+        return None
 
     def logout_session(self, raw_session_token: str | None) -> None:
         if not raw_session_token:
@@ -286,7 +300,7 @@ class IdentityService:
         scope: UserScope,
         *,
         timezone_name: str,
-        timezone_eras: list[dict[str, str]] | None = None,
+        timezone_eras: list[dict[str, Any]] | None = None,
     ) -> UserAccount:
         scope.require_active()
         tz = _validate_timezone(timezone_name)
@@ -297,18 +311,40 @@ class IdentityService:
             if row is None:
                 raise NotFoundError("Account not found")
             if timezone_eras is not None:
-                validated_eras = []
+                validated_eras: list[dict[str, Any]] = []
                 for era in timezone_eras:
-                    era_tz = _validate_timezone(str(era.get("tz") or ""))
-                    eff = str(era.get("effective_from") or "").strip()
-                    if not eff:
-                        raise ValidationError("Each timezone era requires effective_from")
-                    validated_eras.append({"tz": era_tz, "effective_from": eff})
+                    if not isinstance(era, dict):
+                        raise ValidationError("Each timezone era must be an object")
+                    if "until" in era or "timezone" in era:
+                        era_tz = _validate_timezone(str(era.get("timezone") or era.get("tz") or ""))
+                        until_raw = str(era.get("until") or "").strip()
+                        if not until_raw:
+                            raise ValidationError("Each until-based timezone era requires 'until'")
+                        try:
+                            _parse_utc_dt(until_raw)
+                        except ValueError as exc:
+                            raise ValidationError(f"Invalid timezone era 'until' timestamp: '{until_raw}'") from exc
+                        item: dict[str, Any] = {"timezone": era_tz, "until": until_raw}
+                        if era.get("label") is not None:
+                            item["label"] = str(era["label"])
+                        validated_eras.append(item)
+                    else:
+                        era_tz = _validate_timezone(str(era.get("tz") or ""))
+                        eff = str(era.get("effective_from") or "").strip()
+                        if not eff:
+                            raise ValidationError("Each timezone era requires effective_from or until")
+                        try:
+                            _parse_utc_dt(eff)
+                        except ValueError as exc:
+                            raise ValidationError(f"Invalid timezone era 'effective_from' timestamp: '{eff}'") from exc
+                        validated_eras.append({"tz": era_tz, "effective_from": eff})
                 eras_json = json.dumps(validated_eras)
             else:
                 eras = json.loads(row["timezone_eras_json"] or "[]")
-                if not eras or eras[-1].get("tz") != tz:
-                    eras.append({"tz": tz, "effective_from": now_iso})
+                old_tz = (row["timezone"] or "auto").strip()
+                if old_tz != tz:
+                    prev_zone = "UTC" if old_tz in ("", "auto") else old_tz
+                    eras.append({"timezone": prev_zone, "until": now_iso})
                 eras_json = json.dumps(eras)
 
             conn.execute(
@@ -456,7 +492,7 @@ class IdentityService:
             inv = conn.execute("SELECT * FROM invites WHERE code_hash = ?", (code_hash,)).fetchone()
             if inv is None or inv["revoked_at"] is not None or inv["used_by"] is not None:
                 raise AuthenticationError("Invitation is invalid or already used")
-            if inv["expires_at"] and datetime.fromisoformat(inv["expires_at"]) <= now:
+            if inv["expires_at"] and _parse_utc_dt(inv["expires_at"]) <= now:
                 raise AuthenticationError("Invitation has expired")
 
             existing = conn.execute(
@@ -725,17 +761,11 @@ class IdentityService:
         if self.job_queue is not None:
             self.job_queue.cancel_user_jobs(target_id, "Account deleted")
 
-        user_dir = self.db_manager.users_dir / target_id
+        user_dir = (self.db_manager.users_dir / target_id).resolve()
+        users_root = self.db_manager.users_dir.resolve()
         self.db_manager.invalidate_user_cache(target_id)
-        if user_dir.exists():
-            for suffix in ("library.db", "library.db-wal", "library.db-shm"):
-                p = user_dir / suffix
-                if p.exists():
-                    p.unlink()
-            try:
-                user_dir.rmdir()
-            except OSError:
-                pass
+        if user_dir.parent == users_root and user_dir.exists():
+            shutil.rmtree(user_dir, ignore_errors=True)
 
         with self.db_manager.system_connection(immediate=True) as conn:
             conn.execute("DELETE FROM users WHERE id = ?", (target_id,))
@@ -856,7 +886,7 @@ class IdentityService:
         now = _utc_now()
         now_iso = _iso(now)
 
-        with self.db_manager.system_connection(immediate=True) as conn:
+        with self.db_manager.system_connection() as conn:
             row = conn.execute(
                 """
                 SELECT p.*, u.username, u.role, u.status
@@ -868,7 +898,7 @@ class IdentityService:
             ).fetchone()
             if row is None or row["revoked_at"] is not None:
                 raise AuthenticationError("Invalid or revoked token")
-            if row["expires_at"] and datetime.fromisoformat(row["expires_at"]) <= now:
+            if row["expires_at"] and _parse_utc_dt(row["expires_at"]) <= now:
                 raise AuthenticationError("Token has expired")
             if row["status"] != "active":
                 raise AuthorizationError(f"Token owner account is {row['status']}")
@@ -877,17 +907,19 @@ class IdentityService:
             if required_scope and required_scope not in pat.scopes:
                 raise AuthorizationError(f"Token lacks required scope '{required_scope}'")
 
-            conn.execute(
-                "UPDATE personal_access_tokens SET last_used_at = ? WHERE id = ?",
-                (now_iso, pat.id),
-            )
             scope = UserScope(
                 user_id=row["user_id"],
                 username=row["username"],
                 role=row["role"],
                 status=row["status"],
             )
-            return scope, pat
+
+        with self.db_manager.system_connection(immediate=True) as conn:
+            conn.execute(
+                "UPDATE personal_access_tokens SET last_used_at = ? WHERE id = ?",
+                (now_iso, pat.id),
+            )
+        return scope, pat
 
     # ── Per-User Connections & Encrypted Credentials ────────────────────────
 

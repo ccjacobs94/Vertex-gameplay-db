@@ -123,7 +123,7 @@ class TestSteamSyncJobs(unittest.IsolatedAsyncioTestCase):
                     json={
                         "completion_status": "Completed",
                         "status_locked": True,
-                        "ownership_status": "Shared",
+                        "ownership_status": "Borrowed",
                         "user_rating": 9,
                         "notes": "Co-op favorite",
                         "favorite": True,
@@ -145,7 +145,7 @@ class TestSteamSyncJobs(unittest.IsolatedAsyncioTestCase):
                 updated_portal2 = client.get(f"/api/games/{portal2['id']}").json()
                 self.assertEqual(updated_portal2["completion_status"], "Completed")
                 self.assertTrue(updated_portal2["status_locked"])
-                self.assertEqual(updated_portal2["ownership_status"], "Shared")
+                self.assertEqual(updated_portal2["ownership_status"], "Borrowed")
                 self.assertEqual(updated_portal2["user_rating"], 9)
                 self.assertEqual(updated_portal2["notes"], "Co-op favorite")
                 self.assertTrue(updated_portal2["favorite"])
@@ -168,7 +168,15 @@ class TestSteamSyncJobs(unittest.IsolatedAsyncioTestCase):
     async def test_auth_failure_secret_redaction_and_rate_limit_and_offline_mode(self):
         self.assertNotIn(
             "SECRET_KEY_VALUE",
-            sanitize_error_message("GET https://api.steampowered.com/?key=SECRET_KEY_VALUE&token=ABC"),
+            sanitize_error_message("GET https://api.steampowered.com/?key=SECRET_KEY_VALUE&token=ABC Bearer BEARER_SECRET x-api-key: HEADER_SECRET"),
+        )
+        self.assertNotIn(
+            "BEARER_SECRET",
+            sanitize_error_message("Authorization: Bearer BEARER_SECRET x-api-key: HEADER_SECRET"),
+        )
+        self.assertNotIn(
+            "HEADER_SECRET",
+            sanitize_error_message("Authorization: Bearer BEARER_SECRET x-api-key: HEADER_SECRET"),
         )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -181,6 +189,10 @@ class TestSteamSyncJobs(unittest.IsolatedAsyncioTestCase):
                     return httpx.Response(401, text=f"Invalid key={secret_steam_key}")
                 if behavior["status"] == 429:
                     return httpx.Response(429, headers={"Retry-After": "45"}, text="Slow down")
+                if behavior["status"] == "429_date":
+                    return httpx.Response(429, headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}, text="Slow down")
+                if behavior["status"] == "bad_json":
+                    return httpx.Response(200, text="<html>Gateway</html>")
                 return httpx.Response(500, text="Server error")
 
             transport = httpx.MockTransport(handler)
@@ -232,6 +244,23 @@ class TestSteamSyncJobs(unittest.IsolatedAsyncioTestCase):
                 with app.state.services.db_manager.system_connection() as conn:
                     prl = conn.execute("SELECT * FROM provider_rate_limits WHERE provider = 'steam'").fetchone()
                     self.assertIsNotNone(prl)
+                    conn.execute("DELETE FROM provider_rate_limits WHERE provider = 'steam'")
+                    conn.execute("UPDATE jobs SET state = 'cancelled' WHERE id = ?", (throttled.id,))
+
+                # HTTP-date Retry-After & malformed JSON payload handle cleanly without crashing
+                behavior["status"] = "429_date"
+                client.post("/api/sync/steam")
+                throttled_date = await app.state.services.platform_sync.process_next_job("worker-1")
+                self.assertEqual(throttled_date.state, "queued")
+                self.assertEqual(throttled_date.last_error_code, "rate_limited")
+                with app.state.services.db_manager.system_connection() as conn:
+                    conn.execute("DELETE FROM provider_rate_limits WHERE provider = 'steam'")
+                    conn.execute("UPDATE jobs SET available_at = '2000-01-01T00:00:00+00:00' WHERE id = ?", (throttled_date.id,))
+
+                behavior["status"] = "bad_json"
+                bad_json_res = await app.state.services.platform_sync.process_next_job("worker-1")
+                self.assertEqual(bad_json_res.state, "queued")
+                self.assertEqual(bad_json_res.last_error_code, "upstream_error")
 
                 # Suspending Bob cancels any queued jobs owned by Bob
                 bob_client = TestClient(app)

@@ -1,6 +1,7 @@
 import type {
   AcceptInviteRequest,
   AdminCreateUserRequest,
+  AdminResetPasswordRequest,
   AdminUpdateUserRequest,
   AuthCredentialsRequest,
   AuthResponse,
@@ -25,7 +26,11 @@ import type {
 } from "./api-types.ts";
 
 export class ApiError extends Error {
-  constructor(status, code, detail) {
+  status: number;
+  code: string;
+  detail: string;
+
+  constructor(status: number, code: string, detail: string) {
     super(detail || `HTTP ${status}`);
     this.status = status;
     this.code = code || "http_error";
@@ -229,6 +234,13 @@ export function adminUpdateUser(userId: string, body: AdminUpdateUserRequest): P
 
 export function adminDeleteUser(userId: string): Promise<void> {
   return apiFetch<void>(`/api/admin/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
+}
+
+export function adminResetPassword(userId: string, body: AdminResetPasswordRequest): Promise<UserAccountResponse> {
+  return apiFetch<UserAccountResponse>(`/api/admin/users/${encodeURIComponent(userId)}/reset-password`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 }
 
 export function adminListInvites(): Promise<Array<InviteResponse>> {

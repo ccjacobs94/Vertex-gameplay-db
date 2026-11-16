@@ -17,6 +17,7 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
   const bannerBox = el("div");
   const jobsBox = el("div", { class: "stack" });
   const patsBox = el("div", { class: "stack" });
+  const steamStatusLbl = el("span", { class: "muted" });
 
   const tzIn = el("input", { type: "text", value: account.timezone || "auto" }) as HTMLInputElement;
   const steamIdIn = el("input", { type: "text", placeholder: "SteamID64 or vanity" }) as HTMLInputElement;
@@ -29,35 +30,56 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
   const patOut = el("pre", { class: "code-out" });
 
   async function refreshData(): Promise<void> {
-    const [conns, jobsData, pats] = await Promise.all([getConnections(), getJobs(), listPats()]);
-    steamIdIn.value = conns.steam_id || "";
-    if (conns.credential_decryption_error) {
-      showBanner(bannerBox, conns.credential_decryption_error, "error");
-    }
+    try {
+      const [conns, jobsData, pats] = await Promise.all([getConnections(), getJobs(), listPats()]);
+      steamIdIn.value = conns.steam_id || "";
+      steamStatusLbl.textContent = conns.steam_api_key_configured
+        ? "Personal Steam API key: configured (encrypted)"
+        : "Personal Steam API key: using server default if configured";
+      if (conns.credential_decryption_error) {
+        showBanner(bannerBox, conns.credential_decryption_error, "error");
+      }
 
-    clearEl(jobsBox);
-    for (const p of jobsData.providers) {
-      jobsBox.appendChild(el("div", { class: "stat-card" }, [
-        el("strong", {}, [p.provider.toUpperCase()]),
-        el("span", { class: "muted" }, [`State: ${p.active_state || "idle"}${p.credential_expired ? " (CREDENTIALS EXPIRED)" : ""}`]),
-        p.last_success_at ? el("span", { class: "muted" }, [`Last success: ${p.last_success_at}`]) : null,
-        p.last_error ? el("span", { class: "error-text" }, [`Last error: ${p.last_error}`]) : null,
-      ]));
-    }
+      clearEl(jobsBox);
+      if (!jobsData.providers.length && !jobsData.recent_jobs.length) {
+        jobsBox.appendChild(el("p", { class: "muted" }, ["No sync jobs recorded yet."]));
+      }
+      for (const p of jobsData.providers) {
+        jobsBox.appendChild(el("div", { class: "stat-card" }, [
+          el("strong", {}, [p.provider.toUpperCase()]),
+          el("span", { class: "muted" }, [`State: ${p.active_state || "idle"}${p.credential_expired ? " (CREDENTIALS EXPIRED)" : ""}`]),
+          p.last_success_at ? el("span", { class: "muted" }, [`Last success: ${p.last_success_at}`]) : null,
+          p.next_attempt_at ? el("span", { class: "muted" }, [`Next attempt: ${p.next_attempt_at}`]) : null,
+          p.last_error ? el("span", { class: "error-text" }, [`Last error: ${p.last_error}`]) : null,
+        ]));
+      }
+      for (const j of jobsData.recent_jobs.slice(0, 5)) {
+        jobsBox.appendChild(el("div", { class: "row-between" }, [
+          el("span", { class: "muted" }, [`Job #${j.id} ${j.kind}: ${j.state} (${j.attempts}/${j.max_attempts})`]),
+          el("span", { class: "muted" }, [j.finished_at || j.scheduled_at]),
+        ]));
+      }
 
-    clearEl(patsBox);
-    for (const t of pats) {
-      patsBox.appendChild(el("div", { class: "row-between" }, [
-        el("span", {}, [`${t.name} (${t.token_prefix}...) [${t.scopes.join(", ")}]${t.revoked_at ? " REVOKED" : ""}`]),
-        t.revoked_at ? null : el("button", {
-          type: "button",
-          class: "btn btn-ghost",
-          onClick: async () => {
-            await revokePat(t.id);
-            await refreshData();
-          },
-        }, ["Revoke"]),
-      ]));
+      clearEl(patsBox);
+      for (const t of pats) {
+        patsBox.appendChild(el("div", { class: "row-between" }, [
+          el("span", {}, [`${t.name} (${t.token_prefix}...) [${t.scopes.join(", ")}]${t.revoked_at ? " REVOKED" : ""}`]),
+          t.revoked_at ? null : el("button", {
+            type: "button",
+            class: "btn btn-ghost",
+            onClick: async () => {
+              try {
+                await revokePat(t.id);
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Could not revoke token", "error");
+              }
+            },
+          }, ["Revoke"]),
+        ]));
+      }
+    } catch (err) {
+      showBanner(bannerBox, err instanceof Error ? err.message : "Failed loading settings", "error");
     }
   }
 
@@ -65,6 +87,7 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
     bannerBox,
     el("div", { class: "panel" }, [
       el("h2", {}, ["Connections & Steam Sync"]),
+      steamStatusLbl,
       el("form", {
         class: "stack",
         onSubmit: async (ev: Event) => {
@@ -88,11 +111,28 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
           el("button", { type: "submit", class: "btn btn-primary" }, ["Save Connections"]),
           el("button", {
             type: "button",
+            class: "btn btn-ghost",
+            onClick: async () => {
+              try {
+                await updateConnections({ clear_steam_api_key: true });
+                showBanner(bannerBox, "Cleared saved personal Steam API key", "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Could not clear Steam key", "error");
+              }
+            },
+          }, ["Clear Steam Key"]),
+          el("button", {
+            type: "button",
             class: "btn btn-secondary",
             onClick: async () => {
-              const job = await enqueueSteamSync();
-              showBanner(bannerBox, `Queued Steam sync job #${job.id} (${job.state})`, "info");
-              await refreshData();
+              try {
+                const job = await enqueueSteamSync();
+                showBanner(bannerBox, `Queued Steam sync job #${job.id} (${job.state})`, "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Could not queue Steam sync", "error");
+              }
             },
           }, ["Queue Steam Sync"]),
         ]),
@@ -106,18 +146,26 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
         class: "row-actions",
         onSubmit: async (ev: Event) => {
           ev.preventDefault();
-          await updateTimezone(tzIn.value);
-          showBanner(bannerBox, "Timezone updated", "info");
+          try {
+            await updateTimezone(tzIn.value);
+            showBanner(bannerBox, "Timezone updated", "info");
+          } catch (err) {
+            showBanner(bannerBox, err instanceof Error ? err.message : "Timezone update failed", "error");
+          }
         },
       }, [tzIn, el("button", { type: "submit", class: "btn btn-secondary" }, ["Save Timezone"])]),
       el("form", {
         class: "stack",
         onSubmit: async (ev: Event) => {
           ev.preventDefault();
-          await changePassword({ current_password: curPwIn.value, new_password: newPwIn.value });
-          curPwIn.value = "";
-          newPwIn.value = "";
-          showBanner(bannerBox, "Password updated; other sessions & tokens revoked", "info");
+          try {
+            await changePassword({ current_password: curPwIn.value, new_password: newPwIn.value });
+            curPwIn.value = "";
+            newPwIn.value = "";
+            showBanner(bannerBox, "Password updated; other sessions & tokens revoked", "info");
+          } catch (err) {
+            showBanner(bannerBox, err instanceof Error ? err.message : "Password change failed", "error");
+          }
         },
       }, [
         el("h3", {}, ["Change Password"]),
@@ -132,13 +180,17 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
         class: "row-actions",
         onSubmit: async (ev: Event) => {
           ev.preventDefault();
-          const created = await createPat({
-            name: patNameIn.value || "CLI Token",
-            scopes: ["read:library", "write:library", "sync:platforms"],
-          });
-          patOut.textContent = `Copy once: ${created.token}`;
-          patNameIn.value = "";
-          await refreshData();
+          try {
+            const created = await createPat({
+              name: patNameIn.value || "CLI Token",
+              scopes: ["read:library", "write:library", "sync:platforms"],
+            });
+            patOut.textContent = `Copy once: ${created.token}`;
+            patNameIn.value = "";
+            await refreshData();
+          } catch (err) {
+            showBanner(bannerBox, err instanceof Error ? err.message : "Could not create PAT", "error");
+          }
         },
       }, [patNameIn, el("button", { type: "submit", class: "btn btn-secondary" }, ["Create PAT"])]),
       patOut,

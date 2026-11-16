@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 from urllib.parse import urlparse
 
 from fastapi import Depends, HTTPException, Request
@@ -50,9 +51,30 @@ def _extract_host(raw_host: str | None) -> str:
     return val.split(":", 1)[0]
 
 
+def _is_trusted_proxy(peer: str, trusted_proxies: tuple[str, ...]) -> bool:
+    if not peer or not trusted_proxies:
+        return False
+    if peer in trusted_proxies:
+        return True
+    try:
+        peer_ip = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    for entry in trusted_proxies:
+        try:
+            if "/" in entry:
+                if peer_ip in ipaddress.ip_network(entry, strict=False):
+                    return True
+            elif peer_ip == ipaddress.ip_address(entry):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def resolve_client_ip(request: Request, settings: Settings) -> str:
     peer = request.client.host if request.client else "127.0.0.1"
-    if peer in settings.trusted_proxies:
+    if _is_trusted_proxy(peer, settings.trusted_proxies):
         xff = request.headers.get("x-forwarded-for", "")
         if xff:
             return xff.split(",", 1)[0].strip() or peer
@@ -62,10 +84,11 @@ def resolve_client_ip(request: Request, settings: Settings) -> str:
 def validate_request_host_and_csrf(request: Request, settings: Settings) -> None:
     peer = request.client.host if request.client else ""
     raw_host = request.headers.get("host")
-    if peer in settings.trusted_proxies and request.headers.get("x-forwarded-host"):
+    if _is_trusted_proxy(peer, settings.trusted_proxies) and request.headers.get("x-forwarded-host"):
         raw_host = request.headers.get("x-forwarded-host")
     host = _extract_host(raw_host)
-    if host and host not in {h.lower() for h in settings.allowed_hosts}:
+    allowed_norm = {h.lower().strip("[]") for h in settings.allowed_hosts}
+    if allowed_norm and (not host or host.strip("[]") not in allowed_norm):
         raise HTTPException(status_code=400, detail="Disallowed Host header")
 
     if request.method in _MUTATING_METHODS:

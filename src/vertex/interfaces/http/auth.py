@@ -77,7 +77,13 @@ def logout(
 ) -> Response:
     token = request.cookies.get(services.settings.cookie_name)
     services.identity.logout_session(token)
-    response.delete_cookie(services.settings.cookie_name, path="/")
+    response.delete_cookie(
+        services.settings.cookie_name,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=services.settings.cookie_secure,
+    )
     response.headers["Clear-Site-Data"] = '"cache"'
     response.status_code = 204
     return response

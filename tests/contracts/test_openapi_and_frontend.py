@@ -54,6 +54,19 @@ class TestContractsAndFrontend(unittest.TestCase):
             self.assertIn("return;", sw_text)
             self.assertIn("cache.addAll(STATIC_ASSETS)", sw_text)
 
+            # Verify strict TS class field erasure and canonical Vertex statuses in compiled JS
+            api_js = (dist_dir / "assets" / "shared" / "api.js").read_text(encoding="utf-8")
+            self.assertIn("export class ApiError extends Error", api_js)
+            self.assertIn("constructor(status, code, detail)", api_js)
+            lib_js = (dist_dir / "assets" / "features" / "library" / "libraryView.js").read_text(encoding="utf-8")
+            for expected_st in ('"Beaten"', '"Dropped"', '"Borrowed"', '"None"'):
+                self.assertIn(expected_st, lib_js)
+
+            # Verify Dockerfile.v2 builds frontend without depending on .dockerignore-excluded scripts/
+            dockerfile_v2 = (REPO_ROOT / "deploy" / "Dockerfile.v2").read_text(encoding="utf-8")
+            self.assertNotIn("COPY scripts", dockerfile_v2)
+            self.assertIn("vertex build-frontend", dockerfile_v2)
+
             app = create_app(
                 Settings(
                     data_dir=tmp_path / "data",

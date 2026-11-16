@@ -21,6 +21,13 @@ def _parse_iso(ts: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+def _parse_user_iso(ts: str, field_name: str = "timestamp") -> datetime:
+    try:
+        return _parse_iso(str(ts or "").strip())
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"Invalid ISO timestamp for {field_name}: '{ts}'") from exc
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -38,13 +45,48 @@ def _platform_family(platform: str) -> str:
     return platform or "Other"
 
 
-def _resolve_zoneinfo(tz_name: str, timezone_eras: list[dict[str, str]], at_utc: datetime) -> ZoneInfo:
-    selected = tz_name
+def _resolve_zoneinfo(tz_name: str, timezone_eras: list[dict[str, object]], at_utc: datetime) -> ZoneInfo:
+    until_eras: list[tuple[datetime, str]] = []
+    from_eras: list[tuple[datetime, str]] = []
     for era in timezone_eras:
-        eff = era.get("effective_from")
-        era_tz = era.get("tz")
-        if eff and era_tz and _parse_iso(eff) <= at_utc:
-            selected = era_tz
+        if not isinstance(era, dict):
+            continue
+        era_tz = str(era.get("timezone") or era.get("tz") or "").strip()
+        if not era_tz:
+            continue
+        until_val = era.get("until")
+        from_val = era.get("effective_from")
+        if until_val:
+            try:
+                until_eras.append((_parse_iso(str(until_val)), era_tz))
+            except ValueError:
+                continue
+        elif from_val:
+            try:
+                from_eras.append((_parse_iso(str(from_val)), era_tz))
+            except ValueError:
+                continue
+
+    selected = tz_name
+    if until_eras:
+        until_eras.sort(key=lambda item: item[0])
+        matched_until = False
+        for until_dt, era_tz in until_eras:
+            if at_utc < until_dt:
+                selected = era_tz
+                matched_until = True
+                break
+        if not matched_until and from_eras:
+            from_eras.sort(key=lambda item: item[0])
+            for eff_dt, era_tz in from_eras:
+                if eff_dt <= at_utc:
+                    selected = era_tz
+    elif from_eras:
+        from_eras.sort(key=lambda item: item[0])
+        for eff_dt, era_tz in from_eras:
+            if eff_dt <= at_utc:
+                selected = era_tz
+
     if not selected or selected == "auto":
         return ZoneInfo("UTC")
     try:
@@ -194,7 +236,7 @@ class ActivityService:
     ) -> ObservationOutcome:
         scope.require_active()
         obs_mins = max(0, int(observed_minutes))
-        obs_dt = _parse_iso(observed_at)
+        obs_dt = _parse_user_iso(observed_at, "observed_at")
         obs_iso = obs_dt.isoformat()
         now_iso = _utc_now_iso()
         tz_name, tz_eras = self._get_user_timezone_config(scope)
@@ -434,8 +476,10 @@ class ActivityService:
             if row is None:
                 raise NotFoundError(f"Play session {session_id} not found")
 
-            new_start = _parse_iso(started_at).isoformat() if started_at else row["started_at"]
-            new_end = _parse_iso(ended_at).isoformat() if ended_at else row["ended_at"]
+            new_start = _parse_user_iso(started_at, "started_at").isoformat() if started_at else row["started_at"]
+            new_end = _parse_user_iso(ended_at, "ended_at").isoformat() if ended_at else row["ended_at"]
+            if _parse_iso(new_end) < _parse_iso(new_start):
+                raise ValidationError("Session ended_at cannot be earlier than started_at")
             new_dur = int(duration_minutes) if duration_minutes is not None else int(row["duration_minutes"])
             if new_dur <= 0:
                 raise ValidationError("Session duration_minutes must be positive")

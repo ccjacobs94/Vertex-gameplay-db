@@ -18,6 +18,7 @@ from vertex.infrastructure.jobs import JobQueue
 from vertex.infrastructure.migrations import apply_migrations, list_applied_migrations
 from vertex.infrastructure.secrets import SecretBox
 from vertex.infrastructure.sqlite import DatabaseManager, configure_sqlite_connection
+from vertex.interfaces.frontend_build import build_frontend
 from vertex.migration.legacy_importer import import_legacy_instance
 
 
@@ -60,6 +61,9 @@ def _build_parser() -> argparse.ArgumentParser:
     imp.add_argument("--single-user-password", default=None)
 
     sub.add_parser("diagnostics", help="Emit sanitized instance health and schema report (no secrets)")
+
+    bld = sub.add_parser("build-frontend", help="Compile modular TypeScript frontend into static assets")
+    bld.add_argument("--out-dir", type=Path, default=None)
 
     srv = sub.add_parser("serve", help="Run the Vertex HTTP server")
     srv.add_argument("--host", default=None)
@@ -167,6 +171,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "jobs_by_state": jobs_summary,
             }
             print(json.dumps(diag, indent=2))
+            return 0
+
+        if args.command == "build-frontend":
+            out_dir = args.out_dir or settings.frontend_dist_dir
+            emitted = build_frontend(out_dir=out_dir)
+            print(json.dumps({"built_modules": len(emitted), "out_dir": str(out_dir)}, indent=2))
             return 0
 
         if args.command == "serve":

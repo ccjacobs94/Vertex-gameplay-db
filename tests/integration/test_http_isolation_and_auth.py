@@ -193,3 +193,66 @@ class TestHttpIsolationAndAuth(unittest.TestCase):
             # Hosted billing/signup routes do not exist
             self.assertEqual(alice.get("/billing").status_code, 404)
             self.assertEqual(alice.get("/signup").status_code, 404)
+
+    def test_cidr_trusted_proxies_host_validation_and_naive_expiry_handling(self):
+        from starlette.requests import Request
+        from vertex.interfaces.http.deps import resolve_client_ip, validate_request_host_and_csrf
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = Settings(
+                data_dir=root,
+                migrations_dir=MIGRATIONS_DIR,
+                frontend_dist_dir=root / "dist",
+                secret_key="cidr-test-secret-key",
+                allowed_hosts=("games.home.arpa", "testserver"),
+                trusted_proxies=("172.18.0.0/16",),
+                worker_enabled=False,
+            )
+            proxied_req = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/games",
+                    "headers": [
+                        (b"host", b"vertex:8090"),
+                        (b"x-forwarded-host", b"games.home.arpa"),
+                        (b"x-forwarded-for", b"100.64.2.15, 172.18.0.2"),
+                    ],
+                    "client": ("172.18.0.2", 54321),
+                }
+            )
+            self.assertEqual(resolve_client_ip(proxied_req, cfg), "100.64.2.15")
+            validate_request_host_and_csrf(proxied_req, cfg)
+
+            # Empty Host header is rejected
+            client = self._make_client(root)
+            self.assertEqual(client.get("/api/games", headers={"Host": ""}).status_code, 400)
+
+            # Naive expires_at on invite works without TypeError, and malformed import JSON returns 422
+            client.post("/api/auth/bootstrap", json={"username": "alice", "password": "AlicePassword!1"})
+            inv = client.post("/api/admin/invites", json={"role": "member"}).json()
+            with client.app.state.services.db_manager.system_connection(immediate=True) as conn:
+                conn.execute(
+                    "UPDATE invites SET expires_at = '2030-01-01T00:00:00' WHERE code_hash = ?",
+                    (inv["record"]["code_hash"],),
+                )
+            acc = client.post(
+                "/api/auth/invites/accept",
+                json={"invite_code": inv["code"], "username": "bob", "password": "BobPassword!1"},
+            )
+            self.assertEqual(acc.status_code, 201)
+
+            bad_imp = client.post(
+                "/api/portability/import/json",
+                json={
+                    "payload": {
+                        "format_version": 1,
+                        "games": [{"external_id": "m:1", "title": "X", "platform": "PC"}],
+                        "play_sessions": [{"game_external_id": "m:1", "duration_minutes": 10}],
+                    },
+                    "mode": "merge",
+                    "dry_run": True,
+                },
+            )
+            self.assertEqual(bad_imp.status_code, 422)

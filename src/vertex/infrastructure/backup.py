@@ -120,7 +120,8 @@ def create_backup_set(
             dst_lib = dest_dir / rel_lib
             _sqlite_backup_file(src_lib, dst_lib)
             _sqlite_integrity_ok(dst_lib)
-            lib_conn = configure_sqlite_connection(sqlite3.connect(str(dst_lib)))
+            lib_conn = sqlite3.connect(f"file:{dst_lib.as_posix()}?mode=ro", uri=True)
+            lib_conn.row_factory = sqlite3.Row
             try:
                 lib_versions = [m["version"] for m in list_applied_migrations(lib_conn)]
             finally:
@@ -244,7 +245,13 @@ def restore_backup_set(
                     lib_conn.close()
 
         if dest_data_dir.exists():
-            dest_data_dir.rmdir()
-        shutil.move(str(stage), str(dest_data_dir))
+            try:
+                dest_data_dir.rmdir()
+                shutil.move(str(stage), str(dest_data_dir))
+            except OSError:
+                for item in stage.iterdir():
+                    shutil.move(str(item), str(dest_data_dir / item.name))
+        else:
+            shutil.move(str(stage), str(dest_data_dir))
 
     return manifest

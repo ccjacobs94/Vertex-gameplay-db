@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -66,7 +67,7 @@ class SteamAdapter:
             ) from exc
 
         self._check_http_status(resp, "Steam ResolveVanityURL")
-        body = resp.json().get("response", {})
+        body = self._parse_response_json(resp, "Steam ResolveVanityURL")
         if body.get("success") != 1 or not body.get("steamid"):
             raise PlatformAdapterError(
                 code="invalid_identifier",
@@ -74,6 +75,39 @@ class SteamAdapter:
                 retryable=False,
             )
         return str(body["steamid"])
+
+    def _parse_retry_after(self, raw_header: str | None) -> int:
+        val = (raw_header or "").strip()
+        if not val:
+            return 60
+        try:
+            return max(1, min(600, int(val)))
+        except ValueError:
+            try:
+                dt = parsedate_to_datetime(val)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                delta = int((dt - datetime.now(timezone.utc)).total_seconds())
+                return max(1, min(600, delta))
+            except Exception:
+                return 60
+
+    def _parse_response_json(self, resp: httpx.Response, context: str) -> dict[str, object]:
+        try:
+            data = resp.json()
+        except Exception as exc:
+            raise PlatformAdapterError(
+                code="upstream_error",
+                message=f"{context} returned invalid JSON",
+                retryable=True,
+            ) from exc
+        if not isinstance(data, dict) or not isinstance(data.get("response"), dict):
+            raise PlatformAdapterError(
+                code="upstream_error",
+                message=f"{context} returned unexpected payload structure",
+                retryable=True,
+            )
+        return data["response"]
 
     def _check_http_status(self, resp: httpx.Response, context: str) -> None:
         if resp.status_code in (401, 403):
@@ -83,12 +117,12 @@ class SteamAdapter:
                 retryable=False,
             )
         if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After") or "60")
+            retry_after = self._parse_retry_after(resp.headers.get("Retry-After"))
             raise PlatformAdapterError(
                 code="rate_limited",
                 message=f"{context} rate limited requests",
                 retryable=True,
-                throttle_seconds=max(1, min(600, retry_after)),
+                throttle_seconds=retry_after,
             )
         if resp.status_code >= 500:
             raise PlatformAdapterError(
@@ -147,7 +181,14 @@ class SteamAdapter:
             ) from exc
 
         self._check_http_status(resp, "Steam GetOwnedGames")
-        raw_games = resp.json().get("response", {}).get("games", [])
+        body = self._parse_response_json(resp, "Steam GetOwnedGames")
+        raw_games = body.get("games") or []
+        if not isinstance(raw_games, list):
+            raise PlatformAdapterError(
+                code="upstream_error",
+                message="Steam GetOwnedGames returned non-list games field",
+                retryable=True,
+            )
         snapshots: list[PlatformGameSnapshot] = []
         for g in raw_games:
             appid = g.get("appid")

@@ -10,10 +10,9 @@ VALID_COMPLETION_STATUSES = frozenset(
         "Unplayed",
         "Plan to Play",
         "Playing",
+        "Beaten",
         "Completed",
-        "100% Completed",
-        "Shelved",
-        "Abandoned",
+        "Dropped",
     }
 )
 
@@ -21,10 +20,8 @@ VALID_OWNERSHIP_STATUSES = frozenset(
     {
         "Owned",
         "Subscription",
-        "Shared",
-        "Free",
-        "Wishlist",
-        "Formerly Owned",
+        "Borrowed",
+        "None",
     }
 )
 

@@ -219,3 +219,85 @@ class TestLegacyImporter(unittest.TestCase):
             self.assertEqual(report.layout, "single_user")
             self.assertTrue(report.parity_checks["all_passed"])
             self.assertEqual(report.parity_checks["users"]["chris"]["dest_games"], 1)
+
+    def test_real_system_db_lifecycle_reasons_retired_settings_and_until_eras(self):
+        import system_db as legacy_sys
+        import db as legacy_db
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            src = tmp_path / "real_legacy"
+            src.mkdir()
+            sys_path = str(src / "system.db")
+            legacy_sys.init_system_db(sys_path)
+
+            uid_admin = legacy_sys.create_user("alice", "AlicePass!2026", role="admin", status="active", db_path=sys_path)
+            legacy_sys.create_user("carol", "CarolPass!2026", status="pending", status_reason="awaiting_payment", db_path=sys_path)
+            legacy_sys.create_user("dave", "DavePass!2026", status="pending", status_reason="awaiting_approval", db_path=sys_path)
+            uid_eve = legacy_sys.create_user("eve", "EvePass!2026", status="active", db_path=sys_path)
+            legacy_sys.set_user_status(uid_eve, "inactive", reason="subscription_lapsed", db_path=sys_path)
+            uid_frank = legacy_sys.create_user("frank", "FrankPass!2026", status="active", db_path=sys_path)
+            legacy_sys.set_user_status(uid_frank, "inactive", reason="admin_suspended", db_path=sys_path)
+
+            legacy_sys.set_setting("edition", "hosted", db_path=sys_path)
+            legacy_sys.set_setting("registration_policy", "open", db_path=sys_path)
+            legacy_sys.set_setting("instance_name", "Real Household", db_path=sys_path)
+            legacy_sys.update_user_timezone_settings(
+                uid_admin,
+                "America/Chicago",
+                [{"timezone": "America/New_York", "until": "2026-06-01T00:00:00+00:00", "label": None}],
+                db_path=sys_path,
+            )
+
+            alice_db = src / "users" / uid_admin / "games.db"
+            legacy_db.init_db(str(alice_db))
+            legacy_db.upsert_synced_game(
+                "steam:620",
+                "Portal 2",
+                "PC (Steam)",
+                "Steam",
+                playtime_minutes=180,
+                ownership_status="Borrowed",
+                db_path=str(alice_db),
+            )
+            legacy_db.update_game(1, {"completion_status": "Beaten"}, db_path=str(alice_db))
+
+            dest = tmp_path / "dest_real"
+            report = import_legacy_instance(
+                source_dir=src,
+                dest_dir=dest,
+                migrations_dir=MIGRATIONS_DIR,
+                dest_secret_key="new-secret-key-99999",
+            )
+            self.assertTrue(report.parity_checks["all_passed"])
+
+            cfg = Settings(
+                data_dir=dest,
+                migrations_dir=MIGRATIONS_DIR,
+                frontend_dist_dir=dest / "no-ui",
+                secret_key="new-secret-key-99999",
+                worker_enabled=False,
+            )
+            mgr = DatabaseManager(cfg)
+            ident = IdentityService(mgr, SecretBox(cfg.secret_key), JobQueue(mgr))
+            lib = LibraryService(mgr)
+            scope, _ = ident.login(username="alice", password="AlicePass!2026")
+
+            users = {u.username: u for u in ident.list_users(scope)}
+            self.assertEqual(users["carol"].status, "suspended")
+            self.assertIn("awaiting_payment", users["carol"].status_reason or "")
+            self.assertEqual(users["dave"].status, "suspended")
+            self.assertIn("awaiting_approval", users["dave"].status_reason or "")
+            self.assertEqual(users["eve"].status, "suspended")
+            self.assertIn("subscription_lapsed", users["eve"].status_reason or "")
+            self.assertEqual(users["frank"].status, "suspended")
+            self.assertEqual(users["frank"].status_reason, "admin_suspended")
+
+            inst = ident.get_instance_settings(scope)
+            self.assertEqual(inst.get("instance_name"), "Real Household")
+            self.assertNotIn("edition", inst)
+            self.assertNotIn("registration_policy", inst)
+
+            games = lib.list_games(scope)
+            self.assertEqual(games[0].completion_status, "Beaten")
+            self.assertEqual(games[0].ownership_status, "Borrowed")

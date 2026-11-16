@@ -51,12 +51,12 @@ class TestDomainInvariants(unittest.TestCase):
             self.assertEqual(created.genres, ("Action",))
             self.assertEqual(created.tags, ("Stealth", "Co-op"))
 
-            # User locks status, overrides ownership to Subscription + Game Pass, adds notes/rating/fav
+            # User locks status, overrides ownership to Borrowed + Game Pass, adds notes/rating/fav
             edited = lib.update_game(
                 scope,
                 created.id,
                 completion_status="Completed",
-                ownership_status="Shared",
+                ownership_status="Borrowed",
                 is_game_pass=True,
                 user_rating=10,
                 notes="Finished co-op campaign",
@@ -82,7 +82,7 @@ class TestDomainInvariants(unittest.TestCase):
             self.assertFalse(is_new2)
             self.assertEqual(synced.playtime_minutes, 120)
             self.assertEqual(synced.completion_status, "Completed")
-            self.assertEqual(synced.ownership_status, "Shared")
+            self.assertEqual(synced.ownership_status, "Borrowed")
             self.assertFalse(synced.is_game_pass)  # independent catalog availability updates
             self.assertEqual(synced.user_rating, 10)
             self.assertEqual(synced.notes, "Finished co-op campaign")
@@ -295,3 +295,94 @@ class TestDomainInvariants(unittest.TestCase):
             self.assertEqual(ledger.get("2026-03-08"), 60.0)
             self.assertEqual(validate_genres(["Roguelike", "Indie"]), ["Roguelike"])
             self.assertEqual(validate_tags(["Indie", "Story-Rich"]), ["Indie", "Story-Rich"])
+
+    def test_snapshot_updates_last_synced_and_supports_legacy_until_timezone_eras(self):
+        from vertex.infrastructure.errors import ValidationError
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scope, lib, act, ident = self._setup(Path(tmp))
+            g0, _ = lib.apply_platform_snapshot(
+                scope,
+                external_id="steam:777",
+                title="Hades II",
+                platform="PC (Steam)",
+                source="Steam",
+                playtime_minutes=0,
+            )
+            self.assertEqual(g0.last_synced_playtime_minutes, 0)
+            g1, _ = lib.apply_platform_snapshot(
+                scope,
+                external_id="steam:777",
+                title="Hades II",
+                platform="PC (Steam)",
+                source="Steam",
+                playtime_minutes=60,
+            )
+            self.assertEqual(g1.last_synced_playtime_minutes, 60)
+            self.assertEqual(g1.completion_status, "Playing")
+
+            # Unlock and mark Plan to Play; unchanged 60-min sync must NOT revert to Playing
+            lib.update_game(scope, g1.id, completion_status="Plan to Play", status_locked=False)
+            g2, _ = lib.apply_platform_snapshot(
+                scope,
+                external_id="steam:777",
+                title="Hades II",
+                platform="PC (Steam)",
+                source="Steam",
+                playtime_minutes=60,
+            )
+            self.assertEqual(g2.completion_status, "Plan to Play")
+
+            # Beaten & Dropped & Borrowed & None statuses are canonical
+            beaten = lib.update_game(scope, g1.id, completion_status="Beaten", ownership_status="None")
+            self.assertEqual(beaten.completion_status, "Beaten")
+            self.assertEqual(beaten.ownership_status, "None")
+            self.assertEqual(lib.get_summary_stats(scope).completed, 1)
+
+            # Legacy `until` timezone_eras resolve historical sessions accurately
+            ident.update_timezone(
+                scope,
+                timezone_name="Asia/Tokyo",
+                timezone_eras=[
+                    {"timezone": "America/New_York", "until": "2026-06-01T00:00:00+00:00", "label": "East"},
+                ],
+            )
+            act.record_cumulative_observation(
+                scope,
+                game_id=g1.id,
+                source="Steam",
+                platform="PC (Steam)",
+                observed_minutes=60,
+                observed_at="2026-05-01T00:00:00+00:00",
+                idempotency_key="tz-init",
+            )
+            # 2026-05-02 03:00 UTC is 2026-05-01 23:00 EDT in America/New_York (before until), NOT 2026-05-02 in Tokyo!
+            out = act.record_cumulative_observation(
+                scope,
+                game_id=g1.id,
+                source="Steam",
+                platform="PC (Steam)",
+                observed_minutes=90,
+                observed_at="2026-05-02T03:00:00+00:00",
+                idempotency_key="tz-play",
+            )
+            ledger = {e.date: e.minutes_played for e in act.get_daily_ledger(scope)}
+            self.assertEqual(ledger.get("2026-05-01"), 30.0)
+
+            with self.assertRaises(ValidationError):
+                act.update_session(
+                    scope,
+                    out.session.id,
+                    started_at="2026-05-02T05:00:00+00:00",
+                    ended_at="2026-05-02T04:00:00+00:00",
+                )
+            with self.assertRaises(ValidationError):
+                act.record_cumulative_observation(
+                    scope,
+                    game_id=g1.id,
+                    source="Steam",
+                    platform="PC (Steam)",
+                    observed_minutes=100,
+                    observed_at="not-an-iso-timestamp",
+                    idempotency_key="bad-ts",
+                )

@@ -163,3 +163,95 @@ class TestPortability(unittest.TestCase):
             self.assertEqual(games[0].title, "Hades")
             self.assertTrue(games[0].status_locked)
             self.assertEqual(games[0].notes, "Escape!")
+
+    def test_portability_preserves_legacy_statuses_copies_dismissals_and_validates_nested_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            scope, _ident, lib, port = self._setup(tmp_path / "app")
+
+            # Malformed session / baseline raises ValidationError, never KeyError
+            with self.assertRaises(ValidationError):
+                port.import_json(
+                    scope,
+                    {
+                        "format_version": 1,
+                        "games": [{"external_id": "m:1", "title": "Game A", "platform": "PC"}],
+                        "play_sessions": [{"game_external_id": "m:1", "duration_minutes": 10}],
+                    },
+                )
+            with self.assertRaises(ValidationError):
+                port.import_json(
+                    scope,
+                    {
+                        "format_version": 1,
+                        "games": [{"external_id": "m:1", "title": "Game A", "platform": "PC"}],
+                        "provider_baselines": [{"game_external_id": "m:1", "baseline_minutes": 10}],
+                    },
+                )
+
+            # Real legacy statuses (Beaten, Dropped, Borrowed, None) and reconcile_dismissals round-trip cleanly
+            g1 = lib.add_manual_game(
+                scope,
+                title="Control",
+                platform="PC (Steam)",
+                completion_status="Beaten",
+                ownership_status="Borrowed",
+            )
+            g2 = lib.add_manual_game(
+                scope,
+                title="Control",
+                platform="Xbox",
+                completion_status="Dropped",
+                ownership_status="None",
+            )
+            lib.dismiss_reconcile_candidate(scope, [g1.id, g2.id])
+            self.assertEqual(lib.get_reconcile_candidates(scope), [])
+
+            exported = port.export_json(scope)
+            rep = port.import_json(scope, exported, mode="replace", dry_run=False)
+            self.assertEqual(rep.games_added, 2)
+            # Dismissals preserved after replace import!
+            self.assertEqual(lib.get_reconcile_candidates(scope), [])
+            by_ext = {g.external_id: g for g in lib.list_games(scope)}
+            self.assertEqual(by_ext[g1.external_id].completion_status, "Beaten")
+            self.assertEqual(by_ext[g1.external_id].ownership_status, "Borrowed")
+            self.assertEqual(by_ext[g2.external_id].completion_status, "Dropped")
+            self.assertEqual(by_ext[g2.external_id].ownership_status, "None")
+
+            # Imported games also populate platform_copies
+            with port.db_manager.library_connection(scope) as conn:
+                copies_cnt = conn.execute("SELECT COUNT(*) FROM platform_copies").fetchone()[0]
+                self.assertEqual(copies_cnt, 2)
+
+            # Legacy SQLite snapshot with Beaten/Dropped/Borrowed/reconcile_dismissals imports cleanly
+            snap_db = tmp_path / "legacy_beaten.db"
+            legacy_db.init_db(str(snap_db))
+            conn = sqlite3.connect(str(snap_db))
+            conn.execute(
+                """
+                INSERT INTO games (
+                    id, external_id, title, platform, source, playtime_hours, playtime_minutes,
+                    completion_status, ownership_status, created_at, updated_at
+                ) VALUES
+                    (5, 'steam:10', 'Disco Elysium', 'PC (Steam)', 'Steam', 20.0, 1200, 'Beaten', 'Borrowed', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z'),
+                    (6, 'xbox:10', 'Disco Elysium', 'Xbox', 'Xbox', 1.0, 60, 'Dropped', 'None', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')
+                """
+            )
+            conn.execute("INSERT INTO reconcile_dismissals (pair_key, created_at) VALUES ('5|6', '2026-10-01T00:00:00Z')")
+            conn.commit()
+            export_db = tmp_path / "legacy_beaten_export.db"
+            dst_conn = sqlite3.connect(str(export_db))
+            try:
+                conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
+                conn.close()
+
+            sql_rep = port.import_legacy_sqlite_bytes(scope, export_db.read_bytes(), mode="replace", dry_run=False)
+            self.assertEqual(sql_rep.games_added, 2)
+            self.assertEqual(lib.get_reconcile_candidates(scope), [])
+            imported_by_ext = {g.external_id: g for g in lib.list_games(scope)}
+            self.assertEqual(imported_by_ext["steam:10"].completion_status, "Beaten")
+            self.assertEqual(imported_by_ext["steam:10"].ownership_status, "Borrowed")
+            self.assertEqual(imported_by_ext["xbox:10"].completion_status, "Dropped")
+            self.assertEqual(imported_by_ext["xbox:10"].ownership_status, "None")

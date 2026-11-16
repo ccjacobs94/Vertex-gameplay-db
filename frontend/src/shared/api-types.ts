@@ -282,7 +282,7 @@ export interface ReconcileIdsRequest {
 
 export interface TimezoneUpdateRequest {
   timezone: string;
-  timezone_eras?: Array<Record<string, string>> | null;
+  timezone_eras?: Array<Record<string, unknown>> | null;
 }
 
 export interface UpdateConnectionsRequest {
@@ -316,7 +316,7 @@ export interface UserAccountResponse {
   status: string;
   status_reason?: string | null;
   timezone: string;
-  timezone_eras: Array<Record<string, string>>;
+  timezone_eras: Array<Record<string, unknown>>;
   onboarding_completed: boolean;
   created_at: string;
   updated_at: string;

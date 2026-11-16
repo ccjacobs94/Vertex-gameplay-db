@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from vertex.infrastructure.scope import UserScope
 
@@ -21,7 +22,7 @@ class UserAccount:
     status: str
     status_reason: str | None
     timezone: str
-    timezone_eras: list[dict[str, str]]
+    timezone_eras: list[dict[str, Any]]
     onboarding_completed: bool
     created_at: str
     updated_at: str

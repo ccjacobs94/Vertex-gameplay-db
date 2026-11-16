@@ -12,8 +12,17 @@ import {
 } from "../../shared/api.ts";
 import { clearEl, el, openModalDialog, showBanner } from "../../shared/dom.ts";
 
-const STATUSES = ["Not Played", "Plan to Play", "Playing", "Completed", "100% Completed", "Shelved", "Abandoned"];
-const OWNERSHIPS = ["Owned", "Subscription", "Shared", "Free", "Wishlist", "Formerly Owned"];
+const STATUSES = ["Not Played", "Plan to Play", "Playing", "Beaten", "Completed", "Dropped"];
+const OWNERSHIPS = ["Owned", "Subscription", "Borrowed", "None"];
+
+function buildSelectOptions(items: Array<string>, currentVal: string): Array<HTMLElement> {
+  const opts = items.includes(currentVal) ? items : [currentVal, ...items];
+  return opts.map((item) => {
+    const opt = el("option", { value: item }, [item]) as HTMLOptionElement;
+    if (item === currentVal) opt.selected = true;
+    return opt;
+  });
+}
 
 export async function renderLibraryView(container: HTMLElement): Promise<void> {
   clearEl(container);
@@ -74,6 +83,7 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
         el("p", { class: "muted" }, [`${game.platform} • ${game.completion_status}${game.status_locked ? " [Locked]" : ""}`]),
         el("p", { class: "muted" }, [`${game.ownership_status}${game.is_game_pass ? " • Game Pass" : ""} • ${game.playtime_hours}h`]),
         game.genres.length ? el("p", { class: "tags-line" }, [game.genres.join(", ")]) : null,
+        game.tags.length ? el("p", { class: "muted" }, [`Tags: ${game.tags.join(", ")}`]) : null,
         game.notes ? el("p", { class: "notes-preview" }, [game.notes]) : null,
         el("div", { class: "row-actions" }, [
           el("button", { type: "button", class: "btn btn-secondary", onClick: () => openEditDialog(game) }, ["Edit"]),
@@ -81,8 +91,12 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
             type: "button",
             class: "btn btn-ghost",
             onClick: async () => {
-              await deleteGame(game.id);
-              await refresh();
+              try {
+                await deleteGame(game.id);
+                await refresh();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Could not delete game", "error");
+              }
             },
           }, ["Delete"]),
         ]),
@@ -93,6 +107,7 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
 
   function openAddDialog(): void {
     openModalDialog("Add Manual Game", (dialog, body) => {
+      const modalBanner = el("div");
       const titleIn = el("input", { type: "text", required: true, autofocus: true }) as HTMLInputElement;
       const platIn = el("input", { type: "text", required: true, value: "Nintendo Switch" }) as HTMLInputElement;
       const statusIn = el("select", {}, STATUSES.map((s) => el("option", { value: s }, [s]))) as HTMLSelectElement;
@@ -105,6 +120,7 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
         class: "stack",
         onSubmit: async (ev: Event) => {
           ev.preventDefault();
+          showBanner(modalBanner, "");
           try {
             await addGame({
               title: titleIn.value,
@@ -118,10 +134,11 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
             dialog.close("saved");
             await refresh();
           } catch (err) {
-            showBanner(bannerBox, err instanceof Error ? err.message : "Could not add game", "error");
+            showBanner(modalBanner, err instanceof Error ? err.message : "Could not add game", "error");
           }
         },
       }, [
+        modalBanner,
         el("label", {}, ["Title", titleIn]),
         el("label", {}, ["Platform", platIn]),
         el("label", {}, ["Completion Status", statusIn]),
@@ -140,27 +157,22 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
 
   function openEditDialog(game: GameResponse): void {
     openModalDialog(`Edit: ${game.title}`, (dialog, body) => {
-      const statusIn = el("select", { autofocus: true }, STATUSES.map((s) => {
-        const opt = el("option", { value: s }, [s]) as HTMLOptionElement;
-        if (s === game.completion_status) opt.selected = true;
-        return opt;
-      })) as HTMLSelectElement;
+      const modalBanner = el("div");
+      const statusIn = el("select", { autofocus: true }, buildSelectOptions(STATUSES, game.completion_status)) as HTMLSelectElement;
       const lockStatusIn = el("input", { type: "checkbox" }) as HTMLInputElement;
       lockStatusIn.checked = game.status_locked;
 
-      const ownIn = el("select", {}, OWNERSHIPS.map((o) => {
-        const opt = el("option", { value: o }, [o]) as HTMLOptionElement;
-        if (o === game.ownership_status) opt.selected = true;
-        return opt;
-      })) as HTMLSelectElement;
+      const ownIn = el("select", {}, buildSelectOptions(OWNERSHIPS, game.ownership_status)) as HTMLSelectElement;
       const gpIn = el("input", { type: "checkbox" }) as HTMLInputElement;
       gpIn.checked = game.is_game_pass;
 
       const favIn = el("input", { type: "checkbox" }) as HTMLInputElement;
       favIn.checked = game.favorite;
 
+      const hoursIn = el("input", { type: "number", step: "0.1", min: "0", value: String(game.playtime_hours) }) as HTMLInputElement;
       const ratingIn = el("input", { type: "number", min: "1", max: "10", value: game.user_rating ? String(game.user_rating) : "" }) as HTMLInputElement;
       const genresIn = el("input", { type: "text", value: game.genres.join(", "), placeholder: taxonomy.genres.slice(0, 5).join(", ") }) as HTMLInputElement;
+      const tagsIn = el("input", { type: "text", value: game.tags.join(", "), placeholder: taxonomy.tags.slice(0, 5).join(", ") }) as HTMLInputElement;
       const notesIn = el("textarea", { rows: "3" }) as HTMLTextAreaElement;
       notesIn.value = game.notes;
 
@@ -168,31 +180,42 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
         class: "stack",
         onSubmit: async (ev: Event) => {
           ev.preventDefault();
-          const genres = genresIn.value.split(",").map((x) => x.trim()).filter(Boolean);
-          const rating = ratingIn.value.trim() ? Number(ratingIn.value) : null;
-          await updateGame(game.id, {
-            completion_status: statusIn.value,
-            status_locked: lockStatusIn.checked,
-            ownership_status: ownIn.value,
-            is_game_pass: gpIn.checked,
-            favorite: favIn.checked,
-            user_rating: rating,
-            clear_rating: rating === null,
-            genres,
-            replace_labels: true,
-            notes: notesIn.value,
-          });
-          dialog.close("saved");
-          await refresh();
+          showBanner(modalBanner, "");
+          try {
+            const genres = genresIn.value.split(",").map((x) => x.trim()).filter(Boolean);
+            const tags = tagsIn.value.split(",").map((x) => x.trim()).filter(Boolean);
+            const rating = ratingIn.value.trim() ? Number(ratingIn.value) : null;
+            await updateGame(game.id, {
+              completion_status: statusIn.value,
+              status_locked: lockStatusIn.checked,
+              ownership_status: ownIn.value,
+              is_game_pass: gpIn.checked,
+              playtime_hours: Number(hoursIn.value || 0),
+              favorite: favIn.checked,
+              user_rating: rating,
+              clear_rating: rating === null,
+              genres,
+              tags,
+              replace_labels: true,
+              notes: notesIn.value,
+            });
+            dialog.close("saved");
+            await refresh();
+          } catch (err) {
+            showBanner(modalBanner, err instanceof Error ? err.message : "Could not update game", "error");
+          }
         },
       }, [
+        modalBanner,
         el("label", {}, ["Completion Status", statusIn]),
         el("label", { class: "inline-check" }, [lockStatusIn, " Lock status against sync"]),
         el("label", {}, ["Ownership", ownIn]),
         el("label", { class: "inline-check" }, [gpIn, " Game Pass available"]),
+        el("label", {}, ["Playtime (hours)", hoursIn]),
         el("label", { class: "inline-check" }, [favIn, " Favorite"]),
         el("label", {}, ["Rating (1-10)", ratingIn]),
         el("label", {}, ["Genres (comma-separated controlled taxonomy)", genresIn]),
+        el("label", {}, ["Tags (comma-separated controlled taxonomy)", tagsIn]),
         el("label", {}, ["Notes", notesIn]),
         el("div", { class: "row-actions" }, [
           el("button", { type: "submit", class: "btn btn-primary" }, ["Save Changes"]),
@@ -205,6 +228,7 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
 
   function openPortabilityDialog(): void {
     openModalDialog("Export & Import Library", (_dialog, body) => {
+      const modalBanner = el("div");
       const reportPre = el("pre", { class: "code-out" });
       const jsonFileIn = el("input", { type: "file", accept: ".json,application/json" }) as HTMLInputElement;
       const dbFileIn = el("input", { type: "file", accept: ".db,.sqlite,.sqlite3" }) as HTMLInputElement;
@@ -217,35 +241,57 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
         type: "button",
         class: "btn btn-primary",
         onClick: async () => {
-          const data = await exportLibraryJson();
-          const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "vertex-library.json";
-          a.click();
-          URL.revokeObjectURL(url);
+          showBanner(modalBanner, "");
+          try {
+            const data = await exportLibraryJson();
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "vertex-library.json";
+            a.click();
+            URL.revokeObjectURL(url);
+          } catch (err) {
+            showBanner(modalBanner, err instanceof Error ? err.message : "Export failed", "error");
+          }
         },
       }, ["Download Versioned JSON Export"]);
 
       async function handleJsonImport(dryRun: boolean): Promise<void> {
         const f = jsonFileIn.files ? jsonFileIn.files[0] : null;
-        if (!f) return;
-        const parsed = JSON.parse(await f.text()) as Record<string, unknown>;
-        const rep = await importLibraryJson(parsed, modeSel.value, dryRun);
-        reportPre.textContent = JSON.stringify(rep, null, 2);
-        if (!dryRun) await refresh();
+        if (!f) {
+          showBanner(modalBanner, "Select a JSON file first", "error");
+          return;
+        }
+        showBanner(modalBanner, "");
+        try {
+          const parsed = JSON.parse(await f.text()) as Record<string, unknown>;
+          const rep = await importLibraryJson(parsed, modeSel.value, dryRun);
+          reportPre.textContent = JSON.stringify(rep, null, 2);
+          if (!dryRun) await refresh();
+        } catch (err) {
+          showBanner(modalBanner, err instanceof Error ? err.message : "JSON import failed", "error");
+        }
       }
 
       async function handleSqliteImport(dryRun: boolean): Promise<void> {
         const f = dbFileIn.files ? dbFileIn.files[0] : null;
-        if (!f) return;
-        const rep = await importLegacySqlite(f, modeSel.value, dryRun);
-        reportPre.textContent = JSON.stringify(rep, null, 2);
-        if (!dryRun) await refresh();
+        if (!f) {
+          showBanner(modalBanner, "Select a SQLite .db file first", "error");
+          return;
+        }
+        showBanner(modalBanner, "");
+        try {
+          const rep = await importLegacySqlite(f, modeSel.value, dryRun);
+          reportPre.textContent = JSON.stringify(rep, null, 2);
+          if (!dryRun) await refresh();
+        } catch (err) {
+          showBanner(modalBanner, err instanceof Error ? err.message : "SQLite import failed", "error");
+        }
       }
 
       body.appendChild(el("div", { class: "stack" }, [
+        modalBanner,
         exportBtn,
         el("hr"),
         el("label", {}, ["Import Mode", modeSel]),

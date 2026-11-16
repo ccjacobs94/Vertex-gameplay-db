@@ -27,7 +27,11 @@ def _ensure_migrations_table(conn: sqlite3.Connection) -> None:
 
 
 def list_applied_migrations(conn: sqlite3.Connection) -> list[dict[str, str]]:
-    _ensure_migrations_table(conn)
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'"
+    ).fetchone()
+    if has_table is None:
+        return []
     rows = conn.execute(
         "SELECT version, checksum, applied_at FROM schema_migrations ORDER BY version ASC"
     ).fetchall()

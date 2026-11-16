@@ -49,7 +49,7 @@ class UserAccountResponse(BaseModel):
     status: str
     status_reason: str | None = None
     timezone: str
-    timezone_eras: list[dict[str, str]]
+    timezone_eras: list[dict[str, Any]]
     onboarding_completed: bool
     created_at: str
     updated_at: str
@@ -62,7 +62,7 @@ class AuthResponse(BaseModel):
 
 class TimezoneUpdateRequest(BaseModel):
     timezone: str
-    timezone_eras: list[dict[str, str]] | None = None
+    timezone_eras: list[dict[str, Any]] | None = None
 
 
 class PasswordChangeRequest(BaseModel):

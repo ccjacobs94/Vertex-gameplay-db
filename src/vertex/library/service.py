@@ -34,13 +34,40 @@ def _normalize_completion_status(status: str | None) -> str:
     return cleaned
 
 
+_OWNERSHIP_SYNONYMS = {
+    "owned": ("Owned", False),
+    "own": ("Owned", False),
+    "purchased": ("Owned", False),
+    "bought": ("Owned", False),
+    "subscription": ("Subscription", False),
+    "sub": ("Subscription", False),
+    "game pass": ("Subscription", True),
+    "gamepass": ("Subscription", True),
+    "xbox game pass": ("Subscription", True),
+    "pc game pass": ("Subscription", True),
+    "xgp": ("Subscription", True),
+    "ps plus": ("Subscription", False),
+    "ps+": ("Subscription", False),
+    "playstation plus": ("Subscription", False),
+    "ea play": ("Subscription", False),
+    "ubisoft+": ("Subscription", False),
+    "borrowed": ("Borrowed", False),
+    "borrow": ("Borrowed", False),
+    "loaned": ("Borrowed", False),
+    "none": ("None", False),
+    "unowned": ("None", False),
+    "not owned": ("None", False),
+}
+
+
 def _normalize_ownership_status(status: str | None) -> tuple[str, bool]:
     cleaned = (status or "").strip() or "Owned"
-    if cleaned == "Game Pass":
-        return "Subscription", True
-    if cleaned not in VALID_OWNERSHIP_STATUSES:
-        raise ValidationError(f"Invalid ownership status '{cleaned}'")
-    return cleaned, False
+    if cleaned in VALID_OWNERSHIP_STATUSES:
+        return cleaned, False
+    mapped = _OWNERSHIP_SYNONYMS.get(cleaned.lower())
+    if mapped is not None:
+        return mapped
+    raise ValidationError(f"Invalid ownership status '{cleaned}'")
 
 
 def _validate_rating(rating: int | None) -> int | None:
@@ -409,11 +436,16 @@ class LibraryService:
 
                 # NEVER modify completion_status if status_locked = 1!
                 new_status = existing["completion_status"]
-                if not existing["status_locked"] and existing["completion_status"] in (
-                    "Plan to Play",
-                    "Not Played",
-                    "Unplayed",
-                ) and obs_mins > int(existing["last_synced_playtime_minutes"] or prev_mins or 0):
+                last_synced_ref = (
+                    existing["last_synced_playtime_minutes"]
+                    if existing["last_synced_playtime_minutes"] is not None
+                    else prev_mins
+                )
+                if (
+                    not existing["status_locked"]
+                    and existing["completion_status"] in ("Plan to Play", "Not Played", "Unplayed")
+                    and obs_mins > int(last_synced_ref)
+                ):
                     new_status = "Playing"
 
                 # NEVER overwrite ownership_status on existing games during automated syncs.
@@ -427,6 +459,7 @@ class LibraryService:
                     SET title = COALESCE(NULLIF(?, ''), title),
                         playtime_hours = ?,
                         playtime_minutes = ?,
+                        last_synced_playtime_minutes = MAX(COALESCE(last_synced_playtime_minutes, 0), ?),
                         last_played = COALESCE(?, last_played),
                         completion_status = ?,
                         is_game_pass = ?,
@@ -443,6 +476,7 @@ class LibraryService:
                         title.strip(),
                         round(kept_mins / 60.0, 2),
                         kept_mins,
+                        obs_mins,
                         last_played,
                         new_status,
                         gp,
@@ -520,7 +554,7 @@ class LibraryService:
             statuses = {g.completion_status for g in grp}
             if "Playing" in statuses:
                 playing += 1
-            elif statuses & {"Completed", "100% Completed"}:
+            elif statuses & {"Beaten", "Completed"}:
                 completed += 1
             elif statuses & {"Not Played", "Unplayed", "Plan to Play"}:
                 not_played += 1

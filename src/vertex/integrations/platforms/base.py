@@ -11,10 +11,15 @@ import httpx
 _SECRET_PATTERN = re.compile(
     r"(?i)(key|api_key|token|authorization|npsso|password|secret)=([^&\s]+)"
 )
+_HEADER_SECRET_PATTERN = re.compile(
+    r"(?i)(authorization:\s*bearer\s+|bearer\s+|x-api-key:\s*|authorization:\s*)([^\s,;]+)"
+)
 
 
 def sanitize_error_message(message: str) -> str:
-    return _SECRET_PATTERN.sub(r"\1=[REDACTED]", str(message or ""))[:500]
+    cleaned = _SECRET_PATTERN.sub(r"\1=[REDACTED]", str(message or ""))
+    cleaned = _HEADER_SECRET_PATTERN.sub(r"\1[REDACTED]", cleaned)
+    return cleaned[:500]
 
 
 @dataclass(frozen=True, slots=True)

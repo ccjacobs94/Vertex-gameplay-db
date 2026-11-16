@@ -17,13 +17,23 @@ from vertex import __version__
 from vertex.activity.service import rebuild_daily_ledger_for_conn
 from vertex.config import Settings
 from vertex.identity.passwords import hash_password
-from vertex.infrastructure.errors import MigrationError, MissingSecretKeyError
+from vertex.infrastructure.errors import MigrationError, MissingSecretKeyError, ScopeViolationError
 from vertex.infrastructure.migrations import apply_migrations
 from vertex.infrastructure.scope import UserScope, validate_user_id
 from vertex.infrastructure.secrets import SecretBox, legacy_fernet_from_secret
 from vertex.infrastructure.sqlite import configure_sqlite_connection
+from vertex.library.models import VALID_OWNERSHIP_STATUSES
+from vertex.library.service import _OWNERSHIP_SYNONYMS
 
-_RETIRED_SETTINGS = frozenset({"signup_mode", "vapid_private_key", "vapid_public_key"})
+_RETIRED_SETTINGS = frozenset(
+    {
+        "signup_mode",
+        "vapid_private_key",
+        "vapid_public_key",
+        "edition",
+        "registration_policy",
+    }
+)
 
 
 def _utc_now_iso() -> str:
@@ -245,19 +255,26 @@ def _translate_lifecycle_status(
     legacy_reason: str | None,
     subscription_status: str | None,
 ) -> tuple[str, str | None, bool]:
-    """Map legacy user status safely: never silently activate pending/lapsed accounts."""
-    st = (legacy_status or "active").strip()
+    """Map legacy user status/reason safely: never silently activate pending/lapsed accounts."""
+    st = (legacy_status or "active").strip().lower()
+    reason = (legacy_reason or "").strip() or None
+    reason_low = (reason or "").lower()
+
     if st == "active":
-        return "active", legacy_reason, False
-    if st == "admin_suspended":
-        return "suspended", legacy_reason or "admin_suspended", False
-    if st in ("awaiting_approval", "awaiting_payment", "subscription_lapsed"):
-        detail = f"migrated_from:{st}"
+        return "active", reason, False
+    if st == "admin_suspended" or (st == "inactive" and reason_low == "admin_suspended"):
+        return "suspended", reason or "admin_suspended", False
+
+    retired_tags = ("awaiting_approval", "awaiting_payment", "subscription_lapsed")
+    if reason_low in retired_tags or st in (*retired_tags, "pending", "inactive"):
+        tag = reason_low if reason_low in retired_tags else st
+        detail = f"migrated_from:{tag}"
         if subscription_status:
             detail = f"{detail} (legacy_subscription={subscription_status})"
-        if legacy_reason:
-            detail = f"{detail}; {legacy_reason}"
+        if reason and reason_low != tag:
+            detail = f"{detail}; {reason}"
         return "suspended", detail, True
+
     return "suspended", f"migrated_unknown_status:{st}", True
 
 
@@ -451,28 +468,35 @@ def import_legacy_instance(
                     # Migrate safe instance_settings
                     if "instance_settings" in sys_tables:
                         for ir in src_sys.execute("SELECT * FROM instance_settings").fetchall():
-                            if ir["key"] in _RETIRED_SETTINGS:
+                            key_name = str(ir["key"] or "")
+                            if key_name in _RETIRED_SETTINGS or key_name.startswith("stripe_"):
                                 skipped_transformed.append(
                                     {
                                         "table": "instance_settings",
-                                        "key": ir["key"],
+                                        "key": key_name,
                                         "action": "retired_skipped",
                                     }
                                 )
                             else:
                                 dest_sys_conn.execute(
                                     "INSERT OR REPLACE INTO instance_settings (key, value, updated_at) VALUES (?, ?, ?)",
-                                    (ir["key"], ir["value"], ir["updated_at"]),
+                                    (key_name, ir["value"], ir["updated_at"]),
                                 )
 
                     # Migrate users and connections
                     user_rows = src_sys.execute("SELECT * FROM users ORDER BY created_at ASC, id ASC").fetchall()
                     inv_by_id = {u["id"]: u for u in inv.users}
+                    old_to_new_user_id: dict[str, str] = {}
 
                     for u in user_rows:
                         ud = dict(u)
                         old_id = ud["id"]
-                        new_id = validate_user_id(old_id.lower() if old_id else ud["username"].lower())
+                        try:
+                            new_id = validate_user_id((old_id or ud["username"]).lower())
+                        except ScopeViolationError as exc:
+                            raise MigrationError(f"Invalid legacy user id '{old_id}': {exc}") from exc
+                        old_to_new_user_id[str(old_id)] = new_id
+                        old_to_new_user_id[str(ud["username"]).lower()] = new_id
                         new_role = "admin" if ud.get("role") == "admin" else "member"
                         sub_info = subs_by_user.get(old_id)
                         new_status, new_reason, transformed = _translate_lifecycle_status(
@@ -654,6 +678,17 @@ def import_legacy_instance(
                     if "invites" in sys_tables:
                         for ir in src_sys.execute("SELECT * FROM invites").fetchall():
                             idict = dict(ir)
+                            raw_creator = str(idict["created_by"] or "")
+                            mapped_creator = old_to_new_user_id.get(raw_creator) or old_to_new_user_id.get(
+                                raw_creator.lower(), raw_creator
+                            )
+                            raw_used_by = idict.get("used_by")
+                            mapped_used_by = (
+                                old_to_new_user_id.get(str(raw_used_by))
+                                or old_to_new_user_id.get(str(raw_used_by).lower(), str(raw_used_by).lower())
+                                if raw_used_by
+                                else None
+                            )
                             dest_sys_conn.execute(
                                 """
                                 INSERT OR IGNORE INTO invites (
@@ -662,11 +697,11 @@ def import_legacy_instance(
                                 """,
                                 (
                                     idict["code_hash"],
-                                    idict["created_by"],
+                                    mapped_creator,
                                     idict.get("note") or "",
                                     idict["created_at"],
                                     idict.get("expires_at"),
-                                    idict.get("used_by").lower() if idict.get("used_by") else None,
+                                    mapped_used_by,
                                     idict.get("used_at"),
                                 ),
                             )
@@ -704,8 +739,15 @@ def import_legacy_instance(
 
         # Atomically promote staging destination only after full verification succeeds.
         if dest_dir.exists():
-            dest_dir.rmdir()
-        shutil.move(str(stage_data), str(dest_dir))
+            try:
+                dest_dir.rmdir()
+                shutil.move(str(stage_data), str(dest_dir))
+            except OSError:
+                # Destination is an empty mount point (e.g. Docker volume); move staged children inside.
+                for item in stage_data.iterdir():
+                    shutil.move(str(item), str(dest_dir / item.name))
+        else:
+            shutil.move(str(stage_data), str(dest_dir))
         return report
 
 
@@ -745,8 +787,11 @@ def _migrate_user_library(
             old_gid = int(gd["id"])
             old_canon = gd.get("canonical_id")
             raw_own = str(gd.get("ownership_status") or "Owned").strip()
-            gp = bool(gd.get("is_game_pass")) or raw_own == "Game Pass"
-            own = "Subscription" if raw_own == "Game Pass" else raw_own
+            if raw_own in VALID_OWNERSHIP_STATUSES:
+                own, forced_gp = raw_own, False
+            else:
+                own, forced_gp = _OWNERSHIP_SYNONYMS.get(raw_own.lower(), ("Owned", False))
+            gp = bool(gd.get("is_game_pass")) or forced_gp
             mins = int(gd.get("playtime_minutes") or round(float(gd.get("playtime_hours") or 0.0) * 60))
             last_synced = gd.get("last_synced_playtime_minutes")
             if last_synced is None:
