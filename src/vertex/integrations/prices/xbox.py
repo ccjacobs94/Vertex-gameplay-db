@@ -15,6 +15,7 @@ from vertex.integrations.prices.base import (
     PriceAdapterCapabilities,
     PriceAdapterError,
     check_http_error,
+    parse_json_response,
     utc_now_iso,
 )
 
@@ -65,7 +66,7 @@ class XboxCatalogAdapter:
             ) from exc
 
         check_http_error("Xbox Catalog", resp)
-        data = resp.json()
+        data = parse_json_response("Xbox Catalog", resp)
         if not isinstance(data, dict):
             return []
 
@@ -136,7 +137,7 @@ class XboxCatalogAdapter:
                 ) from exc
 
             check_http_error("Xbox Catalog", resp)
-            data = resp.json()
+            data = parse_json_response("Xbox Catalog", resp)
             products = data.get("Products") if isinstance(data, dict) else []
             now_iso = utc_now_iso()
 
@@ -168,20 +169,41 @@ class XboxCatalogAdapter:
                         break
 
                 sku_avails = prod.get("DisplaySkuAvailabilities") or []
-                avails = (sku_avails[0].get("Availabilities") or []) if sku_avails else []
-                if not avails:
+                best_choice: tuple[float, float, str] | None = None
+                fallback_choice: tuple[float, float, str] | None = None
+                for sku_avail in sku_avails:
+                    if not isinstance(sku_avail, dict):
+                        continue
+                    for avail in sku_avail.get("Availabilities") or []:
+                        if not isinstance(avail, dict):
+                            continue
+                        price_data = ((avail.get("OrderManagementData") or {}).get("Price")) or {}
+                        list_price = price_data.get("ListPrice")
+                        if list_price is None:
+                            continue
+                        msrp = price_data.get("MSRP") if price_data.get("MSRP") is not None else list_price
+                        try:
+                            cand_cur = round(float(list_price), 2)
+                            cand_reg = round(float(msrp), 2) if msrp is not None else cand_cur
+                        except (TypeError, ValueError):
+                            continue
+                        if cand_cur <= 0.0 and cand_reg <= 0.0:
+                            continue
+                        cand_ccy = (
+                            str(price_data.get("CurrencyCode") or ("USD" if region == "US" else "")).upper()
+                            or "USD"
+                        )
+                        if cand_cur > 0.0:
+                            if best_choice is None or cand_cur < best_choice[0]:
+                                best_choice = (cand_cur, cand_reg, cand_ccy)
+                        elif fallback_choice is None:
+                            fallback_choice = (cand_cur, cand_reg, cand_ccy)
+
+                chosen = best_choice or fallback_choice
+                if chosen is None:
                     continue
-                price_data = ((avails[0].get("OrderManagementData") or {}).get("Price")) or {}
-                list_price = price_data.get("ListPrice")
-                msrp = price_data.get("MSRP") if price_data.get("MSRP") is not None else list_price
-                if list_price is None:
-                    continue
-                cur = round(float(list_price), 2)
-                reg = round(float(msrp), 2) if msrp is not None else cur
-                if cur <= 0.0 and reg <= 0.0:
-                    continue
+                cur, reg, currency = chosen
                 cut = int(round((1.0 - (cur / reg)) * 100)) if reg > 0 and cur < reg else 0
-                currency = str(price_data.get("CurrencyCode") or ("USD" if region == "US" else "")).upper() or "USD"
 
                 quotes.append(
                     NormalizedPriceQuote(

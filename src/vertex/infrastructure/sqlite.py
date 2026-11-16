@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 import threading
 from contextlib import contextmanager
+import fcntl
+import os
 from pathlib import Path
 from typing import Iterator
 
@@ -21,6 +23,20 @@ def configure_sqlite_connection(conn: sqlite3.Connection) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL;")
     conn.execute("PRAGMA synchronous = NORMAL;")
     return conn
+
+
+@contextmanager
+def _exclusive_init_lock(lock_path: Path) -> Iterator[None]:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 class DatabaseManager:
@@ -50,15 +66,16 @@ class DatabaseManager:
         with self._lock:
             self.settings.data_dir.mkdir(parents=True, exist_ok=True)
             self.users_dir.mkdir(parents=True, exist_ok=True)
-            conn = configure_sqlite_connection(
-                sqlite3.connect(str(self.system_db_path), timeout=15.0, check_same_thread=False)
-            )
-            try:
-                applied = apply_migrations(conn, self.settings.migrations_dir / "system")
-                self._system_migrated = True
-                return applied
-            finally:
-                conn.close()
+            with _exclusive_init_lock(self.system_db_path.parent / ".system.db.init.lock"):
+                conn = configure_sqlite_connection(
+                    sqlite3.connect(str(self.system_db_path), timeout=15.0, check_same_thread=False)
+                )
+                try:
+                    applied = apply_migrations(conn, self.settings.migrations_dir / "system")
+                    self._system_migrated = True
+                    return applied
+                finally:
+                    conn.close()
 
     def ensure_user_library(self, scope: UserScope, *, require_active: bool = True) -> list[str]:
         if not isinstance(scope, UserScope):
@@ -71,15 +88,16 @@ class DatabaseManager:
         db_path = self.user_db_path(scope)
         with self._lock:
             db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = configure_sqlite_connection(
-                sqlite3.connect(str(db_path), timeout=15.0, check_same_thread=False)
-            )
-            try:
-                applied = apply_migrations(conn, self.settings.migrations_dir / "library")
-                self._user_migrated.add(scope.user_id)
-                return applied
-            finally:
-                conn.close()
+            with _exclusive_init_lock(db_path.parent / ".library.db.init.lock"):
+                conn = configure_sqlite_connection(
+                    sqlite3.connect(str(db_path), timeout=15.0, check_same_thread=False)
+                )
+                try:
+                    applied = apply_migrations(conn, self.settings.migrations_dir / "library")
+                    self._user_migrated.add(scope.user_id)
+                    return applied
+                finally:
+                    conn.close()
 
     @contextmanager
     def system_connection(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:

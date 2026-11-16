@@ -65,6 +65,14 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
     openModalDialog("Add Wishlist Item", (dialog, body) => {
       const modalBanner = el("div");
       const titleIn = el("input", { type: "text", required: true, autofocus: true }) as HTMLInputElement;
+      let selectedCoverUrl: string | null = null;
+      let selectedDeveloper = "";
+      let selectedPublisher = "";
+      titleIn.addEventListener("input", () => {
+        selectedCoverUrl = null;
+        selectedDeveloper = "";
+        selectedPublisher = "";
+      });
       const platSel = el("select", {}, PLATFORM_FAMILIES.map((p) => el("option", { value: p }, [p]))) as HTMLSelectElement;
       const targetIn = el("input", { type: "number", step: "0.01", min: "0", value: "25.00" }) as HTMLInputElement;
       const yearIn = el("input", { type: "number", placeholder: "Optional year" }) as HTMLInputElement;
@@ -100,6 +108,9 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
                   class: "btn btn-ghost",
                   onClick: () => {
                     titleIn.value = h.title;
+                    selectedCoverUrl = h.cover_url || null;
+                    selectedDeveloper = "";
+                    selectedPublisher = "";
                     if (h.release_year) yearIn.value = String(h.release_year);
                     if (h.genres.length) genresIn.value = h.genres.join(", ");
                   },
@@ -119,6 +130,9 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
                 class: "btn btn-ghost",
                 onClick: () => {
                   titleIn.value = c.title;
+                  selectedCoverUrl = c.cover_url || null;
+                  selectedDeveloper = c.developer || "";
+                  selectedPublisher = c.publisher || "";
                   if (c.release_year) yearIn.value = String(c.release_year);
                   if (c.genres && c.genres.length) genresIn.value = c.genres.join(", ");
                   if (c.ownership_conflict && c.ownership_conflict.conflict_warning) {
@@ -144,6 +158,9 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
               title: titleIn.value.trim(),
               platform_targets: [{ platform: platSel.value, target_price_usd: Number(targetIn.value || 25) }],
               release_year: yearIn.value.trim() ? Number(yearIn.value.trim()) : null,
+              developer: selectedDeveloper,
+              publisher: selectedPublisher,
+              cover_url: selectedCoverUrl,
               genres,
               allow_smart_upgrade: smartIn.checked,
               force_track_owned: forceIn.checked,
@@ -527,6 +544,16 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
       itemsBox,
     ]),
   ]));
+
+  statusSel.addEventListener("change", () => {
+    void refresh();
+  });
+  smartOnlyIn.addEventListener("change", () => {
+    void refresh();
+  });
+  aboveTargetIn.addEventListener("change", () => {
+    void refresh();
+  });
 
   await refresh();
 }

@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import ast
+import base64
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import asynccontextmanager
+import multiprocessing
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
+from cryptography.hazmat.primitives.asymmetric import ec
 import httpx
 
 from vertex.catalog.service import CatalogService
@@ -658,3 +664,374 @@ class TestPhase4And5DomainBoundaries(unittest.TestCase):
                         if top in forbidden:
                             violations.append(f"{py_file.name}:{top}")
         self.assertEqual(violations, [])
+
+
+def _concurrent_init_worker(data_dir: str) -> list[str]:
+    cfg = _make_settings(data_dir)
+    return DatabaseManager(cfg).ensure_system_ready()
+
+
+class TestConfigAndAdapterHardening(unittest.IsolatedAsyncioTestCase):
+    def test_concurrent_multiprocess_ensure_system_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            ctx = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=4, mp_context=ctx) as pool:
+                results = list(pool.map(_concurrent_init_worker, [td] * 4))
+            # Exactly one process applies initial migrations and none fail with UNIQUE constraint error
+            applied_total = sum(len(r) for r in results)
+            self.assertGreaterEqual(applied_total, 1)
+            self.assertTrue(all(isinstance(r, list) for r in results))
+
+    def test_settings_from_env_forwards_wishlist_seconds_itad_key_and_psn_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = Settings.from_env(
+                {
+                    "VERTEX_DATA_DIR": td,
+                    "VERTEX_SECRET_KEY": "test-secret-key",
+                    "VERTEX_WISHLIST_SYNC_INTERVAL_HOURS": "24",
+                    "VERTEX_WISHLIST_SYNC_INTERVAL_SECONDS": "900",
+                    "VERTEX_ITAD_API_KEY": "itad-key-xyz",
+                    "VERTEX_PSN_PRODUCT_HASH": "live-psn-hash-v2",
+                }
+            )
+            self.assertEqual(cfg.wishlist_sync_interval_seconds, 900.0)
+            self.assertEqual(cfg.itad_api_key, "itad-key-xyz")
+            self.assertEqual(cfg.psn_product_retrieve_hash, "live-psn-hash-v2")
+
+    async def test_xbox_skips_zero_dollar_game_pass_tier_for_paid_availability(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "Products": [
+                        {
+                            "ProductId": "9NBLGGH42CFD",
+                            "Properties": {"XboxConsoleGenOptimized": ["XboxSeriesX"]},
+                            "DisplaySkuAvailabilities": [
+                                {
+                                    "Availabilities": [
+                                        {
+                                            "OrderManagementData": {
+                                                "Price": {
+                                                    "ListPrice": 0.0,
+                                                    "MSRP": 0.0,
+                                                    "CurrencyCode": "USD",
+                                                }
+                                            }
+                                        },
+                                        {
+                                            "OrderManagementData": {
+                                                "Price": {
+                                                    "ListPrice": 47.99,
+                                                    "MSRP": 59.99,
+                                                    "CurrencyCode": "USD",
+                                                }
+                                            }
+                                        },
+                                    ]
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+
+        adapter = XboxCatalogAdapter(market="US")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            quotes = await adapter.fetch_prices(store_sku_ids=["9NBLGGH42CFD"], client=client)
+
+        self.assertEqual(len(quotes), 1)
+        self.assertEqual(quotes[0].current_price_usd, 47.99)
+        self.assertEqual(quotes[0].regular_price_usd, 59.99)
+        self.assertEqual(quotes[0].discount_pct, 20)
+
+    async def test_psn_uses_configured_hash_and_wraps_invalid_json(self) -> None:
+        import json
+
+        seen_hashes: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            ext = json.loads(request.url.params.get("extensions", "{}"))
+            seen_hashes.append(ext["persistedQuery"]["sha256Hash"])
+            if request.url.params.get("variables", "").endswith('"BAD"}'):
+                return httpx.Response(200, text="<html>not json</html>")
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "productRetrieve": {
+                            "platforms": ["PS5"],
+                            "price": {"basePrice": "$49.99", "discountedPrice": "$24.99", "currencyCode": "USD"},
+                        }
+                    }
+                },
+            )
+
+        from vertex.integrations.prices.base import PriceAdapterError
+
+        adapter = PSNStoreGraphQLAdapter(country="US", product_retrieve_hash="custom-hash-123")
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            ok = await adapter.fetch_prices(store_sku_ids=["UP0001-OK"], client=client)
+            self.assertEqual(len(ok), 1)
+            with self.assertRaises(PriceAdapterError) as err_ctx:
+                await adapter.fetch_prices(store_sku_ids=["BAD"], client=client)
+
+        self.assertEqual(seen_hashes[0], "custom-hash-123")
+        self.assertEqual(err_ctx.exception.code, "invalid_response")
+        self.assertTrue(err_ctx.exception.retryable)
+
+
+class TestWishlistSyncEdgeCases(unittest.IsolatedAsyncioTestCase):
+    async def test_process_job_handles_price_adapter_error_cleanly(self) -> None:
+        from vertex.integrations.prices.base import PriceAdapterError
+
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _make_settings(td)
+            db = DatabaseManager(cfg)
+            db.ensure_system_ready()
+            secret_box = SecretBox(cfg.secret_key)
+            jobs = JobQueue(db)
+            identity = IdentityService(db, secret_box, jobs)
+            user, _ = identity.bootstrap_admin(username="alice", password="StrongPass!123")
+            scope = user.to_scope()
+            lib = LibraryService(db)
+            wish = WishlistService(db, lib)
+            catalog = CatalogService(db, outbound_sync_enabled=False)
+
+            sync_svc = WishlistSyncService(
+                settings=cfg,
+                job_queue=jobs,
+                identity_service=identity,
+                catalog_service=catalog,
+                wishlist_service=wish,
+            )
+            job = sync_svc.enqueue_wishlist_sync(scope, force=True)
+            claimed = jobs.acquire_next_lease("test-worker")
+            self.assertIsNotNone(claimed)
+
+            async def _boom(*_args, **_kwargs):
+                raise PriceAdapterError(
+                    code="rate_limited",
+                    message="ITAD rate limited (HTTP 429)",
+                    retryable=True,
+                    throttle_seconds=45,
+                )
+
+            sync_svc.sync_wishlist_for_user = _boom  # type: ignore[method-assign]
+            failed = await sync_svc.process_job(claimed, scope, "test-worker")
+            self.assertIsNotNone(failed)
+            self.assertEqual(failed.last_error_code, "rate_limited")
+            self.assertIn("429", failed.last_error or "")
+
+    async def test_muted_owned_target_skipped_itad_plain_and_storefront_match(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _make_settings(td, wishlist_sync_interval_seconds=1000.0)
+            db = DatabaseManager(cfg)
+            db.ensure_system_ready()
+            secret_box = SecretBox(cfg.secret_key)
+            jobs = JobQueue(db)
+            identity = IdentityService(db, secret_box, jobs)
+            user, _ = identity.bootstrap_admin(username="alice", password="StrongPass!123")
+            scope = user.to_scope()
+            lib = LibraryService(db)
+            wish = WishlistService(db, lib)
+            catalog = CatalogService(db, outbound_sync_enabled=False)
+
+            # Owned game on PC -> PC target becomes muted_owned_conflict=True, is_active=False
+            lib.add_manual_game(
+                scope,
+                title="Already Owned PC Game",
+                platform="PC (Steam)",
+                ownership_status="Owned",
+            )
+            owned_item = wish.add_item(
+                scope,
+                title="Already Owned PC Game",
+                platform_targets=[{"platform": "PC", "target_price_usd": 20.0}],
+            )
+            self.assertTrue(owned_item.targets[0].muted_owned_conflict)
+
+            # Second active game with itad_plain on steam SKU + CheapShark epic/humble SKUs
+            active_item = wish.add_item(
+                scope,
+                title="Control",
+                platform_targets=[{"platform": "PC", "target_price_usd": 30.0}],
+            )
+            ed = wish.upsert_discovered_edition(
+                scope, canonical_game_id=active_item.canonical_game.id, edition_name="Standard Edition"
+            )
+            steam_sku = wish.upsert_discovered_sku(
+                scope,
+                edition_id=ed.id,
+                platform_family="PC",
+                platform_label="PC (Steam)",
+                storefront="steam",
+                store_sku_id="870780",
+                itad_plain="018d937f-ctrl",
+            )
+            epic_sku = wish.upsert_discovered_sku(
+                scope,
+                edition_id=ed.id,
+                platform_family="PC",
+                platform_label="PC (EPIC)",
+                storefront="epic",
+                store_sku_id="202",
+            )
+            humble_sku = wish.upsert_discovered_sku(
+                scope,
+                edition_id=ed.id,
+                platform_family="PC",
+                platform_label="PC (HUMBLE)",
+                storefront="humble",
+                store_sku_id="202",
+            )
+
+            seen_queries: list[str] = []
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                seen_queries.append(str(request.url))
+                host = request.url.host
+                if "isthereanydeal.com" in host:
+                    return httpx.Response(
+                        200,
+                        json=[
+                            {
+                                "id": "018d937f-ctrl",
+                                "historyLow": {"all": {"amount": 7.99}},
+                                "deals": [
+                                    {
+                                        "shop": {"id": 61},
+                                        "price": {"amount": 11.99, "currency": "USD"},
+                                        "regular": {"amount": 39.99},
+                                        "cut": 70,
+                                        "url": "https://store.steampowered.com/app/870780",
+                                    }
+                                ],
+                            }
+                        ],
+                    )
+                if "cheapshark.com" in host and "ids=" in str(request.url):
+                    return httpx.Response(
+                        200,
+                        json={
+                            "202": {
+                                "cheapestPriceEver": {"price": "9.99"},
+                                "deals": [
+                                    # Cheaper Steam deal must NOT overwrite Epic/Humble quotes!
+                                    {"storeID": "1", "price": "5.00", "retailPrice": "39.99", "savings": "87", "dealID": "s1"},
+                                    {"storeID": "25", "price": "19.99", "retailPrice": "39.99", "savings": "50", "dealID": "e1"},
+                                    {"storeID": "11", "price": "14.99", "retailPrice": "39.99", "savings": "62", "dealID": "h1"},
+                                ],
+                            }
+                        },
+                    )
+                if "gog.com" in host:
+                    return httpx.Response(200, json={"products": []})
+                return httpx.Response(200, json={"items": []})
+
+            sync_svc = WishlistSyncService(
+                settings=cfg,
+                job_queue=jobs,
+                identity_service=identity,
+                catalog_service=catalog,
+                wishlist_service=wish,
+                client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            )
+
+            # 1) Muted item MUST NOT hit any PC storefront
+            muted_res = await sync_svc.sync_wishlist_for_user(
+                scope, wishlist_item_id=owned_item.id, force=True
+            )
+            self.assertEqual(muted_res["prices_recorded"], 0)
+            self.assertEqual(seen_queries, [])
+
+            # 2) Active item routes steam(itad_plain)->ITAD and matches epic vs humble accurately
+            act_res = await sync_svc.sync_wishlist_for_user(
+                scope, wishlist_item_id=active_item.id, force=False
+            )
+            self.assertEqual(act_res["prices_recorded"], 3)
+            refreshed = wish.get_item(scope, active_item.id)
+            by_id = {s.id: s for s in refreshed.skus}
+            self.assertEqual(by_id[steam_sku.id].current_price_usd, 11.99)
+            self.assertEqual(by_id[epic_sku.id].current_price_usd, 19.99)
+            self.assertEqual(by_id[humble_sku.id].current_price_usd, 14.99)
+
+            # 3) Scheduled iteration skips if outbound_sync_enabled=False without custom adapters/client
+            cfg_off = _make_settings(td, outbound_sync_enabled=False)
+            sync_off = WishlistSyncService(
+                settings=cfg_off,
+                job_queue=jobs,
+                identity_service=identity,
+                catalog_service=catalog,
+                wishlist_service=wish,
+            )
+            self.assertEqual(sync_off.enqueue_scheduled_sync_iteration(), 0)
+
+
+class TestWebPushVapidSigning(unittest.IsolatedAsyncioTestCase):
+    async def test_default_pywebpush_sender_signs_and_cleans_410(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _make_settings(td, web_push_enabled=True)
+            db = DatabaseManager(cfg)
+            db.ensure_system_ready()
+            secret_box = SecretBox(cfg.secret_key)
+            jobs = JobQueue(db)
+            identity = IdentityService(db, secret_box, jobs)
+            user, _ = identity.bootstrap_admin(username="alice", password="StrongPass!123")
+            scope = user.to_scope()
+            lib = LibraryService(db)
+            wish = WishlistService(db, lib)
+
+            item = wish.add_item(
+                scope,
+                title="Hades",
+                platform_targets=[{"platform": "PC", "target_price_usd": 20.0}],
+            )
+            wish.record_manual_price(scope, item.id, price_usd=9.99, platform="PC", storefront="steam")
+
+            client_priv = ec.generate_private_key(ec.SECP256R1())
+            pub_nums = client_priv.public_key().public_numbers()
+            p256dh = (
+                base64.urlsafe_b64encode(
+                    b"\x04" + pub_nums.x.to_bytes(32, "big") + pub_nums.y.to_bytes(32, "big")
+                )
+                .rstrip(b"=")
+                .decode("ascii")
+            )
+            auth = base64.urlsafe_b64encode(os.urandom(16)).rstrip(b"=").decode("ascii")
+
+            push_svc = WebPushService(
+                settings=cfg,
+                db_manager=db,
+                secret_box=secret_box,
+                wishlist_service=wish,
+            )
+            push_svc.subscribe(
+                scope,
+                endpoint="https://fcm.googleapis.com/fcm/send/real-vapid-sub",
+                p256dh=p256dh,
+                auth=auth,
+            )
+
+            seen_requests: list[dict] = []
+
+            class _FakeResp:
+                status_code = 410
+                reason = "Gone"
+                text = "Gone"
+                headers: dict[str, str] = {}
+
+            def _fake_post(url, data=None, headers=None, timeout=None):
+                seen_requests.append({"url": url, "data": data, "headers": dict(headers or {})})
+                return _FakeResp()
+
+            with patch("requests.post", side_effect=_fake_post):
+                res = await push_svc.dispatch_deal_alerts(scope)
+
+            self.assertEqual(len(seen_requests), 1)
+            req_headers = {k.lower(): v for k, v in seen_requests[0]["headers"].items()}
+            self.assertIn("authorization", req_headers)
+            self.assertIn("vapid ", req_headers["authorization"].lower())
+            self.assertEqual(req_headers.get("content-encoding"), "aes128gcm")
+            self.assertEqual(res["removed"], 1)
+            self.assertEqual(wish.list_push_subscriptions(scope), [])

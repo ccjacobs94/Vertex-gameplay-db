@@ -14,6 +14,7 @@ from vertex.integrations.prices.base import (
     PriceAdapterCapabilities,
     PriceAdapterError,
     check_http_error,
+    parse_json_response,
     utc_now_iso,
 )
 
@@ -64,7 +65,7 @@ class CheapSharkAdapter:
             ) from exc
 
         check_http_error("CheapShark", resp)
-        data = resp.json()
+        data = parse_json_response("CheapShark", resp)
         return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
 
     async def get_game_details(
@@ -90,7 +91,7 @@ class CheapSharkAdapter:
             ) from exc
 
         check_http_error("CheapShark", resp)
-        data = resp.json()
+        data = parse_json_response("CheapShark", resp)
         if isinstance(data, dict):
             nested = data.get(cleaned)
             return nested if isinstance(nested, dict) else data
@@ -125,7 +126,7 @@ class CheapSharkAdapter:
                 ) from exc
 
             check_http_error("CheapShark", resp)
-            data = resp.json()
+            data = parse_json_response("CheapShark", resp)
             if not isinstance(data, dict):
                 continue
 

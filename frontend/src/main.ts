@@ -10,7 +10,9 @@ import { renderSettingsView } from "./features/settings/settingsView.ts";
 import { renderAdminView } from "./features/admin/adminView.ts";
 
 let currentUser: UserAccountResponse | null = null;
-let currentView: string = "library";
+const INITIAL_HASH = window.location.hash.replace(/^#/, "").trim();
+const ALLOWED_VIEWS = new Set(["library", "activity", "insights", "wishlist", "settings", "admin"]);
+let currentView: string = ALLOWED_VIEWS.has(INITIAL_HASH) ? INITIAL_HASH : "library";
 
 async function clearClientCaches(): Promise<void> {
   if ("serviceWorker" in navigator && navigator.serviceWorker.controller) {
@@ -30,7 +32,8 @@ async function renderApp(): Promise<void> {
   if (!currentUser) {
     await renderAuthView(root, async (account: UserAccountResponse) => {
       currentUser = account;
-      currentView = "library";
+      const hashView = window.location.hash.replace(/^#/, "").trim();
+      currentView = ALLOWED_VIEWS.has(hashView) ? hashView : "library";
       await renderApp();
     });
     return;

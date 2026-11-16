@@ -14,6 +14,7 @@ from vertex.integrations.prices.base import (
     PriceAdapterCapabilities,
     PriceAdapterError,
     check_http_error,
+    parse_json_response,
     utc_now_iso,
 )
 
@@ -51,7 +52,7 @@ class ITADAdapter:
         api_key: str = "",
         country: str | None = None,
     ) -> list[NormalizedPriceQuote]:
-        cleaned_ids = [s.strip() for s in store_sku_ids if s and s.strip()]
+        cleaned_ids = list(dict.fromkeys(s.strip() for s in store_sku_ids if s and s.strip()))
         if not cleaned_ids:
             return []
 
@@ -78,7 +79,7 @@ class ITADAdapter:
                 ) from exc
 
             check_http_error("ITAD", resp)
-            data = resp.json()
+            data = parse_json_response("ITAD", resp)
             if not isinstance(data, list):
                 continue
 

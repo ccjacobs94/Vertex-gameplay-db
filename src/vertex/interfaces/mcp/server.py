@@ -16,7 +16,7 @@ from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -258,17 +258,54 @@ class McpSecurityMiddleware:
         path = scope.get("path", "")
         if path == "/mcp/":
             scope = {**scope, "path": "/mcp", "raw_path": b"/mcp"}
+            path = "/mcp"
+
+        # Handle CORS preflight cleanly for allowed origins on /mcp
+        method = str(scope.get("method") or "GET").upper()
+        if method == "OPTIONS" and path == "/mcp":
+            cors_headers = {
+                "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type, Accept, Mcp-Session-Id, Last-Event-ID",
+                "Access-Control-Expose-Headers": "Mcp-Session-Id",
+                "Access-Control-Max-Age": "600",
+                "Vary": "Origin",
+            }
+            if origin_val is not None:
+                cors_headers["Access-Control-Allow-Origin"] = origin_val
+            preflight = Response(status_code=204, headers=cors_headers)
+            await preflight(scope, receive, send)
+            return
 
         async def send_wrapper(message: dict[str, Any]) -> None:
-            if message.get("type") == "http.response.start" and req_user_id:
-                for k, v in message.get("headers") or []:
-                    if k.decode("latin-1").lower() == "mcp-session-id":
-                        sid = v.decode("latin-1").strip()
-                        if sid and sid not in self._session_owners:
-                            self._session_owners[sid] = req_user_id
+            if message.get("type") == "http.response.start":
+                resp_headers = list(message.get("headers") or [])
+                if req_user_id:
+                    for k, v in resp_headers:
+                        if k.decode("latin-1").lower() == "mcp-session-id":
+                            sid = v.decode("latin-1").strip()
+                            if sid and sid not in self._session_owners:
+                                if len(self._session_owners) >= 4096:
+                                    oldest = next(iter(self._session_owners), None)
+                                    if oldest is not None:
+                                        self._session_owners.pop(oldest, None)
+                                self._session_owners[sid] = req_user_id
+                if origin_val is not None:
+                    existing_lower = {k.decode("latin-1").lower() for k, _ in resp_headers}
+                    if "access-control-allow-origin" not in existing_lower:
+                        resp_headers.append((b"access-control-allow-origin", origin_val.encode("latin-1")))
+                    if "access-control-expose-headers" not in existing_lower:
+                        resp_headers.append((b"access-control-expose-headers", b"Mcp-Session-Id"))
+                    if "vary" not in existing_lower:
+                        resp_headers.append((b"vary", b"Origin"))
+                message = {**message, "headers": resp_headers}
             await send(message)
 
-        await self.app(scope, receive, send_wrapper)  # type: ignore[arg-type]
+        try:
+            await self.app(scope, receive, send_wrapper)  # type: ignore[arg-type]
+        finally:
+            if method == "DELETE" and req_session_id and req_user_id:
+                if self._session_owners.get(req_session_id) == req_user_id:
+                    self._session_owners.pop(req_session_id, None)
 
 
 def _resolve_scope(services: AppServices, *, required_scope: str) -> UserScope:
@@ -328,17 +365,20 @@ def build_mcp_server(services: AppServices) -> MCPServer:
 
     @mcp.tool()
     def get_gaming_profile_and_metrics() -> str:
-        """Return overall gaming profile, platform breakdown, completion metrics, and recent sessions."""
+        """Return overall gaming profile, platform breakdown, completion metrics, pending playtime prompts, and recent sessions."""
         scope = _resolve_scope(services, required_scope="read:library")
         summary = services.library.get_summary_stats(scope)
         lib_analytics = services.analytics.get_library_analytics(scope)
         sess_analytics = services.analytics.get_session_analytics(scope, days=30)
+        prompts = services.activity.list_playtime_prompts(scope)
         return _json_dumps_safe(
             {
                 "username": scope.username,
                 "summary": summary,
                 "library_analytics": lib_analytics,
                 "recent_session_analytics_30d": sess_analytics,
+                "playtime_prompts_count": len(prompts),
+                "playtime_prompts": prompts,
             }
         )
 
@@ -359,14 +399,33 @@ def build_mcp_server(services: AppServices) -> MCPServer:
         """Search and filter the authenticated user's game library."""
         scope = _resolve_scope(services, required_scope="read:library")
         cap = max(1, min(100, limit))
+        sort_key = (sort_by or "last_played").strip().lower()
+        sort_map = {
+            "last_played": ("recent", False),
+            "last_played_desc": ("recent", False),
+            "last_played_asc": ("recent", True),
+            "recent": ("recent", False),
+            "playtime": ("playtime", False),
+            "playtime_desc": ("playtime", False),
+            "playtime_asc": ("playtime", True),
+            "rating": ("rating", False),
+            "rating_desc": ("rating", False),
+            "rating_asc": ("rating", True),
+            "title": ("title", False),
+            "title_asc": ("title", False),
+            "title_desc": ("title", True),
+        }
+        lib_sort, reverse_order = sort_map.get(sort_key, ("title", False))
         games = services.library.list_games(
             scope,
             search=query or "",
             platform=platform or "",
             status=completion_status or "",
             favorite_only=favorite_only,
-            sort_by=sort_by,
+            sort_by=lib_sort,
         )
+        if reverse_order:
+            games = list(reversed(games))
         genre_l = (genre or "").strip().lower()
         tag_l = (tag or "").strip().lower()
         own_l = (ownership_status or "").strip().lower()
@@ -403,7 +462,7 @@ def build_mcp_server(services: AppServices) -> MCPServer:
         scope = _resolve_scope(services, required_scope="read:library")
         cap = max(1, min(25, limit))
         all_games = services.library.list_games(
-            scope, platform=platform or "", sort_by="last_played"
+            scope, platform=platform or "", sort_by="recent"
         )
         backlog_statuses = {"Not Played", "Unplayed", "Plan to Play", "Playing", "On Hold"}
         mood_l = (mood or "").strip().lower()
@@ -666,13 +725,17 @@ def build_mcp_server(services: AppServices) -> MCPServer:
         )
         if any(x is not None for x in (completion_status, user_rating, notes)):
             rating_int = int(round(user_rating)) if user_rating is not None else None
-            services.library.update_game(
+            updated_game = services.library.update_game(
                 scope,
                 result.game_id,
                 completion_status=completion_status,
                 user_rating=rating_int,
                 notes=notes,
             )
+            payload = asdict(result)
+            payload["completion_status"] = updated_game.completion_status
+            payload["game"] = updated_game
+            return _json_dumps_safe(payload)
         return _json_dumps_safe(result)
 
     # ------------------------------------------------------------------
@@ -692,7 +755,7 @@ def build_mcp_server(services: AppServices) -> MCPServer:
     @mcp.tool()
     async def add_to_wishlist(
         title: str,
-        platform_targets: list[dict[str, Any]] | None = None,
+        platform_targets: list[dict[str, Any] | str] | None = None,
         release_year: int | None = None,
         developer: str = "",
         publisher: str = "",
@@ -734,7 +797,7 @@ def build_mcp_server(services: AppServices) -> MCPServer:
     def update_wishlist_platforms(
         wishlist_item_id: int | None = None,
         title: str | None = None,
-        platform_targets: list[dict[str, Any]] | None = None,
+        platform_targets: list[dict[str, Any] | str] | None = None,
         remove_platforms: list[str] | None = None,
         allow_smart_upgrade: bool | None = None,
         force_track_owned: bool = False,
@@ -854,20 +917,14 @@ def build_mcp_server(services: AppServices) -> MCPServer:
             .replace("+00:00", "Z")
         )
         cap = max(1, min(200, limit))
-        sessions = services.activity.list_sessions(
+        filtered = services.activity.list_sessions(
             scope,
             game_id=int(game_id) if game_id is not None else None,
-            limit=max(cap, 200),
+            limit=cap,
+            platform=platform,
+            source=source,
+            started_after=since,
         )
-        plat_l = (platform or "").strip().lower()
-        src_l = (source or "").strip().lower()
-        filtered = [
-            s
-            for s in sessions
-            if (not s.started_at or s.started_at >= since)
-            and (not plat_l or s.platform.lower() == plat_l)
-            and (not src_l or s.source.lower() == src_l)
-        ][:cap]
         return _json_dumps_safe({"days": days, "count": len(filtered), "sessions": filtered})
 
     @mcp.tool()
@@ -881,23 +938,14 @@ def build_mcp_server(services: AppServices) -> MCPServer:
         """Query detailed play sessions with optional game, platform, and ISO date range filters."""
         scope = _resolve_scope(services, required_scope="read:library")
         cap = max(1, min(200, limit))
-        sessions = services.activity.list_sessions(
+        filtered = services.activity.list_sessions(
             scope,
             game_id=int(game_id) if game_id is not None else None,
-            limit=max(cap, 200),
+            limit=cap,
+            platform=platform,
+            started_after=start_date,
+            started_before=end_date,
         )
-        plat_l = (platform or "").strip().lower()
-        filtered = []
-        for s in sessions:
-            if plat_l and s.platform.lower() != plat_l:
-                continue
-            if start_date and s.started_at and s.started_at < start_date:
-                continue
-            if end_date and s.started_at and s.started_at > end_date:
-                continue
-            filtered.append(s)
-            if len(filtered) >= cap:
-                break
         return _json_dumps_safe({"count": len(filtered), "sessions": filtered})
 
     @mcp.tool()
@@ -932,15 +980,20 @@ def build_mcp_server(services: AppServices) -> MCPServer:
         csv_content: str | None = None,
         hours: int = 24,
         sync_live: bool = False,
+        platform: str = "Xbox",
     ) -> str:
         """Import play sessions from a Home Assistant CSV export or live HA history connection."""
         scope = _resolve_scope(services, required_scope="write:library")
         if csv_content and csv_content.strip():
-            result = services.homeassistant.import_csv(scope, csv_content=csv_content)
+            result = services.homeassistant.import_csv(
+                scope, csv_content=csv_content, platform=platform
+            )
             return _json_dumps_safe(result)
         if sync_live:
             days_back = max(1, min(30, (max(1, hours) + 23) // 24))
-            result = await services.homeassistant.sync_history(scope, days_back=days_back)
+            result = await services.homeassistant.sync_history(
+                scope, platform=platform, days_back=days_back
+            )
             return _json_dumps_safe(result)
         raise ValueError("Provide either csv_content or sync_live=True")
 
@@ -995,6 +1048,7 @@ def create_mcp_app(
 
     @asynccontextmanager
     async def lifespan(_app: Starlette):
+        app_services.db_manager.ensure_system_ready()
         async with mcp_server.session_manager.run():
             yield
 
@@ -1009,9 +1063,12 @@ def create_mcp_app(
             status_code=410,
         )
 
+    retired_methods = ["GET", "POST", "DELETE", "PUT", "PATCH"]
     app = Starlette(lifespan=lifespan)
     app.add_route("/healthz", healthz, methods=["GET"])
-    app.add_route("/sse", legacy_sse_retired, methods=["GET", "POST"])
-    app.add_route("/messages", legacy_sse_retired, methods=["GET", "POST"])
+    app.add_route("/sse", legacy_sse_retired, methods=retired_methods)
+    app.add_route("/sse/{path:path}", legacy_sse_retired, methods=retired_methods)
+    app.add_route("/messages", legacy_sse_retired, methods=retired_methods)
+    app.add_route("/messages/{path:path}", legacy_sse_retired, methods=retired_methods)
     app.router.routes.append(Mount("/", app=secured_mcp_app))
     return app

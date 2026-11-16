@@ -14,6 +14,7 @@ from vertex.integrations.prices.base import (
     PriceAdapterCapabilities,
     PriceAdapterError,
     check_http_error,
+    parse_json_response,
     utc_now_iso,
 )
 from vertex.integrations.prices.matching import extract_edition_name
@@ -61,7 +62,7 @@ class SteamStoreAdapter:
             ) from exc
 
         check_http_error("Steam Store", resp)
-        data = resp.json()
+        data = parse_json_response("Steam Store", resp)
         items = data.get("items") if isinstance(data, dict) else []
         return [it for it in (items or []) if isinstance(it, dict)]
 
@@ -90,7 +91,7 @@ class SteamStoreAdapter:
             ) from exc
 
         check_http_error("Steam Store", resp)
-        payload = resp.json()
+        payload = parse_json_response("Steam Store", resp)
         if not isinstance(payload, dict):
             return None
         entry = payload.get(aid) or {}

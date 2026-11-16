@@ -12,7 +12,7 @@ import httpx
 from vertex.config import Settings
 from vertex.identity.models import UserScope
 from vertex.interfaces.mcp.server import MCP_RESOURCE_URIS, MCP_TOOL_NAMES, create_mcp_app
-from vertex.main import AppServices, create_app
+from vertex.main import AppServices, build_app_services, create_app
 
 
 def _make_settings(tmp_dir: str, **overrides) -> Settings:
@@ -847,5 +847,212 @@ class TestMcpAllToolsResourcesSecurityAndIsolation(unittest.IsolatedAsyncioTestC
                     sse = await client.get("/sse")
                     self.assertEqual(sse.status_code, 410)
 
+                    sse_sub = await client.get("/sse/legacy")
+                    self.assertEqual(sse_sub.status_code, 410)
+
+                    msg_sub = await client.post("/messages/123")
+                    self.assertEqual(msg_sub.status_code, 410)
+
                     unauth_mcp = await client.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
                     self.assertEqual(unauth_mcp.status_code, 401)
+
+    async def test_mcp_cors_preflight_sorting_session_filtering_and_standalone_auth(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _make_settings(
+                td,
+                mcp_port=8096,
+                mcp_allowed_origins=("https://custom-ai.example",),
+            )
+            services = build_app_services(cfg)
+            services.db_manager.ensure_system_ready()
+            admin, _ = services.identity.bootstrap_admin(username="alice", password="StrongPass!123")
+            scope = admin.to_scope()
+            pat = services.identity.create_pat(
+                scope, name="mcp-rw", scopes=["read:library", "write:library"]
+            )
+
+            # Create two games where alphabetical title ("Aaa Older") != most recent last_played ("Zzz Newer")
+            g_old = services.library.add_manual_game(
+                scope,
+                title="Aaa Older Game",
+                platform="PC (Steam)",
+                ownership_status="Owned",
+                completion_status="Plan to Play",
+            )
+            g_new = services.library.add_manual_game(
+                scope,
+                title="Zzz Newer Game",
+                platform="PC (Steam)",
+                ownership_status="Owned",
+                completion_status="Playing",
+            )
+            # Seed sessions & last_played so alphabetical ("Aaa Older Game") != most recent ("Zzz Newer Game")
+            from datetime import UTC, datetime, timedelta
+
+            now_utc = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+            target_dt = now_utc - timedelta(days=5)
+            target_date = target_dt.strftime("%Y-%m-%d")
+            target_start = f"{target_date}T12:00:00+00:00"
+            target_end = f"{target_date}T13:00:00+00:00"
+            newer_start_base = now_utc - timedelta(days=3)
+
+            with services.db_manager.library_connection(scope, immediate=True) as conn:
+                conn.execute(
+                    "UPDATE games SET last_played = ? WHERE id = ?",
+                    (target_end, g_old.id),
+                )
+                conn.execute(
+                    "UPDATE games SET last_played = ? WHERE id = ?",
+                    (now_utc.isoformat().replace("+00:00", "Z"), g_new.id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO play_sessions (
+                        game_id, platform, started_at, ended_at, duration_minutes,
+                        source, precision_level, notes, is_locked, created_at, updated_at
+                    ) VALUES (?, 'PC (Steam)', ?, ?, 60, 'manual', 'exact', 'target session beyond 200', 0, ?, ?)
+                    """,
+                    (g_old.id, target_start, target_end, target_end, target_end),
+                )
+                target_sess_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+                for idx in range(210):
+                    s_dt = newer_start_base + timedelta(minutes=idx * 20)
+                    e_dt = s_dt + timedelta(minutes=15)
+                    s_iso = s_dt.isoformat().replace("+00:00", "Z")
+                    e_iso = e_dt.isoformat().replace("+00:00", "Z")
+                    conn.execute(
+                        """
+                        INSERT INTO play_sessions (
+                            game_id, platform, started_at, ended_at, duration_minutes,
+                            source, precision_level, notes, is_locked, created_at, updated_at
+                        ) VALUES (?, 'PC (Steam)', ?, ?, 15, 'manual', 'exact', '', 0, ?, ?)
+                        """,
+                        (g_new.id, s_iso, e_iso, e_iso, e_iso),
+                    )
+
+                conn.execute(
+                    """
+                    INSERT INTO playtime_prompts (
+                        game_id, previous_hours, new_hours, delta_hours, current_status, detected_at, status
+                    ) VALUES (?, 5.0, 12.0, 7.0, 'Plan to Play', ?, 'pending')
+                    """,
+                    (g_old.id, now_utc.isoformat().replace("+00:00", "Z")),
+                )
+                prompt_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+            mcp_app = create_mcp_app(cfg, services=services)
+            async with mcp_app.router.lifespan_context(mcp_app):
+                transport = httpx.ASGITransport(app=mcp_app)
+                async with httpx.AsyncClient(
+                    transport=transport, base_url="http://127.0.0.1:8096"
+                ) as client:
+                    # 1. CORS OPTIONS preflight (allowed -> 204 + CORS headers; untrusted -> 403)
+                    opt_ok = await client.options(
+                        "/mcp",
+                        headers={
+                            "Origin": "https://custom-ai.example",
+                            "Access-Control-Request-Method": "POST",
+                        },
+                    )
+                    self.assertEqual(opt_ok.status_code, 204)
+                    self.assertEqual(
+                        opt_ok.headers.get("access-control-allow-origin"),
+                        "https://custom-ai.example",
+                    )
+                    self.assertIn("Mcp-Session-Id", opt_ok.headers.get("access-control-expose-headers", ""))
+
+                    opt_bad = await client.options(
+                        "/mcp",
+                        headers={"Origin": "https://untrusted.attacker.example"},
+                    )
+                    self.assertEqual(opt_bad.status_code, 403)
+
+                    # 2. Initialize standalone MCP session with Origin header
+                    sid = await _mcp_init_session(
+                        client,
+                        pat.token,
+                        extra_headers={"Origin": "https://claude.ai"},
+                    )
+
+                    async def call_tool(req_id: int, name: str, args: dict) -> dict:
+                        resp = await _mcp_post(
+                            client,
+                            pat.token,
+                            {
+                                "jsonrpc": "2.0",
+                                "id": req_id,
+                                "method": "tools/call",
+                                "params": {"name": name, "arguments": args},
+                            },
+                            session_id=sid,
+                            headers={"Origin": "https://claude.ai"},
+                        )
+                        self.assertEqual(resp.status_code, 200, f"{name}: {resp.text}")
+                        self.assertEqual(resp.headers.get("access-control-allow-origin"), "https://claude.ai")
+                        res = _parse_mcp_json(resp)["result"]
+                        self.assertFalse(res.get("isError"), f"{name} returned error: {res}")
+                        return json.loads(res["content"][0]["text"])
+
+                    # 3. Default sort_by='last_played' orders Zzz Newer Game first!
+                    lib_sorted = await call_tool(100, "search_game_library", {})
+                    self.assertEqual(lib_sorted["games"][0]["title"], "Zzz Newer Game")
+
+                    # 4. get_gaming_profile_and_metrics surfaces playtime_prompts
+                    prof = await call_tool(101, "get_gaming_profile_and_metrics", {})
+                    self.assertGreaterEqual(prof["playtime_prompts_count"], 1)
+                    self.assertTrue(any(p["id"] == prompt_id for p in prof["playtime_prompts"]))
+
+                    # 5. get_session_history finds g_old session beyond 200 newer rows + timezone normalization
+                    hist = await call_tool(
+                        102,
+                        "get_session_history",
+                        {"game_id": g_old.id, "days": 30, "platform": "PC"},
+                    )
+                    self.assertEqual(hist["count"], 1)
+                    self.assertEqual(hist["sessions"][0]["id"], target_sess_id)
+
+                    # 6. get_play_sessions inclusive end_date
+                    ranged = await call_tool(
+                        103,
+                        "get_play_sessions",
+                        {"start_date": target_date, "end_date": target_date, "limit": 50},
+                    )
+                    self.assertEqual(ranged["count"], 1)
+                    self.assertEqual(ranged["sessions"][0]["id"], target_sess_id)
+
+                    # 7. add_to_wishlist accepts string shorthand & respond_to_playtime_prompt reflects override
+                    w_str = await call_tool(
+                        104,
+                        "add_to_wishlist",
+                        {"title": "Signalis", "platform_targets": ["PC", "Xbox"]},
+                    )
+                    self.assertEqual(len(w_str["wishlist_item"]["targets"]), 2)
+
+                    pr_over = await call_tool(
+                        105,
+                        "respond_to_playtime_prompt",
+                        {
+                            "prompt_id": prompt_id,
+                            "action": "accept",
+                            "completion_status": "Completed",
+                        },
+                    )
+                    self.assertEqual(pr_over["completion_status"], "Completed")
+
+                    # 8. import_homeassistant_sessions respects platform parameter
+                    ha_ps = await call_tool(
+                        106,
+                        "import_homeassistant_sessions",
+                        {
+                            "csv_content": (
+                                "entity_id,state,last_changed\n"
+                                "sensor.ps5,Astro Bot,2026-11-16T05:00:00Z\n"
+                                "sensor.ps5,idle,2026-11-16T05:30:00Z\n"
+                            ),
+                            "platform": "PS5",
+                        },
+                    )
+                    self.assertEqual(ha_ps["imported_count"], 1)
+                    ps5_games = await call_tool(107, "search_game_library", {"query": "Astro Bot"})
+                    self.assertEqual(ps5_games["games"][0]["platform"], "PS5")

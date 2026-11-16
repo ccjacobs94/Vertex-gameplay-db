@@ -15,6 +15,7 @@ from vertex.integrations.prices.base import (
     PriceAdapterCapabilities,
     PriceAdapterError,
     check_http_error,
+    parse_json_response,
     utc_now_iso,
 )
 
@@ -89,7 +90,7 @@ class GOGDirectAdapter:
             ) from exc
 
         check_http_error("GOG", resp)
-        data = resp.json()
+        data = parse_json_response("GOG", resp)
         products = data.get("products") if isinstance(data, dict) else []
         return [p for p in (products or []) if isinstance(p, dict)]
 
@@ -131,7 +132,7 @@ class GOGDirectAdapter:
                 ) from exc
 
             check_http_error("GOG", resp)
-            data = resp.json()
+            data = parse_json_response("GOG", resp)
             items = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
             now_iso = utc_now_iso()
 

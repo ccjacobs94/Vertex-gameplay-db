@@ -54,6 +54,7 @@ class Settings:
     wishlist_sync_enabled: bool = True
     wishlist_sync_interval_seconds: float = 24 * 3600.0
     itad_api_key: str = ""
+    psn_product_retrieve_hash: str = "mock_hash"
     web_push_enabled: bool = False
     vapid_public_key: str = ""
     vapid_private_key: str = ""
@@ -114,12 +115,16 @@ class Settings:
 
         sync_hours_raw = env.get("VERTEX_SYNC_INTERVAL_HOURS") or env.get("SYNC_INTERVAL_HOURS") or "6"
         sync_interval_secs = max(60.0, float(sync_hours_raw) * 3600.0)
-        wishlist_hours_raw = (
-            env.get("VERTEX_WISHLIST_SYNC_INTERVAL_HOURS")
-            or env.get("WISHLIST_SYNC_INTERVAL_HOURS")
-            or "24"
-        )
-        wishlist_interval_secs = max(60.0, float(wishlist_hours_raw) * 3600.0)
+        wishlist_secs_raw = env.get("VERTEX_WISHLIST_SYNC_INTERVAL_SECONDS")
+        if wishlist_secs_raw is not None and wishlist_secs_raw.strip():
+            wishlist_interval_secs = max(60.0, float(wishlist_secs_raw))
+        else:
+            wishlist_hours_raw = (
+                env.get("VERTEX_WISHLIST_SYNC_INTERVAL_HOURS")
+                or env.get("WISHLIST_SYNC_INTERVAL_HOURS")
+                or "24"
+            )
+            wishlist_interval_secs = max(60.0, float(wishlist_hours_raw) * 3600.0)
         telem_poll_secs = max(10.0, float(env.get("VERTEX_TELEMETRY_POLL_INTERVAL") or "900.0"))
         telem_flush_secs = max(0.0, float(env.get("VERTEX_TELEMETRY_FLUSH_DELAY") or "45.0"))
         daily_sweep_secs = max(60.0, float(env.get("VERTEX_DAILY_SWEEP_INTERVAL") or str(24 * 3600.0)))
@@ -155,7 +160,8 @@ class Settings:
             scheduled_sync_interval_seconds=sync_interval_secs,
             wishlist_sync_enabled=_parse_bool(env.get("VERTEX_WISHLIST_SYNC_ENABLED"), True),
             wishlist_sync_interval_seconds=wishlist_interval_secs,
-            itad_api_key=(env.get("ITAD_API_KEY") or "").strip(),
+            itad_api_key=(env.get("VERTEX_ITAD_API_KEY") or env.get("ITAD_API_KEY") or "").strip(),
+            psn_product_retrieve_hash=(env.get("VERTEX_PSN_PRODUCT_HASH") or "mock_hash").strip() or "mock_hash",
             web_push_enabled=_parse_bool(env.get("VERTEX_WEB_PUSH_ENABLED"), False),
             vapid_public_key=(env.get("VERTEX_VAPID_PUBLIC_KEY") or env.get("VAPID_PUBLIC_KEY") or "").strip(),
             vapid_private_key=(env.get("VERTEX_VAPID_PRIVATE_KEY") or env.get("VAPID_PRIVATE_KEY") or "").strip(),

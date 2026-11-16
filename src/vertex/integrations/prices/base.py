@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Any, Protocol
 
 import httpx
 
@@ -49,6 +49,18 @@ def check_http_error(storefront: str, resp: httpx.Response) -> None:
             message=f"{storefront} returned HTTP {resp.status_code}",
             retryable=False,
         )
+
+
+def parse_json_response(storefront: str, resp: httpx.Response) -> Any:
+    """Decode JSON safely, wrapping malformed responses in a retryable PriceAdapterError."""
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise PriceAdapterError(
+            code="invalid_response",
+            message=f"{storefront} returned invalid JSON",
+            retryable=True,
+        ) from exc
 
 
 @dataclass(frozen=True, slots=True)

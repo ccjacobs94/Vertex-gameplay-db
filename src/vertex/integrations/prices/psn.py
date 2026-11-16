@@ -15,6 +15,7 @@ from vertex.integrations.prices.base import (
     PriceAdapterCapabilities,
     PriceAdapterError,
     check_http_error,
+    parse_json_response,
     utc_now_iso,
 )
 
@@ -37,8 +38,9 @@ def _detect_currency(price_info: dict[str, Any], raw_str: str, default_region: s
 class PSNStoreGraphQLAdapter:
     """PlayStation Store public GraphQL operation client."""
 
-    def __init__(self, *, country: str = "US") -> None:
+    def __init__(self, *, country: str = "US", product_retrieve_hash: str = "mock_hash") -> None:
         self.country = (country or "US").strip().upper() or "US"
+        self.product_retrieve_hash = (product_retrieve_hash or "mock_hash").strip() or "mock_hash"
 
     def capabilities(self) -> PriceAdapterCapabilities:
         return PriceAdapterCapabilities(
@@ -83,7 +85,7 @@ class PSNStoreGraphQLAdapter:
             ) from exc
 
         check_http_error("PlayStation Store", resp)
-        data = resp.json()
+        data = parse_json_response("PlayStation Store", resp)
         suggestions = (
             ((data.get("data") or {}).get("getSharedSearchSuggestions") or {}).get("suggestions") or []
             if isinstance(data, dict)
@@ -117,7 +119,7 @@ class PSNStoreGraphQLAdapter:
                     "operationName": "productRetrieve",
                     "variables": json.dumps({"id": pid}),
                     "extensions": json.dumps(
-                        {"persistedQuery": {"version": 1, "sha256Hash": "mock_hash"}}
+                        {"persistedQuery": {"version": 1, "sha256Hash": self.product_retrieve_hash}}
                     ),
                 },
                 headers={
@@ -133,7 +135,7 @@ class PSNStoreGraphQLAdapter:
             ) from exc
 
         check_http_error("PlayStation Store", resp)
-        data = resp.json()
+        data = parse_json_response("PlayStation Store", resp)
         prod = (data.get("data") or {}).get("productRetrieve") if isinstance(data, dict) else None
         if not isinstance(prod, dict):
             return None

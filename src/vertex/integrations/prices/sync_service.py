@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from vertex.catalog.models import normalize_title
 from vertex.catalog.service import CatalogService
 from vertex.config import Settings
 from vertex.identity.models import UserScope
@@ -60,6 +61,16 @@ def _is_stale(last_checked_at: str | None, max_age_seconds: int, now: datetime) 
     return (now - parsed).total_seconds() >= max_age_seconds
 
 
+def _active_target_families(item_detail: WishlistItemDetail) -> set[str]:
+    if not item_detail.targets:
+        return {"PC"}
+    return {
+        normalize_platform_family(t.platform_family)
+        for t in item_detail.targets
+        if t.is_active and not t.muted_owned_conflict
+    }
+
+
 class WishlistSyncService:
     """Coordinates SKU discovery, 6-storefront price refreshes, and deal alerts."""
 
@@ -90,7 +101,9 @@ class WishlistSyncService:
         self.steam_adapter = steam_adapter or SteamStoreAdapter()
         self.gog_adapter = gog_adapter or GOGDirectAdapter()
         self.xbox_adapter = xbox_adapter or XboxCatalogAdapter()
-        self.psn_adapter = psn_adapter or PSNStoreGraphQLAdapter()
+        self.psn_adapter = psn_adapter or PSNStoreGraphQLAdapter(
+            product_retrieve_hash=settings.psn_product_retrieve_hash
+        )
         self.web_push_service = web_push_service
         self._custom_client_factory = client_factory is not None
         self._custom_adapters = any(
@@ -194,9 +207,10 @@ class WishlistSyncService:
                         aid = str(hit.get("id") or "").strip()
                         if not title or not aid:
                             continue
-                        norm = title.lower()
-                        if any(c["title"].lower() == norm for c in candidates):
+                        norm = normalize_title(title) or title.lower()
+                        if norm in seen_keys or any(c["title"].lower() == title.lower() for c in candidates):
                             continue
+                        seen_keys.add(norm)
                         price_obj = hit.get("price") if isinstance(hit.get("price"), dict) else {}
                         final_cents = price_obj.get("final")
                         price_usd = round(float(final_cents) / 100.0, 2) if final_cents is not None else None
@@ -233,8 +247,10 @@ class WishlistSyncService:
                             gid = str(hit.get("gameID") or "").strip()
                             if not title or not gid:
                                 continue
-                            if any(c["title"].lower() == title.lower() for c in candidates):
+                            norm = normalize_title(title) or title.lower()
+                            if norm in seen_keys or any(c["title"].lower() == title.lower() for c in candidates):
                                 continue
+                            seen_keys.add(norm)
                             cheapest_raw = hit.get("cheapest")
                             price_usd = round(float(cheapest_raw), 2) if cheapest_raw is not None else None
                             cover = hit.get("thumb")
@@ -274,6 +290,7 @@ class WishlistSyncService:
         force: bool = False,
         max_age_seconds: int = 3600,
     ) -> JobRecord:
+        scope.require_active()
         payload: dict[str, Any] = {
             "force": bool(force),
             "max_age_seconds": max(0, int(max_age_seconds)),
@@ -290,8 +307,9 @@ class WishlistSyncService:
         )
 
     def enqueue_scheduled_sync_iteration(self) -> int:
-        if not self.settings.wishlist_sync_enabled:
+        if not self.settings.wishlist_sync_enabled or not self._can_call_external():
             return 0
+        grace_age = max(60, int(float(self.settings.wishlist_sync_interval_seconds) * 0.85))
         count = 0
         for scope in self.identity_service.list_active_user_scopes():
             if not self.wishlist_service.has_active_wishlist_items(scope):
@@ -299,7 +317,7 @@ class WishlistSyncService:
             self.enqueue_wishlist_sync(
                 scope,
                 force=False,
-                max_age_seconds=max(60, int(self.settings.wishlist_sync_interval_seconds)),
+                max_age_seconds=grace_age,
             )
             count += 1
         return count
@@ -320,8 +338,9 @@ class WishlistSyncService:
                 job.id,
                 worker_id,
                 error_code=exc.code,
-                error_message=exc.message,
+                error_message=exc.safe_message,
                 retryable=exc.retryable,
+                throttle_seconds=exc.throttle_seconds,
             )
         except Exception as exc:
             return self.job_queue.fail_job(
@@ -339,14 +358,17 @@ class WishlistSyncService:
         item_detail: WishlistItemDetail,
         client: httpx.AsyncClient,
         existing_storefronts: set[str],
+        allowed_families: set[str] | None = None,
     ) -> list[str]:
         """Discover missing storefront SKUs and cover art for an active wishlist item."""
         errors: list[str] = []
         canonical = item_detail.canonical_game
         title = canonical.title
-        target_families = {normalize_platform_family(t.platform_family) for t in item_detail.targets}
+        target_families = _active_target_families(item_detail)
+        if allowed_families is not None:
+            target_families &= allowed_families
         if not target_families:
-            target_families = {"PC"}
+            return errors
 
         if not canonical.cover_url:
             local_cover = self.wishlist_service.find_local_library_cover(scope, title)
@@ -360,6 +382,23 @@ class WishlistSyncService:
             edition_tier="base",
             is_base_edition=True,
         )
+        edition_cache: dict[str, Any] = {"Standard Edition": base_edition}
+
+        def _get_or_create_edition(ed_name: str):
+            cached = edition_cache.get(ed_name)
+            if cached is not None:
+                return cached
+            ed_tier, tier_rank = infer_edition_tier(ed_name)
+            created = self.wishlist_service.upsert_discovered_edition(
+                scope,
+                canonical_game_id=canonical.id,
+                edition_name=ed_name,
+                edition_tier=ed_tier,
+                tier_rank=tier_rank,
+                is_base_edition=False,
+            )
+            edition_cache[ed_name] = created
+            return created
 
         # PC discovery: Steam, GOG Direct, CheapShark
         if "PC" in target_families:
@@ -433,20 +472,33 @@ class WishlistSyncService:
             if "gog" not in existing_storefronts:
                 try:
                     gog_results = await self.gog_adapter.search_catalog(title, client=client)
-                    matched = next(
-                        (
-                            p
-                            for p in gog_results
-                            if matches_canonical_title(title, str(p.get("title") or ""))
-                        ),
-                        None,
-                    )
-                    if matched and matched.get("id") is not None:
-                        pid = str(matched["id"]).strip()
-                        slug = str(matched.get("slug") or "").strip()
+                    seen_gog_ids: set[str] = set()
+                    for p in gog_results:
+                        ptype = str(p.get("productType") or "").strip().lower()
+                        if ptype in ("pack", "dlc"):
+                            continue
+                        prod_title = str(p.get("title") or "").strip()
+                        if not matches_canonical_title(title, prod_title):
+                            continue
+                        pid = str(p.get("id") or "").strip()
+                        if not pid or pid in seen_gog_ids:
+                            continue
+                        seen_gog_ids.add(pid)
+                        slug = str(p.get("slug") or "").strip()
+                        cover_cand = (
+                            p.get("coverVertical")
+                            or p.get("coverHorizontal")
+                            or p.get("image")
+                        )
+                        if isinstance(cover_cand, str) and cover_cand.strip():
+                            self.wishlist_service.update_canonical_cover_if_missing(
+                                scope, canonical.id, cover_cand.strip()
+                            )
+                        ed_name = extract_edition_name(prod_title, canonical_title=title)
+                        target_ed = _get_or_create_edition(ed_name)
                         self.wishlist_service.upsert_discovered_sku(
                             scope,
-                            edition_id=base_edition.id,
+                            edition_id=target_ed.id,
                             platform_family="PC",
                             platform_label="PC (GOG)",
                             storefront="gog",
@@ -459,33 +511,80 @@ class WishlistSyncService:
                             is_authorized_seller=True,
                             is_drm_free=True,
                         )
+                        if len(seen_gog_ids) >= 5:
+                            break
                 except Exception as exc:
                     errors.append(sanitize_error_message(f"GOG discovery error for '{title}': {exc}"))
 
             if "cheapshark" not in existing_storefronts:
                 try:
                     cs_results = await self.cheapshark_adapter.search_games(title, client=client)
-                    matched = next(
-                        (
-                            g
-                            for g in cs_results
-                            if matches_canonical_title(title, str(g.get("external") or ""))
-                        ),
-                        None,
-                    )
-                    if matched and matched.get("gameID") is not None:
-                        gid = str(matched["gameID"]).strip()
+                    seen_cs_ids: set[str] = set()
+                    for g in cs_results:
+                        cs_title = str(g.get("external") or "").strip()
+                        if not matches_canonical_title(title, cs_title):
+                            continue
+                        gid = str(g.get("gameID") or "").strip()
+                        if not gid or gid in seen_cs_ids:
+                            continue
+                        seen_cs_ids.add(gid)
+                        ed_name = extract_edition_name(cs_title, canonical_title=title)
+                        target_ed = _get_or_create_edition(ed_name)
+                        details: dict[str, Any] | None = None
+                        try:
+                            details = await self.cheapshark_adapter.get_game_details(gid, client=client)
+                        except Exception:
+                            details = None
+                        atl: float | None = None
+                        if isinstance(details, dict):
+                            cheapest_raw = (details.get("cheapestPriceEver") or {}).get("price")
+                            if cheapest_raw is not None:
+                                try:
+                                    atl = round(float(cheapest_raw), 2)
+                                except (TypeError, ValueError):
+                                    atl = None
                         self.wishlist_service.upsert_discovered_sku(
                             scope,
-                            edition_id=base_edition.id,
+                            edition_id=target_ed.id,
                             platform_family="PC",
                             platform_label="PC (CheapShark)",
                             storefront="cheapshark",
                             store_sku_id=gid,
+                            historical_low_usd=atl,
                             store_url="",
                             is_authorized_seller=True,
                             is_drm_free=False,
                         )
+                        if isinstance(details, dict):
+                            for deal in details.get("deals") or []:
+                                if not isinstance(deal, dict):
+                                    continue
+                                sid = str(deal.get("storeID") or "")
+                                sf_name = self.cheapshark_adapter.STORE_MAP.get(sid)
+                                if sf_name not in ("epic", "humble", "gmg", "fanatical"):
+                                    continue
+                                deal_id = str(deal.get("dealID") or "").strip()
+                                plat_label = (
+                                    f"PC ({sf_name.upper() if sf_name != 'gmg' else 'Green Man Gaming'})"
+                                )
+                                self.wishlist_service.upsert_discovered_sku(
+                                    scope,
+                                    edition_id=target_ed.id,
+                                    platform_family="PC",
+                                    platform_label=plat_label,
+                                    storefront=sf_name,
+                                    store_sku_id=gid,
+                                    historical_low_usd=atl,
+                                    store_url=(
+                                        f"https://www.cheapshark.com/redirect?dealID={deal_id}"
+                                        if deal_id
+                                        else ""
+                                    ),
+                                    is_authorized_seller=True,
+                                    is_drm_free=False,
+                                )
+                        if len(seen_cs_ids) >= 3:
+                            break
                 except Exception as exc:
                     errors.append(sanitize_error_message(f"CheapShark discovery error for '{title}': {exc}"))
 
@@ -493,19 +592,20 @@ class WishlistSyncService:
         if "Xbox" in target_families and "xbox_store" not in existing_storefronts:
             try:
                 xb_results = await self.xbox_adapter.search_autosuggest(title, client=client)
-                matched = next(
-                    (
-                        p
-                        for p in xb_results
-                        if matches_canonical_title(title, str(p.get("Title") or ""))
-                    ),
-                    None,
-                )
-                if matched and matched.get("Id"):
-                    pid = str(matched["Id"]).strip()
+                seen_xb_ids: set[str] = set()
+                for p in xb_results:
+                    xb_title = str(p.get("Title") or "").strip()
+                    if not matches_canonical_title(title, xb_title):
+                        continue
+                    pid = str(p.get("Id") or "").strip()
+                    if not pid or pid in seen_xb_ids:
+                        continue
+                    seen_xb_ids.add(pid)
+                    ed_name = extract_edition_name(xb_title, canonical_title=title)
+                    target_ed = _get_or_create_edition(ed_name)
                     self.wishlist_service.upsert_discovered_sku(
                         scope,
-                        edition_id=base_edition.id,
+                        edition_id=target_ed.id,
                         platform_family="Xbox",
                         platform_label="Xbox Series X|S",
                         storefront="xbox_store",
@@ -514,6 +614,8 @@ class WishlistSyncService:
                         is_authorized_seller=True,
                         is_drm_free=False,
                     )
+                    if len(seen_xb_ids) >= 3:
+                        break
             except Exception as exc:
                 errors.append(sanitize_error_message(f"Xbox discovery error for '{title}': {exc}"))
 
@@ -521,19 +623,20 @@ class WishlistSyncService:
         if "PlayStation" in target_families and "psn_store" not in existing_storefronts:
             try:
                 psn_results = await self.psn_adapter.search_products(title, client=client)
-                matched = next(
-                    (
-                        p
-                        for p in psn_results
-                        if matches_canonical_title(title, str(p.get("title") or ""))
-                    ),
-                    None,
-                )
-                if matched and matched.get("id"):
-                    pid = str(matched["id"]).strip()
+                seen_psn_ids: set[str] = set()
+                for p in psn_results:
+                    psn_title = str(p.get("title") or "").strip()
+                    if not matches_canonical_title(title, psn_title):
+                        continue
+                    pid = str(p.get("id") or "").strip()
+                    if not pid or pid in seen_psn_ids:
+                        continue
+                    seen_psn_ids.add(pid)
+                    ed_name = extract_edition_name(psn_title, canonical_title=title)
+                    target_ed = _get_or_create_edition(ed_name)
                     self.wishlist_service.upsert_discovered_sku(
                         scope,
-                        edition_id=base_edition.id,
+                        edition_id=target_ed.id,
                         platform_family="PlayStation",
                         platform_label="PS5",
                         storefront="psn_store",
@@ -542,6 +645,8 @@ class WishlistSyncService:
                         is_authorized_seller=True,
                         is_drm_free=False,
                     )
+                    if len(seen_psn_ids) >= 3:
+                        break
             except Exception as exc:
                 errors.append(sanitize_error_message(f"PSN discovery error for '{title}': {exc}"))
 
@@ -588,39 +693,68 @@ class WishlistSyncService:
         now = datetime.now(UTC)
 
         async with self.client_factory() as client:
-            # Phase 1: Discover missing SKUs per item
+            # Phase 1: Discover missing SKUs per active, unmuted target family
             for item_detail in items:
                 have = {sku.storefront for sku in item_detail.skus}
-                target_families = {
-                    normalize_platform_family(t.platform_family) for t in item_detail.targets
-                }
-                needs_discovery = (
-                    ("PC" in target_families and not ({"steam", "gog", "cheapshark"} <= have))
-                    or ("Xbox" in target_families and "xbox_store" not in have)
-                    or ("PlayStation" in target_families and "psn_store" not in have)
-                )
-                if needs_discovery or force:
+                active_families = _active_target_families(item_detail)
+                discover_families: set[str] = set()
+                for fam in active_families:
+                    fam_skus = [
+                        s
+                        for s in item_detail.skus
+                        if normalize_platform_family(s.platform_family) == fam
+                    ]
+                    fam_needs_check = (
+                        force
+                        or not fam_skus
+                        or not any(
+                            not _is_stale(s.last_checked_at, max_age_seconds, now)
+                            for s in fam_skus
+                        )
+                    )
+                    if not fam_needs_check:
+                        continue
+                    if (
+                        (fam == "PC" and not ({"steam", "gog", "cheapshark"} <= have))
+                        or (fam == "Xbox" and "xbox_store" not in have)
+                        or (fam == "PlayStation" and "psn_store" not in have)
+                    ):
+                        discover_families.add(fam)
+                if discover_families:
                     disc_errors = await self.discover_skus_for_item(
                         scope,
                         item_detail=item_detail,
                         client=client,
                         existing_storefronts=have,
+                        allowed_families=discover_families,
                     )
                     errors.extend(disc_errors)
 
-            # Re-fetch active items after discovery so edition_id -> canonical_game_id mapping is complete
+            # Re-fetch active items after discovery so edition_id -> canonical_game_id & active families match
             refreshed_items = self.wishlist_service.list_items(scope, status="active")
             if wishlist_item_id is not None:
                 refreshed_items = [it for it in refreshed_items if it.id == wishlist_item_id]
 
             edition_to_canonical: dict[int, int] = {}
+            canonical_active_families: dict[int, set[str]] = {}
             for item_detail in refreshed_items:
+                canonical_active_families[item_detail.canonical_game_id] = _active_target_families(
+                    item_detail
+                )
                 for ed in item_detail.editions:
                     edition_to_canonical[ed.id] = item_detail.canonical_game_id
 
             # Phase 2: Freshness check + batched queries across all 6 adapters
             all_skus = self.wishlist_service.list_active_skus_for_sync(scope)
-            target_skus = [sku for sku in all_skus if sku.edition_id in edition_to_canonical]
+            target_skus = []
+            for sku in all_skus:
+                cid = edition_to_canonical.get(sku.edition_id)
+                if cid is None:
+                    continue
+                allowed_fams = canonical_active_families.get(cid, set())
+                if sku.platform_family and normalize_platform_family(sku.platform_family) not in allowed_fams:
+                    continue
+                target_skus.append(sku)
 
             stale_skus: list[EditionPlatformSku] = []
             skipped_fresh = 0
@@ -630,17 +764,44 @@ class WishlistSyncService:
                 else:
                     skipped_fresh += 1
 
+            def _native_adapter_key(sf: str) -> str | None:
+                if sf == "steam":
+                    return "steam"
+                if sf == "gog":
+                    return "gog"
+                if sf in ("cheapshark", "epic", "humble", "gmg", "fanatical"):
+                    return "cheapshark"
+                if sf == "xbox_store":
+                    return "xbox_store"
+                if sf == "psn_store":
+                    return "psn_store"
+                return None
+
             by_storefront: dict[str, list[EditionPlatformSku]] = {}
             for sku in stale_skus:
-                by_storefront.setdefault(sku.storefront, []).append(sku)
+                if sku.storefront == "itad" or (sku.itad_plain and sku.itad_plain.strip()):
+                    by_storefront.setdefault("itad", []).append(sku)
+                native_key = _native_adapter_key(sku.storefront)
+                if native_key is not None:
+                    by_storefront.setdefault(native_key, []).append(sku)
 
             skus_synced = 0
             prices_recorded = 0
+            synced_row_ids: set[int] = set()
 
             async def _fetch_adapter(
                 sf_key: str, sku_rows: list[EditionPlatformSku]
             ) -> list[NormalizedPriceQuote]:
-                ids = list(dict.fromkeys(r.store_sku_id for r in sku_rows if r.store_sku_id))
+                if sf_key == "itad":
+                    ids = list(
+                        dict.fromkeys(
+                            (r.itad_plain or r.store_sku_id).strip()
+                            for r in sku_rows
+                            if (r.itad_plain and r.itad_plain.strip()) or r.store_sku_id
+                        )
+                    )
+                else:
+                    ids = list(dict.fromkeys(r.store_sku_id for r in sku_rows if r.store_sku_id))
                 if not ids:
                     return []
                 if sf_key == "steam":
@@ -663,7 +824,9 @@ class WishlistSyncService:
 
             adapter_order = ("itad", "cheapshark", "steam", "gog", "xbox_store", "psn_store")
             for sf_key in adapter_order:
-                sku_rows = by_storefront.get(sf_key)
+                sku_rows = [
+                    r for r in (by_storefront.get(sf_key) or []) if r.id not in synced_row_ids
+                ]
                 if not sku_rows:
                     continue
                 try:
@@ -672,6 +835,7 @@ class WishlistSyncService:
                     errors.append(sanitize_error_message(f"{sf_key} price sync failed: {exc}"))
                     continue
 
+                quote_by_sf_and_id: dict[tuple[str, str], NormalizedPriceQuote] = {}
                 best_quote_by_sku_id: dict[str, NormalizedPriceQuote] = {}
                 for quote in quotes:
                     if quote.currency.upper() != "USD":
@@ -679,14 +843,23 @@ class WishlistSyncService:
                             f"Skipped non-USD quote ({quote.currency}) for {sf_key}:{quote.store_sku_id}"
                         )
                         continue
+                    sf_pair = (quote.storefront, quote.store_sku_id)
+                    prev_pair = quote_by_sf_and_id.get(sf_pair)
+                    if prev_pair is None or quote.current_price_usd < prev_pair.current_price_usd:
+                        quote_by_sf_and_id[sf_pair] = quote
                     prev = best_quote_by_sku_id.get(quote.store_sku_id)
                     if prev is None or quote.current_price_usd < prev.current_price_usd:
                         best_quote_by_sku_id[quote.store_sku_id] = quote
 
                 for row in sku_rows:
-                    q = best_quote_by_sku_id.get(row.store_sku_id)
+                    if sf_key == "itad":
+                        qid = (row.itad_plain or row.store_sku_id).strip()
+                        q = quote_by_sf_and_id.get((row.storefront, qid)) or best_quote_by_sku_id.get(qid)
+                    else:
+                        q = quote_by_sf_and_id.get((row.storefront, row.store_sku_id))
                     if q is None:
                         continue
+                    synced_row_ids.add(row.id)
                     skus_synced += 1
                     canonical_id = edition_to_canonical.get(row.edition_id)
                     if q.image_url and canonical_id is not None:

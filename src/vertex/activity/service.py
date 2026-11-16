@@ -719,20 +719,84 @@ class ActivityService:
                 session=row_to_session(sess_row),
             )
 
-    def list_sessions(self, scope: UserScope, *, game_id: int | None = None, limit: int = 50) -> list[PlaySession]:
+    def list_sessions(
+        self,
+        scope: UserScope,
+        *,
+        game_id: int | None = None,
+        limit: int = 50,
+        platform: str | None = None,
+        source: str | None = None,
+        started_after: str | None = None,
+        started_before: str | None = None,
+    ) -> list[PlaySession]:
         scope.require_active()
+        cap = max(1, min(200, int(limit)))
+        plat_l = (platform or "").strip().lower()
+        src_l = (source or "").strip().lower()
+
+        after_dt: datetime | None = None
+        if started_after and started_after.strip():
+            raw_after = started_after.strip()
+            if len(raw_after) == 10 and raw_after[4] == "-" and raw_after[7] == "-":
+                raw_after = f"{raw_after}T00:00:00+00:00"
+            after_dt = _parse_iso(raw_after)
+
+        before_dt: datetime | None = None
+        if started_before and started_before.strip():
+            raw_before = started_before.strip()
+            if len(raw_before) == 10 and raw_before[4] == "-" and raw_before[7] == "-":
+                raw_before = f"{raw_before}T23:59:59.999999+00:00"
+            before_dt = _parse_iso(raw_before)
+
+        has_filters = bool(plat_l or src_l or after_dt is not None or before_dt is not None)
         with self.db_manager.library_connection(scope) as conn:
-            if game_id is not None:
+            if has_filters:
+                if game_id is not None:
+                    rows = conn.execute(
+                        "SELECT * FROM play_sessions WHERE game_id = ? ORDER BY ended_at DESC, id DESC",
+                        (game_id,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        "SELECT * FROM play_sessions ORDER BY ended_at DESC, id DESC"
+                    ).fetchall()
+            elif game_id is not None:
                 rows = conn.execute(
                     "SELECT * FROM play_sessions WHERE game_id = ? ORDER BY ended_at DESC, id DESC LIMIT ?",
-                    (game_id, max(1, min(200, limit))),
+                    (game_id, cap),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT * FROM play_sessions ORDER BY ended_at DESC, id DESC LIMIT ?",
-                    (max(1, min(200, limit)),),
+                    (cap,),
                 ).fetchall()
-            return [row_to_session(r) for r in rows]
+
+            if not has_filters:
+                return [row_to_session(r) for r in rows]
+
+            family_keys = {"pc", "xbox", "playstation", "nintendo"}
+            filtered: list[PlaySession] = []
+            for r in rows:
+                sess = row_to_session(r)
+                if plat_l:
+                    s_plat = sess.platform.lower()
+                    if s_plat != plat_l and not (
+                        plat_l in family_keys and _platform_family(sess.platform).lower() == plat_l
+                    ):
+                        continue
+                if src_l and sess.source.lower() != src_l:
+                    continue
+                if after_dt is not None or before_dt is not None:
+                    start_dt = _parse_iso(sess.started_at)
+                    if after_dt is not None and start_dt < after_dt:
+                        continue
+                    if before_dt is not None and start_dt > before_dt:
+                        continue
+                filtered.append(sess)
+                if len(filtered) >= cap:
+                    break
+            return filtered
 
     def update_session(
         self,

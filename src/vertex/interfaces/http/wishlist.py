@@ -5,9 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
-
-from vertex.infrastructure.scope import UserScope
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from vertex.identity.models import UserScope
@@ -19,11 +16,8 @@ from vertex.interfaces.http.deps import (
 )
 from vertex.interfaces.http.schemas import (
     JobResponse,
-    WishlistCandidatesSearchResponse,
-    WishlistSyncRequest,
-)
-from vertex.interfaces.http.schemas import (
     PriceHistoryEntryResponse,
+    WishlistCandidatesSearchResponse,
     WishlistCreateRequest,
     WishlistDealEvaluationResponse,
     WishlistDealResponse,
@@ -34,6 +28,7 @@ from vertex.interfaces.http.schemas import (
     WishlistPriceRecordResponse,
     WishlistPurchaseRequest,
     WishlistPurchaseResponse,
+    WishlistSyncRequest,
     WishlistUpdateRequest,
 )
 from vertex.wishlist.models import WishlistItemDetail
