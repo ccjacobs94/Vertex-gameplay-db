@@ -215,3 +215,16 @@ class WishlistPurchaseResult:
 class WishlistHistoryDetail:
     item: WishlistItemDetail
     price_history_by_sku: dict[int, list[PriceHistoryEntry]]
+
+
+@dataclass(frozen=True, slots=True)
+class PushSubscriptionRecord:
+    id: int
+    endpoint: str
+    p256dh_key: str
+    auth_key: str
+    user_agent: str
+    device_label: str
+    is_active: bool
+    created_at: str
+    last_used_at: str | None

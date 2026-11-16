@@ -3,8 +3,13 @@
 
 games.home.arpa {
     tls internal
+
+    # Streamable HTTP MCP endpoint (/mcp) requires Bearer PAT and checks Host/Origin allowlists.
+    # For standalone MCP mode (`vertex serve-mcp`), you may reverse-proxy `/mcp*` to `127.0.0.1:8097`
+    # or restrict `/mcp` to Tailscale/LAN subnets.
     reverse_proxy 127.0.0.1:8095 {
         header_up X-Forwarded-Proto {scheme}
         header_up X-Forwarded-Host {host}
+        flush_interval -1
     }
 }

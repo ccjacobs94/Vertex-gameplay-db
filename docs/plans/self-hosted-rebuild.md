@@ -43,15 +43,17 @@ src/vertex/
   catalog/                 # Public metadata cache, controlled genres/tags taxonomy
   library/                 # Personal library, ownership vs Game Pass, reconciliation, portability
   activity/                # Observations, provider baselines, play_sessions, locks, ledger projection
-  wishlist/                # Editions/SKUs, platform targets, prices, deals (Phase 4 target)
-  analytics/               # Derived read models & calculations (Phase 3/4 parity)
+  wishlist/                # Editions/SKUs, platform targets, prices, deals, push subscriptions
+  analytics/               # Derived read models & calculations
   integrations/
-    platforms/             # Normalized Steam/Xbox/PSN adapters (Steam implemented first)
-    prices/                # Six store price adapters (Phase 4 target)
-    homeassistant/         # History, CSV, scoped event ingestion (Phase 3 target)
+    platforms/             # Normalized Steam/Xbox/PSN/GOG adapters, scheduled sync, telemetry
+    prices/                # Six store price adapters + automated wishlist sync orchestrator
+    push/                  # Optional, disabled-by-default Web Push / VAPID alert delivery
+    homeassistant/         # History, CSV, scoped event ingestion
   interfaces/
     http/                  # FastAPI APIRouters, CSRF/Host/Origin middleware, Pydantic schemas
-    cli.py                 # Maintenance CLI (`migrate`, `backup`, `restore`, `import-legacy`, etc.)
+    mcp/                   # Authenticated Streamable HTTP MCP server (23 tools + 2 resources)
+    cli.py                 # Maintenance CLI (`migrate`, `backup`, `restore`, `import-legacy`, `serve-mcp`, etc.)
   migration/               # Versioned legacy SQLite single-user & multi-user importer
   infrastructure/          # SQLite connection factory (`UserScope`), Fernet secrets, migrations, jobs, backup
 migrations/
@@ -59,10 +61,10 @@ migrations/
   library/                 # Ordered SHA-256 checksummed user games.db SQL migrations
 frontend/
   src/                     # Modular TypeScript browser UI + OpenAPI-generated types + build pipeline
-deploy/                    # Private-by-default Compose, Caddy TLS example, release Dockerfile
+deploy/                    # Private-by-default Compose (+ dedicated-mcp profile), Caddy TLS example, release Dockerfile
 ```
 
-Domain and application services never import FastAPI, HTTP clients, or frontend code. API routers, durable jobs, CLI commands, and future MCP tool handlers call the same application services with an explicit `UserScope`.
+Domain and application services never import FastAPI, HTTP clients, or frontend code. API routers, durable jobs, CLI commands, and MCP tool handlers call the same application services with an explicit `UserScope`.
 
 ## Delivery roadmap
 
@@ -70,8 +72,8 @@ Domain and application services never import FastAPI, HTTP clients, or frontend 
 | --- | --- | --- | --- |
 | 0 — Establish the contract | Corrected feature ledger, route/tool/table manifest, synthetic migration fixtures, ADRs, reproducible baseline | Every feature mapped to keep/remove/defer; legacy invariant tests untouched; baseline green | Complete |
 | 1 — Private usable core | Package skeleton, local accounts, invites, admin guardrails, `UserScope`, migrations, manual library API + UI, backup/restore CLI, no billing runtime | Two users maintain isolated libraries; fresh install and clean restore work offline | Complete |
-| 2 — Library sync and catalog | Durable SQLite job queue, Steam adapter, metadata/taxonomy merge, reconciliation | Retries do not duplicate records; preservation invariants pass; provider failures isolated | Steam slice complete; Xbox/PSN & achievements next |
-| 3 — Activity and insights | Unified observation/baseline/session model, locked sessions, deletion baseline protection, daily ledger | No double counting; locked edits survive replay; session deletion does not cause recreation | Core activity pipeline complete; HA/telemetry adapters next |
-| 4 — Wishlist and alerts | Editions/SKUs, 6 price adapters, deals, idempotent purchase conversion, optional push | Currency/freshness preserved; purchases idempotent; zero cross-account caching | Schema & ledger ready; adapters scheduled |
-| 5 — MCP and compatibility | All 23 tools and 2 resources calling shared domain services; scoped PATs | Tool contract suite, owner isolation, revocation pass | PAT foundation built; MCP adapter scheduled |
-| 6 — Migration and release | Legacy importer, restore rehearsal, ops docs, release cutover | Retained features accepted; migration parity verified; rollback rehearsed | Importer & synthetic fixtures built; full legacy parity cutover scheduled |
+| 2 — Library sync and catalog | Durable SQLite job queue, Steam/Xbox/PSN/GOG adapters, metadata/taxonomy merge, reconciliation, achievements | Retries do not duplicate records; preservation invariants pass; provider failures isolated | Complete |
+| 3 — Activity and insights | Unified observation/baseline/session model, locked sessions, deletion baseline protection, daily ledger, HA + live telemetry | No double counting; locked edits survive replay; session deletion does not cause recreation | Complete |
+| 4 — Wishlist and alerts | Editions/SKUs, 6 price adapters, `/api/wishlist/sync` + `/api/wishlist/candidates`, deals, idempotent purchase conversion, optional Web Push | Currency/freshness preserved; purchases idempotent; zero cross-account caching; push disabled by default | Complete |
+| 5 — MCP and compatibility | All 23 tools and 2 resources calling shared domain services; scoped revocable PATs; Streamable HTTP `/mcp` + `serve-mcp` + ADR 0006 | Tool contract suite, owner isolation, session-hijack guard, PAT scope/revocation, Host/Origin validation pass | Complete |
+| 6 — Migration and release | Legacy importer parity (wishlist, deals, push, library), backup/restore rehearsal, ops/deploy docs, frontend/OpenAPI parity | Retained features accepted; migration parity verified; `./scripts/check.sh` green | Ready for cutover validation |

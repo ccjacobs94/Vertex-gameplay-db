@@ -5,12 +5,17 @@ import type {
 import {
   createWishlistItem,
   deleteWishlistItem,
+  getVapidPublicKey,
   getWishlistDeals,
   getWishlistHistory,
   listWishlist,
   purchaseWishlistItem,
   recordWishlistPrice,
   searchCatalog,
+  searchWishlistCandidates,
+  subscribePush,
+  syncWishlistPrices,
+  testPushNotification,
   updateWishlistItem,
   updateWishlistPlatforms,
 } from "../../shared/api.ts";
@@ -76,32 +81,57 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
         onClick: async () => {
           const q = titleIn.value.trim();
           if (!q) {
-            showBanner(modalBanner, "Enter a title first to search catalog", "error");
+            showBanner(modalBanner, "Enter a title first to search catalog & storefronts", "error");
             return;
           }
           clearEl(searchOut);
           try {
-            const hits = await searchCatalog(q, 5);
-            if (!hits.length) {
-              searchOut.appendChild(el("span", { class: "muted" }, ["No catalog cache matches found."]));
+            const resp = await searchWishlistCandidates(q, 5);
+            const cands = resp.candidates || [];
+            if (!cands.length) {
+              const hits = await searchCatalog(q, 5);
+              if (!hits.length) {
+                searchOut.appendChild(el("span", { class: "muted" }, ["No catalog or storefront matches found."]));
+                return;
+              }
+              for (const h of hits) {
+                searchOut.appendChild(el("button", {
+                  type: "button",
+                  class: "btn btn-ghost",
+                  onClick: () => {
+                    titleIn.value = h.title;
+                    if (h.release_year) yearIn.value = String(h.release_year);
+                    if (h.genres.length) genresIn.value = h.genres.join(", ");
+                  },
+                }, [`Use: ${h.title}${h.cached ? " (cached)" : ""}`]));
+              }
               return;
             }
-            for (const h of hits) {
+            for (const c of cands) {
+              const priceLabel = c.current_price_usd !== null && c.current_price_usd !== undefined
+                ? ` · $${Number(c.current_price_usd).toFixed(2)}`
+                : "";
+              const conflictLabel = c.ownership_conflict && c.ownership_conflict.already_in_library
+                ? " [Owned/GP]"
+                : "";
               searchOut.appendChild(el("button", {
                 type: "button",
                 class: "btn btn-ghost",
                 onClick: () => {
-                  titleIn.value = h.title;
-                  if (h.release_year) yearIn.value = String(h.release_year);
-                  if (h.genres.length) genresIn.value = h.genres.join(", ");
+                  titleIn.value = c.title;
+                  if (c.release_year) yearIn.value = String(c.release_year);
+                  if (c.genres && c.genres.length) genresIn.value = c.genres.join(", ");
+                  if (c.ownership_conflict && c.ownership_conflict.conflict_warning) {
+                    showBanner(modalBanner, c.ownership_conflict.conflict_warning, "info");
+                  }
                 },
-              }, [`Use: ${h.title}${h.cached ? " (cached)" : ""}`]));
+              }, [`Use: ${c.title} (${c.storefront}${priceLabel}${conflictLabel})`]));
             }
           } catch (err) {
-            showBanner(modalBanner, err instanceof Error ? err.message : "Catalog lookup failed", "error");
+            showBanner(modalBanner, err instanceof Error ? err.message : "Candidate lookup failed", "error");
           }
         },
-      }, ["Search Catalog"]);
+      }, ["Search Storefronts & Catalog"]);
 
       const form = el("form", {
         class: "stack",
@@ -401,10 +431,85 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
     }
   }
 
+  function urlBase64ToBytes(b64: string): Uint8Array {
+    const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+    const norm = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = atob(norm);
+    const arr = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i += 1) arr[i] = raw.charCodeAt(i);
+    return arr;
+  }
+
+  const syncPricesBtn = el("button", {
+    type: "button",
+    class: "btn btn-secondary",
+    onClick: async () => {
+      syncPricesBtn.setAttribute("disabled", "true");
+      try {
+        const job = await syncWishlistPrices({ force: true });
+        showBanner(bannerBox, `Wishlist price sync queued (job ${job.id}). In-app deal alerts refresh shortly.`, "success");
+        await refresh();
+      } catch (err) {
+        showBanner(bannerBox, err instanceof Error ? err.message : "Failed queuing price sync", "error");
+      } finally {
+        syncPricesBtn.removeAttribute("disabled");
+      }
+    },
+  }, ["Sync Prices"]);
+
+  const enablePushBtn = el("button", {
+    type: "button",
+    class: "btn btn-ghost",
+    style: "display:none",
+    onClick: async () => {
+      try {
+        if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+          showBanner(bannerBox, "Browser PushManager not supported on this client.", "error");
+          return;
+        }
+        const keyResp = await getVapidPublicKey();
+        const reg = await navigator.serviceWorker.ready;
+        const perm = await Notification.requestPermission();
+        if (perm !== "granted") {
+          showBanner(bannerBox, "Notification permission not granted.", "error");
+          return;
+        }
+        const sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToBytes(keyResp.public_key),
+        });
+        const jsonSub = sub.toJSON();
+        await subscribePush({
+          endpoint: jsonSub.endpoint || sub.endpoint,
+          keys: {
+            p256dh: (jsonSub.keys && jsonSub.keys.p256dh) || "",
+            auth: (jsonSub.keys && jsonSub.keys.auth) || "",
+          },
+        });
+        const testRes = await testPushNotification();
+        showBanner(bannerBox, `Web Push enabled (test sent: ${testRes.sent}).`, "success");
+      } catch (err) {
+        showBanner(bannerBox, err instanceof Error ? err.message : "Could not enable Web Push", "error");
+      }
+    },
+  }, ["Enable Deal Push"]);
+
+  if ("serviceWorker" in navigator && "PushManager" in window) {
+    getVapidPublicKey()
+      .then((res) => {
+        if (res.enabled && res.public_key) enablePushBtn.style.display = "";
+      })
+      .catch(() => {
+        // Optional Web Push is disabled by default; keep button hidden cleanly.
+      });
+  }
+
   const toolbar = el("div", { class: "toolbar" }, [
     statusSel,
     el("label", { class: "row-check" }, [smartOnlyIn, "Smart upgrades only"]),
     el("label", { class: "row-check" }, [aboveTargetIn, "Include above target"]),
+    syncPricesBtn,
+    enablePushBtn,
     el("button", { type: "button", class: "btn btn-secondary", onClick: () => refresh() }, ["Refresh"]),
     el("button", { type: "button", class: "btn btn-primary", onClick: openAddModal }, ["+ Add Wishlist Item"]),
   ]);

@@ -7,3 +7,4 @@
 | [0003](0003-private-self-hosted-access-and-auth.md) | Private Self-Hosted Access, Authentication, and Encryption | Accepted |
 | [0004](0004-staged-replacement-and-legacy-oracle.md) | Staged Replacement, Dual-Track Validation, and Legacy Oracle | Accepted |
 | [0005](0005-contribution-and-release-model.md) | Contribution, Quality Gate, and Explicit Release Model | Accepted (Target Policy) |
+| [0006](0006-mcp-private-transport-and-pat-auth.md) | Private-Network Streamable HTTP MCP & PAT Auth | Accepted |

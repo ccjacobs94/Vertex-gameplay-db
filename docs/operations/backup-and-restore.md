@@ -52,6 +52,11 @@ PYTHONPATH=src python3 -m vertex import-legacy \
 Key migration guarantees:
 - **Both layouts supported**: Single-user `games.db` and multi-user `system.db` + `users/<id>/games.db`.
 - **No blind directory matching**: User IDs are resolved via `system.db`'s `users` table; orphaned directories are reported for explicit review.
+- **Wishlist & Pricing Parity**: Migrates `canonical_games`, `game_editions`, `edition_platform_skus`, `wishlist_items`, `wishlist_platform_targets`, and `price_history` with parity verification in the migration report (legacy VAPID keys and push subscriptions are retired so browsers re-subscribe cleanly only if `VERTEX_WEB_PUSH_ENABLED=true`).
 - **Credentials & Hashes**: Compatible `scrypt$` password hashes are preserved; encrypted platform secrets are migrated only if the configured decryption key successfully decrypts them, otherwise flagged fail-closed for user re-entry.
-- **Sessions & Billing Retired**: All legacy `web_sessions` and `oauth_tokens` are revoked (users re-login). Accounts in `awaiting_approval`, `awaiting_payment`, or `subscription_lapsed` translate to `suspended` with the original lifecycle reason logged in the report so billing retirement never silently activates unauthorized or lapsed accounts.
+- **Sessions & Billing Retired**: All legacy `web_sessions` and `oauth_tokens` are revoked (users re-login) and users create new revocable scoped PATs under Account Settings for `/mcp`. Accounts in `awaiting_approval`, `awaiting_payment`, or `subscription_lapsed` translate to `suspended` with the original lifecycle reason logged in the report so billing retirement never silently activates unauthorized or lapsed accounts.
+- **Cutover Verification Checklist**:
+  1. Run `PYTHONPATH=src python3 -m vertex import-legacy --source-dir ... --dest-dir ... --report ...` and confirm zero parity mismatches.
+  2. Run `PYTHONPATH=src python3 -m vertex backup` and `vertex restore` into a clean directory, checking SHA-256 manifest verification and `PRAGMA integrity_check`.
+  3. Smoke-test HTTP `/readyz`, Web UI login, `/api/wishlist/deals`, and `/mcp` Streamable HTTP with a freshly minted scoped PAT while leaving `VERTEX_OUTBOUND_SYNC_ENABLED=false` before enabling external sync or cutover traffic.
 - **Explicit Rollback**: Keep the frozen legacy data directory and legacy container image. If rollback is necessary, stop the replacement container and check whether users created post-cutover edits before restoring the legacy image/data.

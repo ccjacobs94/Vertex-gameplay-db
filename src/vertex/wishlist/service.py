@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -16,10 +17,12 @@ from vertex.library.service import LibraryService
 from vertex.wishlist.models import (
     EDITION_TIER_RANKS,
     VALID_WISHLIST_STATUSES,
+    CanonicalGame,
     EditionPlatformSku,
     GameEdition,
     OwnershipConflict,
     PriceHistoryEntry,
+    PushSubscriptionRecord,
     WishlistDeal,
     WishlistDealEvaluation,
     WishlistHistoryDetail,
@@ -34,6 +37,7 @@ from vertex.wishlist.repository import (
     row_to_canonical,
     row_to_edition,
     row_to_price_history,
+    row_to_push_subscription,
     row_to_sku,
     row_to_target,
 )
@@ -887,3 +891,552 @@ class WishlistService:
                 ).fetchall()
                 history_by_sku[sku.id] = [row_to_price_history(r) for r in rows]
         return WishlistHistoryDetail(item=item, price_history_by_sku=history_by_sku)
+
+    def find_item_by_title(self, scope: UserScope, title: str) -> WishlistItemDetail | None:
+        scope.require_active()
+        cleaned = (title or "").strip()
+        if not cleaned:
+            return None
+        norm = normalize_title(cleaned)
+        with self.db_manager.library_connection(scope) as conn:
+            row = conn.execute(
+                """
+                SELECT wi.*
+                FROM wishlist_items wi
+                JOIN canonical_games cg ON cg.id = wi.canonical_game_id
+                WHERE LOWER(cg.title) = LOWER(?) OR cg.normalized_title = ?
+                ORDER BY wi.id DESC
+                LIMIT 1
+                """,
+                (cleaned, norm),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._hydrate_item(conn, scope, row)
+
+    def search_local_canonical(
+        self,
+        scope: UserScope,
+        query: str,
+        *,
+        limit: int = 5,
+    ) -> list[tuple[CanonicalGame, tuple[GameEdition, ...]]]:
+        scope.require_active()
+        q = (query or "").strip()
+        if not q:
+            return []
+        norm_q = normalize_title(q)
+        capped = max(1, min(20, int(limit)))
+        with self.db_manager.library_connection(scope) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM canonical_games
+                WHERE LOWER(title) LIKE ? OR normalized_title LIKE ?
+                ORDER BY CASE WHEN LOWER(title) = LOWER(?) THEN 0 ELSE 1 END, id DESC
+                LIMIT ?
+                """,
+                (f"%{q.lower()}%", f"%{norm_q or q.lower()}%", q, capped),
+            ).fetchall()
+            out: list[tuple[CanonicalGame, tuple[GameEdition, ...]]] = []
+            for cg_row in rows:
+                cg = row_to_canonical(cg_row)
+                ed_rows = conn.execute(
+                    "SELECT * FROM game_editions WHERE canonical_game_id = ? ORDER BY tier_rank ASC, id ASC",
+                    (cg.id,),
+                ).fetchall()
+                eds: list[GameEdition] = []
+                for er in ed_rows:
+                    sku_rows = conn.execute(
+                        "SELECT * FROM edition_platform_skus WHERE edition_id = ? ORDER BY id ASC",
+                        (er["id"],),
+                    ).fetchall()
+                    eds.append(row_to_edition(er, tuple(row_to_sku(sr) for sr in sku_rows)))
+                out.append((cg, tuple(eds)))
+            return out
+
+    def find_local_library_cover(self, scope: UserScope, title: str) -> str | None:
+        scope.require_active()
+        cleaned = (title or "").strip()
+        if not cleaned:
+            return None
+        with self.db_manager.library_connection(scope) as conn:
+            row = conn.execute(
+                """
+                SELECT cover_url FROM games
+                WHERE cover_url IS NOT NULL AND TRIM(cover_url) != ''
+                  AND (LOWER(title) = LOWER(?) OR LOWER(title) LIKE LOWER(?) || '%')
+                ORDER BY id ASC
+                LIMIT 1
+                """,
+                (cleaned, cleaned),
+            ).fetchone()
+            return str(row["cover_url"]) if row and row["cover_url"] else None
+
+    def update_canonical_cover_if_missing(
+        self,
+        scope: UserScope,
+        canonical_game_id: int,
+        cover_url: str,
+        *,
+        allow_upgrade_steam_600x900: bool = False,
+    ) -> bool:
+        scope.require_active()
+        cleaned = (cover_url or "").strip()
+        if not cleaned:
+            return False
+        now_iso = _utc_now_iso()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            row = conn.execute(
+                "SELECT cover_url FROM canonical_games WHERE id = ?",
+                (canonical_game_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            cur = (row["cover_url"] or "").strip()
+            should_set = not cur
+            if (
+                not should_set
+                and allow_upgrade_steam_600x900
+                and cur.endswith("/library_600x900.jpg")
+                and bool(re.search(r"/[0-9a-f]{40}/", cleaned))
+            ):
+                should_set = True
+            if not should_set:
+                return False
+            conn.execute(
+                "UPDATE canonical_games SET cover_url = ?, updated_at = ? WHERE id = ?",
+                (cleaned, now_iso, canonical_game_id),
+            )
+            return True
+
+    def upsert_discovered_edition(
+        self,
+        scope: UserScope,
+        *,
+        canonical_game_id: int,
+        edition_name: str,
+        edition_tier: str | None = None,
+        tier_rank: int | None = None,
+        is_base_edition: bool | None = None,
+        cover_url: str | None = None,
+    ) -> GameEdition:
+        scope.require_active()
+        cleaned_ed = (edition_name or "Standard Edition").strip() or "Standard Edition"
+        inf_tier, inf_rank = infer_edition_tier(cleaned_ed)
+        eff_tier = (edition_tier or inf_tier).strip().lower()
+        eff_rank = int(tier_rank) if tier_rank is not None else EDITION_TIER_RANKS.get(eff_tier, inf_rank)
+        eff_base = (
+            (1 if is_base_edition else 0)
+            if is_base_edition is not None
+            else (1 if (eff_rank == 1 or "standard" in cleaned_ed.lower()) else 0)
+        )
+        now_iso = _utc_now_iso()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            conn.execute(
+                """
+                INSERT INTO game_editions (
+                    canonical_game_id, edition_name, edition_tier, tier_rank,
+                    is_base_edition, included_dlc_notes, cover_url, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)
+                ON CONFLICT(canonical_game_id, edition_name) DO UPDATE SET
+                    edition_tier = excluded.edition_tier,
+                    tier_rank = excluded.tier_rank,
+                    is_base_edition = excluded.is_base_edition,
+                    cover_url = COALESCE(game_editions.cover_url, excluded.cover_url),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    canonical_game_id,
+                    cleaned_ed,
+                    eff_tier,
+                    eff_rank,
+                    eff_base,
+                    cover_url,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            ed_row = conn.execute(
+                "SELECT * FROM game_editions WHERE canonical_game_id = ? AND edition_name = ?",
+                (canonical_game_id, cleaned_ed),
+            ).fetchone()
+            assert ed_row is not None
+            sku_rows = conn.execute(
+                "SELECT * FROM edition_platform_skus WHERE edition_id = ? ORDER BY id ASC",
+                (ed_row["id"],),
+            ).fetchall()
+            return row_to_edition(ed_row, tuple(row_to_sku(sr) for sr in sku_rows))
+
+    def upsert_discovered_sku(
+        self,
+        scope: UserScope,
+        *,
+        edition_id: int,
+        platform_family: str,
+        platform_label: str,
+        storefront: str,
+        store_sku_id: str,
+        store_url: str = "",
+        current_price_usd: float | None = None,
+        regular_price_usd: float | None = None,
+        discount_pct: int = 0,
+        historical_low_usd: float | None = None,
+        is_authorized_seller: bool = True,
+        is_drm_free: bool = False,
+        last_checked_at: str | None = None,
+        source: str = "wishlist_sync",
+        itad_plain: str | None = None,
+    ) -> EditionPlatformSku:
+        scope.require_active()
+        fam = normalize_platform_family(platform_family)
+        cleaned_sf = (storefront or "manual").strip().lower() or "manual"
+        cleaned_sku = (store_sku_id or "").strip()
+        if not cleaned_sku:
+            raise ValidationError("store_sku_id is required")
+
+        cur_val = round(float(current_price_usd), 2) if current_price_usd is not None else None
+        if cur_val is not None and cur_val < 0:
+            raise ValidationError("current_price_usd cannot be negative")
+        reg_val = round(float(regular_price_usd), 2) if regular_price_usd is not None else None
+        if reg_val is not None and reg_val < 0:
+            raise ValidationError("regular_price_usd cannot be negative")
+        ext_low = round(float(historical_low_usd), 2) if historical_low_usd is not None else None
+        now_iso = _utc_now_iso()
+        checked_iso = last_checked_at or (now_iso if cur_val is not None else None)
+
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            existing = conn.execute(
+                "SELECT * FROM edition_platform_skus WHERE edition_id = ? AND storefront = ? AND store_sku_id = ?",
+                (edition_id, cleaned_sf, cleaned_sku),
+            ).fetchone()
+            prev_low = (
+                float(existing["historical_low_usd"])
+                if existing is not None and existing["historical_low_usd"] is not None
+                else None
+            )
+
+            low_candidates = [v for v in (prev_low, ext_low, cur_val) if v is not None and v > 0]
+            if not low_candidates and cur_val is not None:
+                low_candidates = [v for v in (prev_low, ext_low, cur_val) if v is not None]
+            new_low = min(low_candidates) if low_candidates else prev_low
+
+            eff_disc = int(discount_pct or 0)
+            if eff_disc == 0 and cur_val is not None and reg_val and reg_val > 0 and cur_val < reg_val:
+                eff_disc = max(0, int(round((1.0 - (cur_val / reg_val)) * 100)))
+
+            conn.execute(
+                """
+                INSERT INTO edition_platform_skus (
+                    edition_id, platform_family, platform_label, storefront, store_sku_id,
+                    itad_plain, store_url, current_price_usd, regular_price_usd, discount_pct,
+                    historical_low_usd, is_authorized_seller, is_drm_free,
+                    last_checked_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(edition_id, storefront, store_sku_id) DO UPDATE SET
+                    platform_family = excluded.platform_family,
+                    platform_label = excluded.platform_label,
+                    itad_plain = COALESCE(excluded.itad_plain, edition_platform_skus.itad_plain),
+                    store_url = CASE WHEN excluded.store_url != '' THEN excluded.store_url ELSE edition_platform_skus.store_url END,
+                    current_price_usd = COALESCE(excluded.current_price_usd, edition_platform_skus.current_price_usd),
+                    regular_price_usd = COALESCE(excluded.regular_price_usd, edition_platform_skus.regular_price_usd),
+                    discount_pct = CASE WHEN excluded.current_price_usd IS NOT NULL THEN excluded.discount_pct ELSE edition_platform_skus.discount_pct END,
+                    historical_low_usd = COALESCE(excluded.historical_low_usd, edition_platform_skus.historical_low_usd),
+                    is_authorized_seller = excluded.is_authorized_seller,
+                    is_drm_free = excluded.is_drm_free,
+                    last_checked_at = COALESCE(excluded.last_checked_at, edition_platform_skus.last_checked_at),
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    edition_id,
+                    fam,
+                    (platform_label or fam).strip(),
+                    cleaned_sf,
+                    cleaned_sku,
+                    itad_plain,
+                    store_url or "",
+                    cur_val,
+                    reg_val,
+                    eff_disc,
+                    new_low,
+                    1 if is_authorized_seller else 0,
+                    1 if is_drm_free else 0,
+                    checked_iso,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            sku_row = conn.execute(
+                "SELECT * FROM edition_platform_skus WHERE edition_id = ? AND storefront = ? AND store_sku_id = ?",
+                (edition_id, cleaned_sf, cleaned_sku),
+            ).fetchone()
+            assert sku_row is not None
+            sku_id = int(sku_row["id"])
+            if cur_val is not None:
+                is_atl = prev_low is None or cur_val <= prev_low + 0.001
+                _append_price_history(
+                    conn,
+                    sku_id=sku_id,
+                    storefront=cleaned_sf,
+                    price_usd=cur_val,
+                    regular_price_usd=reg_val,
+                    discount_pct=eff_disc,
+                    is_all_time_low=is_atl,
+                    source=source,
+                    recorded_at=checked_iso or now_iso,
+                )
+            return row_to_sku(sku_row)
+
+    def record_sku_price(
+        self,
+        scope: UserScope,
+        *,
+        sku_id: int,
+        price_usd: float,
+        regular_price_usd: float | None = None,
+        discount_pct: int | None = None,
+        historical_low_usd: float | None = None,
+        store_url: str | None = None,
+        source: str = "wishlist_sync",
+        recorded_at: str | None = None,
+    ) -> WishlistPriceRecordResult:
+        scope.require_active()
+        price_val = round(float(price_usd), 2)
+        if price_val < 0:
+            raise ValidationError("price_usd cannot be negative")
+        reg_val = round(float(regular_price_usd), 2) if regular_price_usd is not None else None
+        if reg_val is not None and reg_val < 0:
+            raise ValidationError("regular_price_usd cannot be negative")
+        ext_low = round(float(historical_low_usd), 2) if historical_low_usd is not None else None
+
+        now_iso = _utc_now_iso()
+        rec_iso = recorded_at or now_iso
+
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            sku_row = conn.execute("SELECT * FROM edition_platform_skus WHERE id = ?", (sku_id,)).fetchone()
+            if sku_row is None:
+                raise NotFoundError(f"SKU {sku_id} not found")
+            ed_row = conn.execute(
+                "SELECT canonical_game_id FROM game_editions WHERE id = ?",
+                (sku_row["edition_id"],),
+            ).fetchone()
+            assert ed_row is not None
+            wi_row = conn.execute(
+                "SELECT * FROM wishlist_items WHERE canonical_game_id = ?",
+                (ed_row["canonical_game_id"],),
+            ).fetchone()
+            if wi_row is None:
+                raise NotFoundError(f"Wishlist item for SKU {sku_id} not found")
+
+            prev_low = (
+                float(sku_row["historical_low_usd"])
+                if sku_row["historical_low_usd"] is not None
+                else None
+            )
+            low_candidates = [v for v in (prev_low, ext_low, price_val) if v is not None and v > 0]
+            if not low_candidates:
+                low_candidates = [v for v in (prev_low, ext_low, price_val) if v is not None]
+            new_low = min(low_candidates)
+            is_atl = prev_low is None or price_val <= prev_low + 0.001
+
+            eff_reg = reg_val if reg_val is not None else (
+                float(sku_row["regular_price_usd"]) if sku_row["regular_price_usd"] is not None else None
+            )
+            if discount_pct is not None:
+                eff_disc = max(0, int(discount_pct))
+            elif eff_reg and eff_reg > 0 and price_val <= eff_reg:
+                eff_disc = max(0, int(round((1.0 - (price_val / eff_reg)) * 100)))
+            else:
+                eff_disc = 0
+
+            conn.execute(
+                """
+                UPDATE edition_platform_skus
+                SET current_price_usd = ?,
+                    regular_price_usd = COALESCE(?, regular_price_usd),
+                    discount_pct = ?,
+                    historical_low_usd = ?,
+                    store_url = CASE WHEN ? != '' THEN ? ELSE store_url END,
+                    last_checked_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    price_val,
+                    reg_val,
+                    eff_disc,
+                    new_low,
+                    store_url or "",
+                    store_url or "",
+                    rec_iso,
+                    now_iso,
+                    sku_id,
+                ),
+            )
+            _append_price_history(
+                conn,
+                sku_id=sku_id,
+                storefront=sku_row["storefront"],
+                price_usd=price_val,
+                regular_price_usd=eff_reg,
+                discount_pct=eff_disc,
+                is_all_time_low=is_atl,
+                source=source,
+                recorded_at=rec_iso,
+            )
+            conn.execute(
+                "UPDATE wishlist_items SET updated_at = ? WHERE id = ?",
+                (now_iso, wi_row["id"]),
+            )
+            refreshed_wi = conn.execute("SELECT * FROM wishlist_items WHERE id = ?", (wi_row["id"],)).fetchone()
+            item_detail = self._hydrate_item(conn, scope, refreshed_wi)
+
+        return WishlistPriceRecordResult(
+            sku_id=sku_id,
+            price_usd=price_val,
+            is_all_time_low=is_atl,
+            historical_low_usd=new_low,
+            item=item_detail,
+        )
+
+    def has_active_wishlist_items(self, scope: UserScope) -> bool:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            row = conn.execute("SELECT 1 FROM wishlist_items WHERE status = 'active' LIMIT 1").fetchone()
+            return row is not None
+
+    def list_active_skus_for_sync(self, scope: UserScope) -> list[EditionPlatformSku]:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            rows = conn.execute(
+                """
+                SELECT s.*
+                FROM edition_platform_skus s
+                JOIN game_editions e ON s.edition_id = e.id
+                JOIN wishlist_items w ON e.canonical_game_id = w.canonical_game_id
+                WHERE w.status = 'active'
+                ORDER BY s.id ASC
+                """
+            ).fetchall()
+            return [row_to_sku(r) for r in rows]
+
+    def list_push_subscriptions(self, scope: UserScope) -> list[PushSubscriptionRecord]:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            rows = conn.execute(
+                "SELECT * FROM push_subscriptions WHERE is_active = 1 ORDER BY id ASC"
+            ).fetchall()
+            return [row_to_push_subscription(r) for r in rows]
+
+    def upsert_push_subscription(
+        self,
+        scope: UserScope,
+        *,
+        endpoint: str,
+        p256dh_key: str,
+        auth_key: str,
+        user_agent: str = "",
+        device_label: str = "",
+    ) -> PushSubscriptionRecord:
+        scope.require_active()
+        now_iso = _utc_now_iso()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            conn.execute(
+                """
+                INSERT INTO push_subscriptions (
+                    endpoint, p256dh_key, auth_key, user_agent, device_label, is_active, created_at, last_used_at
+                ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                ON CONFLICT(endpoint) DO UPDATE SET
+                    p256dh_key = excluded.p256dh_key,
+                    auth_key = excluded.auth_key,
+                    user_agent = excluded.user_agent,
+                    device_label = CASE WHEN excluded.device_label != '' THEN excluded.device_label ELSE push_subscriptions.device_label END,
+                    is_active = 1,
+                    last_used_at = excluded.last_used_at
+                """,
+                (endpoint, p256dh_key, auth_key, user_agent[:256], device_label[:120], now_iso, now_iso),
+            )
+            row = conn.execute(
+                "SELECT * FROM push_subscriptions WHERE endpoint = ?",
+                (endpoint,),
+            ).fetchone()
+            assert row is not None
+            return row_to_push_subscription(row)
+
+    def delete_push_subscription(self, scope: UserScope, endpoint: str) -> bool:
+        scope.require_active()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            cur = conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+            return cur.rowcount > 0
+
+    def select_unalerted_deals(
+        self,
+        scope: UserScope,
+        deals: tuple[WishlistDeal, ...],
+    ) -> list[WishlistDeal]:
+        scope.require_active()
+        if not deals:
+            return []
+        selected: list[WishlistDeal] = []
+        seen_keys: set[tuple[int, str]] = set()
+        with self.db_manager.library_connection(scope) as conn:
+            for deal in deals:
+                key = (deal.wishlist_item_id, deal.platform_family)
+                if key in seen_keys:
+                    continue
+                target_row = conn.execute(
+                    """
+                    SELECT last_alerted_price_usd, last_alerted_edition_id
+                    FROM wishlist_platform_targets
+                    WHERE wishlist_item_id = ? AND platform_family = ?
+                    """,
+                    (deal.wishlist_item_id, deal.platform_family),
+                ).fetchone()
+                if target_row is None:
+                    continue
+                last_price = target_row["last_alerted_price_usd"]
+                last_ed_id = target_row["last_alerted_edition_id"]
+                should_alert = False
+                if last_price is None:
+                    should_alert = True
+                elif float(deal.current_price_usd) < float(last_price) - 0.005:
+                    should_alert = True
+                elif deal.is_smart_upgrade:
+                    last_tier_rank = 1
+                    if last_ed_id is not None:
+                        ed_row = conn.execute(
+                            "SELECT tier_rank FROM game_editions WHERE id = ?",
+                            (last_ed_id,),
+                        ).fetchone()
+                        if ed_row is not None:
+                            last_tier_rank = int(ed_row["tier_rank"] or 1)
+                    if deal.tier_rank > last_tier_rank:
+                        should_alert = True
+                if should_alert:
+                    seen_keys.add(key)
+                    selected.append(deal)
+        return selected
+
+    def mark_target_alerted(
+        self,
+        scope: UserScope,
+        *,
+        wishlist_item_id: int,
+        platform_family: str,
+        price_usd: float,
+        edition_id: int | None,
+        alerted_at: str | None = None,
+    ) -> None:
+        scope.require_active()
+        now_iso = alerted_at or _utc_now_iso()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            conn.execute(
+                """
+                UPDATE wishlist_platform_targets
+                SET last_alerted_at = ?,
+                    last_alerted_price_usd = ?,
+                    last_alerted_edition_id = ?,
+                    updated_at = ?
+                WHERE wishlist_item_id = ? AND platform_family = ?
+                """,
+                (now_iso, round(float(price_usd), 2), edition_id, now_iso, wishlist_item_id, platform_family),
+            )

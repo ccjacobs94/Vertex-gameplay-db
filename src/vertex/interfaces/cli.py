@@ -68,6 +68,10 @@ def _build_parser() -> argparse.ArgumentParser:
     srv = sub.add_parser("serve", help="Run the Vertex HTTP server")
     srv.add_argument("--host", default=None)
     srv.add_argument("--port", type=int, default=None)
+
+    mcp_srv = sub.add_parser("serve-mcp", help="Run the standalone Vertex Streamable HTTP MCP server")
+    mcp_srv.add_argument("--host", default=None)
+    mcp_srv.add_argument("--port", type=int, default=None)
     return parser
 
 
@@ -188,6 +192,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 create_app(settings),
                 host=args.host or settings.bind_host,
                 port=args.port or settings.port,
+            )
+            return 0
+
+        if args.command == "serve-mcp":
+            import uvicorn
+
+            from vertex.interfaces.mcp.server import create_mcp_app
+
+            uvicorn.run(
+                create_mcp_app(settings),
+                host=args.host or settings.mcp_bind_host,
+                port=args.port or settings.mcp_port,
             )
             return 0
 

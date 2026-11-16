@@ -27,15 +27,17 @@ This document describes the replacement architecture under `src/vertex/` alongsi
 - **`src/vertex/wishlist/`**:
   - `models.py` / `repository.py` / `service.py`: Personal wishlist tracking, canonical editions/SKUs, ownership conflict auto-muting, manual price & all-time low history, smart upgrade deal evaluation, and idempotent library purchase conversion.
 - **`src/vertex/integrations/`**:
-  - `platforms/base.py` & `steam.py`: `PlatformAdapter` protocol + async `httpx` Steam library/vanity client + durable job runner execution (`sync_steam_for_user`).
-  - `prices/base.py`: `PriceAdapter` boundary for storefront price adapters.
+  - `platforms/`: `PlatformAdapter` protocol + async `httpx` Steam, Xbox, PSN, and GOG adapters, durable job runner (`PlatformSyncService`), achievements sync, and live Xbox/GOG telemetry + RTA (`TelemetryService`, `XboxRtaManager`).
+  - `prices/`: Six storefront price adapters (`ITADAdapter`, `CheapSharkAdapter`, `SteamStoreAdapter`, `GOGDirectAdapter`, `XboxCatalogAdapter`, `PSNStoreGraphQLAdapter`), canonical title/edition matching, and automated job-backed `WishlistSyncService`.
+  - `push/`: Optional disabled-by-default `WebPushService` with HTTPS allowlist SSRF validation, `SecretBox`-encrypted ECDSA P-256 VAPID keys in `system.db`, and deduplicated deal alert fan-out.
   - `homeassistant/`: Home Assistant state span parser, CSV importer, and authenticated live event webhook feeding `ActivityService`.
   - `catalog_lookup.py`: Optional `HttpCatalogLookupProvider` implementation kept outside `catalog/` domain core.
 - **`src/vertex/migration/legacy_importer.py`**:
   - Non-destructive versioned importer reading legacy single-user or multi-user SQLite layouts into a fresh destination directory, producing canonical parity verification reports and translating legacy billing/approval states cleanly.
 - **`src/vertex/interfaces/`**:
-  - `http/`: Modular FastAPI `APIRouter`s (`health`, `auth`, `account`, `admin`, `library`, `analytics`, `catalog`, `homeassistant`, `wishlist`, `connections`, `jobs`, `portability`), middleware enforcing Host/CSRF/TrustedProxy rules, and Pydantic OpenAPI schemas.
-  - `cli.py`: Explicit maintenance CLI (`migrate`, `bootstrap-admin`, `reset-password`, `backup`, `restore`, `import-legacy`, `diagnostics`, `serve`).
+  - `http/`: Modular FastAPI `APIRouter`s (`health`, `auth`, `account`, `admin`, `library`, `analytics`, `catalog`, `homeassistant`, `telemetry`, `wishlist`, `push`, `connections`, `jobs`, `portability`), middleware enforcing Host/CSRF/TrustedProxy rules, and Pydantic OpenAPI schemas.
+  - `mcp/`: Streamable HTTP `MCPServer` exposing all 23 tools and 2 resources via scoped revocable Bearer PATs (`VertexPatTokenVerifier`) and `McpSecurityMiddleware` (`Host`, `Origin`, `mcp-session-id` owner binding), mounted on `/mcp` and standalone via `vertex serve-mcp`.
+  - `cli.py`: Explicit maintenance CLI (`migrate`, `bootstrap-admin`, `reset-password`, `backup`, `restore`, `import-legacy`, `diagnostics`, `build-frontend`, `serve`, `serve-mcp`).
 - **`frontend/`**:
   - Four-view TypeScript modular UI (`Library`, `Activity`, `Insights`, `Wishlist`, plus `Settings` and `Administration`), compiled deterministically offline via `scripts/build_frontend.py`, paired with static-only service worker caching (`sw.js`).
 

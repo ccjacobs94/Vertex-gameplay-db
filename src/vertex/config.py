@@ -51,6 +51,18 @@ class Settings:
     worker_lease_seconds: int = 120
     scheduled_sync_enabled: bool = True
     scheduled_sync_interval_seconds: float = 6 * 3600.0
+    wishlist_sync_enabled: bool = True
+    wishlist_sync_interval_seconds: float = 24 * 3600.0
+    itad_api_key: str = ""
+    web_push_enabled: bool = False
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_claim_email: str = "mailto:admin@localhost.localdomain"
+    allowed_push_hosts: tuple[str, ...] = ()
+    mcp_enabled: bool = True
+    mcp_bind_host: str = "127.0.0.1"
+    mcp_port: int = 8096
+    mcp_allowed_origins: tuple[str, ...] = ()
     telemetry_enabled: bool = True
     telemetry_poll_interval_seconds: float = 900.0
     telemetry_flush_delay_seconds: float = 45.0
@@ -102,9 +114,19 @@ class Settings:
 
         sync_hours_raw = env.get("VERTEX_SYNC_INTERVAL_HOURS") or env.get("SYNC_INTERVAL_HOURS") or "6"
         sync_interval_secs = max(60.0, float(sync_hours_raw) * 3600.0)
+        wishlist_hours_raw = (
+            env.get("VERTEX_WISHLIST_SYNC_INTERVAL_HOURS")
+            or env.get("WISHLIST_SYNC_INTERVAL_HOURS")
+            or "24"
+        )
+        wishlist_interval_secs = max(60.0, float(wishlist_hours_raw) * 3600.0)
         telem_poll_secs = max(10.0, float(env.get("VERTEX_TELEMETRY_POLL_INTERVAL") or "900.0"))
         telem_flush_secs = max(0.0, float(env.get("VERTEX_TELEMETRY_FLUSH_DELAY") or "45.0"))
         daily_sweep_secs = max(60.0, float(env.get("VERTEX_DAILY_SWEEP_INTERVAL") or str(24 * 3600.0)))
+        allowed_push_hosts = _parse_csv(env.get("VERTEX_ALLOWED_PUSH_HOSTS"))
+        mcp_allowed_origins = _parse_csv(
+            env.get("VERTEX_MCP_ALLOWED_ORIGINS") or env.get("MCP_ALLOWED_ORIGINS")
+        )
 
         return cls(
             data_dir=resolved_data,
@@ -131,6 +153,22 @@ class Settings:
             worker_lease_seconds=max(10, int(env.get("VERTEX_WORKER_LEASE_SECONDS") or "120")),
             scheduled_sync_enabled=_parse_bool(env.get("VERTEX_SCHEDULED_SYNC_ENABLED"), True),
             scheduled_sync_interval_seconds=sync_interval_secs,
+            wishlist_sync_enabled=_parse_bool(env.get("VERTEX_WISHLIST_SYNC_ENABLED"), True),
+            wishlist_sync_interval_seconds=wishlist_interval_secs,
+            itad_api_key=(env.get("ITAD_API_KEY") or "").strip(),
+            web_push_enabled=_parse_bool(env.get("VERTEX_WEB_PUSH_ENABLED"), False),
+            vapid_public_key=(env.get("VERTEX_VAPID_PUBLIC_KEY") or env.get("VAPID_PUBLIC_KEY") or "").strip(),
+            vapid_private_key=(env.get("VERTEX_VAPID_PRIVATE_KEY") or env.get("VAPID_PRIVATE_KEY") or "").strip(),
+            vapid_claim_email=(
+                env.get("VERTEX_VAPID_CLAIM_EMAIL")
+                or env.get("VAPID_CLAIM_EMAIL")
+                or "mailto:admin@localhost.localdomain"
+            ).strip(),
+            allowed_push_hosts=allowed_push_hosts,
+            mcp_enabled=_parse_bool(env.get("VERTEX_MCP_ENABLED"), True),
+            mcp_bind_host=(env.get("VERTEX_MCP_BIND_HOST") or "127.0.0.1").strip(),
+            mcp_port=int(env.get("VERTEX_MCP_PORT") or env.get("MCP_PORT") or "8096"),
+            mcp_allowed_origins=mcp_allowed_origins,
             telemetry_enabled=_parse_bool(env.get("VERTEX_TELEMETRY_ENABLED"), True),
             telemetry_poll_interval_seconds=telem_poll_secs,
             telemetry_flush_delay_seconds=telem_flush_secs,

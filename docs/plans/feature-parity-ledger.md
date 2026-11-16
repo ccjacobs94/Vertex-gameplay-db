@@ -127,16 +127,16 @@ Legacy baseline: `scripts/check.sh` passes **295 tests across 28 test modules** 
 | `/api/wishlist/{item_id}/price` | POST | `POST /api/wishlist/{item_id}/price` | Keep | 4 |
 | `/api/wishlist/{item_id}/purchase` | POST | `POST /api/wishlist/{item_id}/purchase` | Keep (idempotent conversion) | 4 |
 | `/api/wishlist/{item_id}/history` | GET | `GET /api/wishlist/{item_id}/history` | Keep | 4 |
-| `/api/wishlist/sync` | POST | `POST /api/wishlist/sync` | Keep (all 6 adapters in Phase 4) | 4 |
-| `/api/push/vapid-public-key`, `/api/push/subscribe`, `/api/push/test` | GET, POST, DELETE | Optional plugin routes | Optional, disabled by default | 4 |
+| `/api/wishlist/sync` | POST | `POST /api/wishlist/sync` (job queue + all 6 adapters) | Keep (done) | 4 (Done) |
+| `/api/push/vapid-public-key`, `/api/push/subscribe`, `/api/push/test` | GET, POST, DELETE | `/api/push/vapid-public-key`, `/api/push/subscribe`, `/api/push/test` | Optional, disabled by default (`VERTEX_WEB_PUSH_ENABLED=false`) | 4 (Done) |
 
 ### MCP Transports & OAuth Provider (10 routes in `oauth_provider.py` + 3 MCP mount prefixes in `app.py`)
 
 | Endpoint | Decision | Phase |
 | --- | --- | --- |
-| `/mcp{path:path}` (Streamable HTTP) | Keep as optional scoped MCP interface on private network | 5 |
-| `/sse{path:path}`, `/messages{path:path}`, root SSE ASGI fallback | Defer; retain only if selected LAN/VPN MCP client requires SSE | 5 decision |
-| `/.well-known/*`, `/oauth/authorize`, `/oauth/token`, `/oauth/userinfo`, `/oauth/register` (10 OAuth routes) | Defer; prefer per-user revocable PATs; add OAuth only if selected client requires it | 5 decision |
+| `/mcp` (Streamable HTTP) | Implemented in `src/vertex/interfaces/mcp/server.py` (main app mount + `vertex serve-mcp`) using revocable scoped PATs | 5 (Done; ADR 0006) |
+| `/sse{path:path}`, `/messages{path:path}`, root SSE ASGI fallback | Retired on private-network rebuild (`410 Gone` guidance on standalone MCP listener) | 5 decision (ADR 0006) |
+| `/.well-known/*`, `/oauth/authorize`, `/oauth/token`, `/oauth/userinfo`, `/oauth/register` (10 OAuth routes) | Retired/deferred; standardized on scoped Bearer PATs with Host/Origin/session-owner validation | 5 decision (ADR 0006) |
 
 ---
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -12,6 +12,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.routing import Route
 
 from vertex import __version__
 from vertex.activity.service import ActivityService
@@ -41,6 +42,8 @@ from vertex.integrations.homeassistant.service import HomeAssistantService
 from vertex.integrations.platforms.base import PlatformAdapterError
 from vertex.integrations.platforms.sync_service import PlatformSyncService
 from vertex.integrations.platforms.telemetry import TelemetryService, XboxRtaManager
+from vertex.integrations.prices.sync_service import WishlistSyncService
+from vertex.integrations.push.web_push import WebPushService
 from vertex.interfaces.http import (
     account,
     admin,
@@ -53,10 +56,12 @@ from vertex.interfaces.http import (
     jobs,
     library,
     portability,
+    push as push_http,
     telemetry as telemetry_http,
     wishlist as wishlist_http,
 )
 from vertex.interfaces.http.deps import AppServices, validate_request_host_and_csrf
+from vertex.interfaces.mcp.server import build_mcp_server, build_mcp_streamable_app
 from vertex.library.portability import LibraryPortabilityService
 from vertex.library.service import LibraryService
 from vertex.wishlist.service import WishlistService
@@ -64,11 +69,12 @@ from vertex.wishlist.service import WishlistService
 logger = logging.getLogger("vertex.app")
 
 
-def create_app(
+def build_app_services(
     settings: Settings | None = None,
     *,
     client_factory: Callable[[], httpx.AsyncClient] | None = None,
-) -> FastAPI:
+) -> AppServices:
+    """Assemble shared infrastructure, domain services, and external adapters."""
     cfg = settings or Settings.from_env()
     db_manager = DatabaseManager(cfg)
     secret_box = SecretBox(cfg.secret_key, cfg.previous_secret_keys)
@@ -85,6 +91,21 @@ def create_app(
     activity_svc = ActivityService(db_manager)
     analytics_svc = AnalyticsService(db_manager)
     wishlist_svc = WishlistService(db_manager, library_svc)
+    web_push = WebPushService(
+        settings=cfg,
+        db_manager=db_manager,
+        secret_box=secret_box,
+        wishlist_service=wishlist_svc,
+    )
+    wishlist_sync = WishlistSyncService(
+        settings=cfg,
+        job_queue=job_queue,
+        identity_service=identity,
+        catalog_service=catalog,
+        wishlist_service=wishlist_svc,
+        web_push_service=web_push,
+        client_factory=client_factory,
+    )
     ha_history_provider = HttpHomeAssistantHistoryProvider(client_factory=client_factory)
     ha_svc = HomeAssistantService(
         db_manager,
@@ -99,6 +120,7 @@ def create_app(
         catalog_service=catalog,
         library_service=library_svc,
         activity_service=activity_svc,
+        wishlist_sync=wishlist_sync,
         client_factory=client_factory,
     )
     telemetry_svc = TelemetryService(
@@ -111,7 +133,7 @@ def create_app(
         client_factory=client_factory,
     )
 
-    services = AppServices(
+    return AppServices(
         settings=cfg,
         db_manager=db_manager,
         secret_box=secret_box,
@@ -123,10 +145,27 @@ def create_app(
         activity=activity_svc,
         analytics=analytics_svc,
         wishlist=wishlist_svc,
+        wishlist_sync=wishlist_sync,
+        web_push=web_push,
         homeassistant=ha_svc,
         platform_sync=platform_sync,
         telemetry=telemetry_svc,
     )
+
+
+def create_app(
+    settings: Settings | None = None,
+    *,
+    client_factory: Callable[[], httpx.AsyncClient] | None = None,
+) -> FastAPI:
+    services = build_app_services(settings, client_factory=client_factory)
+    cfg = services.settings
+    db_manager = services.db_manager
+    identity = services.identity
+    wishlist_sync = services.wishlist_sync
+    platform_sync = services.platform_sync
+    telemetry_svc = services.telemetry
+    mcp_server = build_mcp_server(services) if cfg.mcp_enabled else None
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -207,10 +246,28 @@ def create_app(
                 except Exception as exc:
                     logger.warning("Daily sweep loop error: %s", exc)
 
+        async def _wishlist_sync_loop() -> None:
+            while not stop_event.is_set():
+                try:
+                    await asyncio.wait_for(
+                        stop_event.wait(),
+                        timeout=max(1.0, float(cfg.wishlist_sync_interval_seconds)),
+                    )
+                except TimeoutError:
+                    pass
+                if stop_event.is_set():
+                    break
+                try:
+                    wishlist_sync.enqueue_scheduled_sync_iteration()
+                except Exception as exc:
+                    logger.warning("Scheduled wishlist sync loop error: %s", exc)
+
         if cfg.worker_enabled:
             background_tasks.append(asyncio.create_task(_worker_loop()))
             if cfg.scheduled_sync_enabled and cfg.outbound_sync_enabled:
                 background_tasks.append(asyncio.create_task(_scheduled_sync_loop()))
+            if cfg.wishlist_sync_enabled and cfg.outbound_sync_enabled:
+                background_tasks.append(asyncio.create_task(_wishlist_sync_loop()))
         if cfg.telemetry_enabled and cfg.outbound_sync_enabled:
             if cfg.worker_enabled:
                 try:
@@ -220,18 +277,21 @@ def create_app(
             background_tasks.append(asyncio.create_task(_telemetry_loop()))
             background_tasks.append(asyncio.create_task(_daily_sweep_loop()))
 
-        try:
-            yield
-        finally:
-            stop_event.set()
-            await rta_manager.shutdown()
-            for task in background_tasks:
-                task.cancel()
-            for task in background_tasks:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        async with AsyncExitStack() as stack:
+            if mcp_server is not None:
+                await stack.enter_async_context(mcp_server.session_manager.run())
+            try:
+                yield
+            finally:
+                stop_event.set()
+                await rta_manager.shutdown()
+                for task in background_tasks:
+                    task.cancel()
+                for task in background_tasks:
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
     app = FastAPI(
         title="Vertex Self-Hosted API",
@@ -242,13 +302,15 @@ def create_app(
 
     @app.middleware("http")
     async def security_and_cache_middleware(request: Request, call_next: Any):
-        try:
-            validate_request_host_and_csrf(request, cfg)
-        except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"code": "security_blocked", "detail": exc.detail})
+        is_mcp_path = request.url.path == "/mcp" or request.url.path.startswith("/mcp/")
+        if not is_mcp_path:
+            try:
+                validate_request_host_and_csrf(request, cfg)
+            except HTTPException as exc:
+                return JSONResponse(status_code=exc.status_code, content={"code": "security_blocked", "detail": exc.detail})
 
         response = await call_next(request)
-        if request.url.path.startswith("/api/"):
+        if request.url.path.startswith("/api/") or is_mcp_path:
             response.headers["Cache-Control"] = "no-store, private"
             response.headers["Pragma"] = "no-cache"
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -311,7 +373,14 @@ def create_app(
     app.include_router(homeassistant.router)
     app.include_router(telemetry_http.router)
     app.include_router(wishlist_http.router)
+    app.include_router(push_http.router)
     app.include_router(portability.router)
+
+    if mcp_server is not None:
+        secured_mcp_app = build_mcp_streamable_app(mcp_server, services)
+        mcp_methods = ["GET", "POST", "DELETE", "OPTIONS"]
+        app.router.routes.append(Route("/mcp", endpoint=secured_mcp_app, methods=mcp_methods))
+        app.router.routes.append(Route("/mcp/", endpoint=secured_mcp_app, methods=mcp_methods))
 
     dist_dir = Path(cfg.frontend_dist_dir)
     if dist_dir.exists() and (dist_dir / "index.html").exists():

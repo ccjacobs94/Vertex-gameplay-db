@@ -10,6 +10,7 @@ from vertex.wishlist.models import (
     EditionPlatformSku,
     GameEdition,
     PriceHistoryEntry,
+    PushSubscriptionRecord,
     WishlistPlatformTarget,
 )
 
@@ -100,4 +101,18 @@ def row_to_price_history(row: sqlite3.Row) -> PriceHistoryEntry:
         is_all_time_low=bool(row["is_all_time_low"]),
         source=row["source"],
         recorded_at=row["recorded_at"],
+    )
+
+
+def row_to_push_subscription(row: sqlite3.Row) -> PushSubscriptionRecord:
+    return PushSubscriptionRecord(
+        id=int(row["id"]),
+        endpoint=row["endpoint"],
+        p256dh_key=row["p256dh_key"],
+        auth_key=row["auth_key"],
+        user_agent=row["user_agent"] or "",
+        device_label=row["device_label"] or "",
+        is_active=bool(row["is_active"]),
+        created_at=row["created_at"],
+        last_used_at=row["last_used_at"],
     )

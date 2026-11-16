@@ -914,3 +914,65 @@ class TelemetrySweepResponse(BaseModel):
 class AchievementBackfillResponse(BaseModel):
     sessions_created: int
     games_backfilled: int
+
+
+class WishlistCandidateResponse(BaseModel):
+    title: str
+    normalized_title: str
+    release_year: int | None = None
+    developer: str = ""
+    publisher: str = ""
+    cover_url: str | None = None
+    genres: list[str] = Field(default_factory=list)
+    storefront: str
+    store_sku_id: str
+    platform_hints: list[str] = Field(default_factory=list)
+    current_price_usd: float | None = None
+    ownership_conflict: OwnershipConflictResponse
+
+
+class WishlistCandidatesSearchResponse(BaseModel):
+    query: str
+    candidates: list[WishlistCandidateResponse]
+    errors: list[str] = Field(default_factory=list)
+
+
+class WishlistSyncRequest(BaseModel):
+    wishlist_item_id: int | None = None
+    force: bool = False
+    max_age_seconds: int = Field(default=3600, ge=0, le=86400 * 30)
+
+
+class PushVapidKeyResponse(BaseModel):
+    enabled: bool
+    public_key: str
+
+
+class PushSubscriptionKeys(BaseModel):
+    p256dh: str
+    auth: str
+
+
+class PushSubscribeRequest(BaseModel):
+    endpoint: str
+    keys: PushSubscriptionKeys | None = None
+    p256dh: str | None = None
+    auth: str | None = None
+
+
+class PushUnsubscribeRequest(BaseModel):
+    endpoint: str
+
+
+class PushSubscribeResponse(BaseModel):
+    id: int
+    endpoint: str
+    created_at: str
+
+
+class PushTestResponse(BaseModel):
+    status: str
+    sent: int
+    failed: int
+    removed: int
+    errors: list[str] = Field(default_factory=list)

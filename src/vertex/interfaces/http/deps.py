@@ -20,6 +20,8 @@ from vertex.infrastructure.sqlite import DatabaseManager
 from vertex.integrations.homeassistant.service import HomeAssistantService
 from vertex.integrations.platforms.sync_service import PlatformSyncService
 from vertex.integrations.platforms.telemetry import TelemetryService
+from vertex.integrations.prices.sync_service import WishlistSyncService
+from vertex.integrations.push.web_push import WebPushService
 from vertex.library.portability import LibraryPortabilityService
 from vertex.library.service import LibraryService
 from vertex.wishlist.service import WishlistService
@@ -40,6 +42,8 @@ class AppServices:
     activity: ActivityService
     analytics: AnalyticsService
     wishlist: WishlistService
+    wishlist_sync: WishlistSyncService
+    web_push: WebPushService
     homeassistant: HomeAssistantService
     platform_sync: PlatformSyncService
     telemetry: TelemetryService

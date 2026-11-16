@@ -20,6 +20,11 @@ services:
       VERTEX_TRUSTED_PROXIES: "${VERTEX_TRUSTED_PROXIES:-127.0.0.1,172.18.0.0/16}"
       VERTEX_COOKIE_SECURE: "${VERTEX_COOKIE_SECURE:-false}"
       VERTEX_OUTBOUND_SYNC_ENABLED: "${VERTEX_OUTBOUND_SYNC_ENABLED:-true}"
+      VERTEX_WISHLIST_SYNC_ENABLED: "${VERTEX_WISHLIST_SYNC_ENABLED:-true}"
+      VERTEX_WISHLIST_SYNC_INTERVAL_SECONDS: "${VERTEX_WISHLIST_SYNC_INTERVAL_SECONDS:-21600}"
+      VERTEX_WEB_PUSH_ENABLED: "${VERTEX_WEB_PUSH_ENABLED:-false}"
+      VERTEX_MCP_ENABLED: "${VERTEX_MCP_ENABLED:-true}"
+      VERTEX_MCP_ALLOWED_ORIGINS: "${VERTEX_MCP_ALLOWED_ORIGINS:-}"
       STEAM_API_KEY: "${STEAM_API_KEY:-}"
     volumes:
       # Active SQLite WAL databases MUST sit on a local filesystem (never NFS/SMB mounts).
@@ -30,3 +35,34 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # Optional isolated dedicated MCP Streamable HTTP listener (activate via: --profile dedicated-mcp)
+  vertex-mcp:
+    profiles: ["dedicated-mcp"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.v2
+    container_name: vertex-mcp
+    restart: unless-stopped
+    command: ["python", "-m", "vertex", "serve-mcp", "--host", "0.0.0.0", "--port", "8096"]
+    ports:
+      # Loopback by default. Bind Tailscale/VPN IP for remote AI clients (e.g. 100.x.y.z:8097:8096).
+      - "127.0.0.1:8097:8096"
+    environment:
+      VERTEX_DATA_DIR: "/app/data"
+      VERTEX_SECRET_KEY: "${VERTEX_SECRET_KEY:?Set VERTEX_SECRET_KEY in .env}"
+      VERTEX_ALLOWED_HOSTS: "${VERTEX_ALLOWED_HOSTS:-localhost,127.0.0.1}"
+      VERTEX_MCP_BIND_HOST: "0.0.0.0"
+      VERTEX_MCP_PORT: "8096"
+      VERTEX_MCP_ALLOWED_ORIGINS: "${VERTEX_MCP_ALLOWED_ORIGINS:-}"
+    volumes:
+      - "${VERTEX_DATA_PATH:-./data-v2}:/app/data"
+    depends_on:
+      vertex:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8096/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

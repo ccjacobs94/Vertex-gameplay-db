@@ -8,11 +8,19 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 
 from vertex.infrastructure.scope import UserScope
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+
+from vertex.identity.models import UserScope
 from vertex.interfaces.http.deps import (
     AppServices,
     get_services,
     require_read_scope,
     require_write_scope,
+)
+from vertex.interfaces.http.schemas import (
+    JobResponse,
+    WishlistCandidatesSearchResponse,
+    WishlistSyncRequest,
 )
 from vertex.interfaces.http.schemas import (
     PriceHistoryEntryResponse,
@@ -93,6 +101,35 @@ def add_wishlist_item(
         force_track_owned=body.force_track_owned,
     )
     return _serialize_item(item)
+
+
+@router.get("/candidates", response_model=WishlistCandidatesSearchResponse)
+async def search_wishlist_candidates(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(10, ge=1, le=25),
+    scope: UserScope = Depends(require_read_scope),
+    services: AppServices = Depends(get_services),
+) -> WishlistCandidatesSearchResponse:
+    result = await services.wishlist_sync.search_candidates(scope, q, limit=limit)
+    return WishlistCandidatesSearchResponse(**result)
+
+
+@router.post("/sync", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+def enqueue_wishlist_price_sync(
+    body: WishlistSyncRequest | None = None,
+    scope: UserScope = Depends(require_write_scope),
+    services: AppServices = Depends(get_services),
+) -> JobResponse:
+    req = body or WishlistSyncRequest()
+    if req.wishlist_item_id:
+        services.wishlist.get_item(scope, req.wishlist_item_id)
+    job = services.wishlist_sync.enqueue_wishlist_sync(
+        scope,
+        wishlist_item_id=req.wishlist_item_id,
+        force=req.force,
+        max_age_seconds=req.max_age_seconds,
+    )
+    return JobResponse.model_validate(job, from_attributes=True)
 
 
 @router.get("/deals", response_model=WishlistDealEvaluationResponse)

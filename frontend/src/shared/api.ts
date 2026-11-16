@@ -39,6 +39,10 @@ import type {
   PlaySessionResponse,
   PlaytimePromptResolutionResponse,
   PlaytimePromptResponse,
+  PushSubscribeRequest,
+  PushSubscribeResponse,
+  PushTestResponse,
+  PushVapidKeyResponse,
   ReconcileCandidateResponse,
   ResetDismissalsResponse,
   SessionAnalyticsResponse,
@@ -50,6 +54,7 @@ import type {
   UpdateConnectionsRequest,
   UpdateSessionRequest,
   UserAccountResponse,
+  WishlistCandidatesSearchResponse,
   WishlistCreateRequest,
   WishlistDealEvaluationResponse,
   WishlistHistoryResponse,
@@ -59,6 +64,7 @@ import type {
   WishlistPriceRecordResponse,
   WishlistPurchaseRequest,
   WishlistPurchaseResponse,
+  WishlistSyncRequest,
   WishlistUpdateRequest,
 } from "./api-types.ts";
 
@@ -523,4 +529,38 @@ export function getWishlistDeals(smartUpgradesOnly = false, includeAboveTarget =
   });
   if (platform) qs.set("platform", platform);
   return apiFetch<WishlistDealEvaluationResponse>(`/api/wishlist/deals?${qs.toString()}`);
+}
+
+export function searchWishlistCandidates(query: string, limit = 10): Promise<WishlistCandidatesSearchResponse> {
+  const qs = new URLSearchParams({ q: query, limit: String(limit) });
+  return apiFetch<WishlistCandidatesSearchResponse>(`/api/wishlist/candidates?${qs.toString()}`);
+}
+
+export function syncWishlistPrices(body: WishlistSyncRequest = {}): Promise<JobResponse> {
+  return apiFetch<JobResponse>("/api/wishlist/sync", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function getVapidPublicKey(): Promise<PushVapidKeyResponse> {
+  return apiFetch<PushVapidKeyResponse>("/api/push/vapid-public-key");
+}
+
+export function subscribePush(body: PushSubscribeRequest): Promise<PushSubscribeResponse> {
+  return apiFetch<PushSubscribeResponse>("/api/push/subscribe", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function unsubscribePush(endpoint: string): Promise<void> {
+  return apiFetch<void>("/api/push/subscribe", {
+    method: "DELETE",
+    body: JSON.stringify({ endpoint }),
+  });
+}
+
+export function testPushNotification(): Promise<PushTestResponse> {
+  return apiFetch<PushTestResponse>("/api/push/test", { method: "POST" });
 }

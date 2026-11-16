@@ -614,6 +614,41 @@ export interface ProviderStatusResponse {
   credential_expired: boolean;
 }
 
+export interface PushSubscribeRequest {
+  endpoint: string;
+  keys?: PushSubscriptionKeys | null;
+  p256dh?: string | null;
+  auth?: string | null;
+}
+
+export interface PushSubscribeResponse {
+  id: number;
+  endpoint: string;
+  created_at: string;
+}
+
+export interface PushSubscriptionKeys {
+  p256dh: string;
+  auth: string;
+}
+
+export interface PushTestResponse {
+  status: string;
+  sent: number;
+  failed: number;
+  removed: number;
+  errors?: Array<string>;
+}
+
+export interface PushUnsubscribeRequest {
+  endpoint: string;
+}
+
+export interface PushVapidKeyResponse {
+  enabled: boolean;
+  public_key: string;
+}
+
 export interface ReadinessResponse {
   status: string;
   version: string;
@@ -780,6 +815,27 @@ export interface ValidationError {
   ctx?: Record<string, unknown>;
 }
 
+export interface WishlistCandidateResponse {
+  title: string;
+  normalized_title: string;
+  release_year?: number | null;
+  developer?: string;
+  publisher?: string;
+  cover_url?: string | null;
+  genres?: Array<string>;
+  storefront: string;
+  store_sku_id: string;
+  platform_hints?: Array<string>;
+  current_price_usd?: number | null;
+  ownership_conflict: OwnershipConflictResponse;
+}
+
+export interface WishlistCandidatesSearchResponse {
+  query: string;
+  candidates: Array<WishlistCandidateResponse>;
+  errors?: Array<string>;
+}
+
 export interface WishlistCreateRequest {
   title: string;
   platform_targets?: Array<WishlistTargetInput | string>;
@@ -904,6 +960,12 @@ export interface WishlistPurchaseResponse {
   item: WishlistItemResponse;
   library_game_id: number;
   already_purchased: boolean;
+}
+
+export interface WishlistSyncRequest {
+  wishlist_item_id?: number | null;
+  force?: boolean;
+  max_age_seconds?: number;
 }
 
 export interface WishlistTargetInput {

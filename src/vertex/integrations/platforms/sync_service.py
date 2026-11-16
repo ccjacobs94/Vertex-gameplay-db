@@ -73,6 +73,7 @@ class PlatformSyncService:
         xbox_adapter: XboxAdapter | None = None,
         psn_adapter: PSNAdapter | None = None,
         gog_adapter: GOGAdapter | None = None,
+        wishlist_sync: Any | None = None,
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
     ) -> None:
         self.db_manager = db_manager
@@ -88,6 +89,7 @@ class PlatformSyncService:
             client_id=db_manager.settings.gog_client_id,
             client_secret=db_manager.settings.gog_client_secret,
         )
+        self.wishlist_sync = wishlist_sync
         self.client_factory = client_factory or (lambda: httpx.AsyncClient(timeout=25.0))
 
     def enqueue_steam_sync(self, scope: UserScope) -> JobRecord:
@@ -216,6 +218,8 @@ class PlatformSyncService:
             return await self._execute_psn_sync(job, scope, worker_id)
         if job.kind == "gog_sync":
             return await self._execute_gog_sync(job, scope, worker_id)
+        if job.kind == "wishlist_sync" and self.wishlist_sync is not None:
+            return await self.wishlist_sync.process_job(job, scope, worker_id)
 
         return self.job_queue.fail_job(
             job.id,

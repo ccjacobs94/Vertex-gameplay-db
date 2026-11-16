@@ -1,6 +1,6 @@
 /* Static-only Service Worker: NEVER caches private /api/* routes and wipes caches on logout. */
 
-const STATIC_CACHE = "vertex-v2-static-6";
+const STATIC_CACHE = "vertex-v2-static-7";
 const STATIC_ASSETS = [
   "/",
   "/manifest.webmanifest",
@@ -55,7 +55,13 @@ self.addEventListener("fetch", (event) => {
   }
 
   // Strictly NEVER cache API or health endpoints.
-  if (url.pathname.startsWith("/api/") || url.pathname === "/healthz" || url.pathname === "/readyz") {
+  if (
+    url.pathname.startsWith("/api/") ||
+    url.pathname === "/mcp" ||
+    url.pathname.startsWith("/mcp/") ||
+    url.pathname === "/healthz" ||
+    url.pathname === "/readyz"
+  ) {
     event.respondWith(fetch(req, { cache: "no-store" }));
     return;
   }
@@ -64,6 +70,44 @@ self.addEventListener("fetch", (event) => {
     caches.match(req).then((cached) => {
       if (cached) return cached;
       return fetch(req);
+    })
+  );
+});
+
+self.addEventListener("push", (event) => {
+  let payload = {
+    title: "Vertex Deal Alert",
+    body: "A tracked wishlist game hit your target price.",
+    url: "/#wishlist",
+    tag: "vertex-deals",
+  };
+  if (event.data) {
+    try {
+      const parsed = event.data.json();
+      payload = { ...payload, ...parsed };
+    } catch {
+      payload.body = event.data.text() || payload.body;
+    }
+  }
+  event.waitUntil(
+    self.registration.showNotification(payload.title, {
+      body: payload.body,
+      tag: payload.tag || "vertex-deals",
+      data: { url: payload.url || "/#wishlist" },
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = (event.notification.data && event.notification.data.url) || "/#wishlist";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ("focus" in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+      return undefined;
     })
   );
 });
