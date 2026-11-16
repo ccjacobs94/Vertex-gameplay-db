@@ -255,3 +255,87 @@ class TestPortability(unittest.TestCase):
             self.assertEqual(imported_by_ext["steam:10"].ownership_status, "Borrowed")
             self.assertEqual(imported_by_ext["xbox:10"].completion_status, "Dropped")
             self.assertEqual(imported_by_ext["xbox:10"].ownership_status, "None")
+
+    def test_portability_imports_rebuild_daily_playtime_ledger(self):
+        # Regression test: importing play_sessions via JSON or legacy SQLite must rebuild daily_playtime_ledger.
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            scope, ident, _lib, port = self._setup(tmp_path / "app")
+            ident.update_timezone(scope, timezone_name="America/Chicago")
+
+            # 2026-10-10T04:00:00Z -> 2026-10-09 23:00 CDT; 2026-10-10T06:00:00Z -> 2026-10-10 01:00 CDT
+            json_payload = {
+                "format_version": 1,
+                "games": [
+                    {
+                        "external_id": "steam:620",
+                        "title": "Portal 2",
+                        "platform": "PC (Steam)",
+                        "source": "Steam",
+                    }
+                ],
+                "play_sessions": [
+                    {
+                        "game_external_id": "steam:620",
+                        "platform": "PC (Steam)",
+                        "started_at": "2026-10-10T04:00:00+00:00",
+                        "ended_at": "2026-10-10T06:00:00+00:00",
+                        "duration_minutes": 120,
+                        "source": "Steam",
+                        "precision_level": "estimated",
+                        "is_locked": False,
+                    }
+                ],
+            }
+
+            # Dry run must NOT populate daily_playtime_ledger
+            dry_rep = port.import_json(scope, json_payload, mode="merge", dry_run=True)
+            self.assertEqual(dry_rep.sessions_added, 1)
+            with port.db_manager.library_connection(scope) as conn:
+                self.assertEqual(conn.execute("SELECT COUNT(*) FROM daily_playtime_ledger").fetchone()[0], 0)
+
+            rep = port.import_json(scope, json_payload, mode="merge", dry_run=False)
+            self.assertEqual(rep.sessions_added, 1)
+            with port.db_manager.library_connection(scope) as conn:
+                rows = {
+                    r["date"]: float(r["minutes_played"])
+                    for r in conn.execute("SELECT date, minutes_played FROM daily_playtime_ledger").fetchall()
+                }
+            self.assertEqual(rows, {"2026-10-09": 60.0, "2026-10-10": 60.0})
+
+            # Now test legacy SQLite snapshot with play_sessions in replace mode
+            snap_db = tmp_path / "legacy_sessions.db"
+            legacy_db.init_db(str(snap_db))
+            conn = sqlite3.connect(str(snap_db))
+            conn.execute(
+                """
+                INSERT INTO games (
+                    id, external_id, title, platform, source, playtime_hours, playtime_minutes,
+                    completion_status, created_at, updated_at
+                ) VALUES (1, 'xbox:1', 'Halo Infinite', 'Xbox', 'Xbox', 1.5, 90, 'Playing', '2026-10-15T00:00:00Z', '2026-10-15T00:00:00Z')
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO play_sessions (
+                    game_id, platform, started_at, ended_at, duration_minutes, source, is_locked
+                ) VALUES (1, 'Xbox', '2026-10-15T18:00:00Z', '2026-10-15T19:30:00Z', 90, 'Xbox', 0)
+                """
+            )
+            conn.commit()
+            export_db = tmp_path / "legacy_sessions_export.db"
+            dst_conn = sqlite3.connect(str(export_db))
+            try:
+                conn.backup(dst_conn)
+            finally:
+                dst_conn.close()
+                conn.close()
+
+            sql_rep = port.import_legacy_sqlite_bytes(scope, export_db.read_bytes(), mode="replace", dry_run=False)
+            self.assertEqual(sql_rep.sessions_added, 1)
+            with port.db_manager.library_connection(scope) as conn2:
+                rows2 = {
+                    r["date"]: float(r["minutes_played"])
+                    for r in conn2.execute("SELECT date, minutes_played FROM daily_playtime_ledger").fetchall()
+                }
+            self.assertEqual(rows2, {"2026-10-15": 90.0})

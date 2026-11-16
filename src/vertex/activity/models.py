@@ -38,3 +38,29 @@ class DailyLedgerEntry:
     minutes_played: float
     sessions_count: int
     first_session_hour: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class PlaytimePrompt:
+    id: int
+    game_id: int
+    title: str
+    platform: str
+    cover_url: str | None
+    current_status: str
+    previous_hours: float
+    new_hours: float
+    delta_hours: float
+    total_playtime_hours: float
+    detected_at: str
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class PlaytimePromptResolution:
+    prompt_id: int
+    action: str
+    game_id: int
+    completion_status: str
+    status_locked: bool
+    playtime_prompt_muted: bool

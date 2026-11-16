@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 from fastapi import Depends, HTTPException, Request
 
 from vertex.activity.service import ActivityService
+from vertex.analytics.service import AnalyticsService
 from vertex.catalog.service import CatalogService
 from vertex.config import Settings
 from vertex.identity.service import IdentityService
@@ -16,9 +17,11 @@ from vertex.infrastructure.jobs import JobQueue
 from vertex.infrastructure.scope import UserScope
 from vertex.infrastructure.secrets import SecretBox
 from vertex.infrastructure.sqlite import DatabaseManager
+from vertex.integrations.homeassistant.service import HomeAssistantService
 from vertex.integrations.platforms.sync_service import PlatformSyncService
 from vertex.library.portability import LibraryPortabilityService
 from vertex.library.service import LibraryService
+from vertex.wishlist.service import WishlistService
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
@@ -34,6 +37,9 @@ class AppServices:
     library: LibraryService
     portability: LibraryPortabilityService
     activity: ActivityService
+    analytics: AnalyticsService
+    wishlist: WishlistService
+    homeassistant: HomeAssistantService
     platform_sync: PlatformSyncService
 
 

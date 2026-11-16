@@ -88,3 +88,62 @@ class ImportReport:
     games_skipped: int
     sessions_added: int
     warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AchievementPlatformStatus:
+    game_id: int
+    platform: str
+    short_platform: str
+    source: str
+    unlocked: bool
+    unlock_time: str | None
+    reward_type: str | None
+    reward_value: str | None
+    rarity_pct: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class GroupedAchievement:
+    key: str
+    name: str
+    description: str
+    icon_url: str | None
+    icon_gray_url: str | None
+    is_hidden: bool
+    unlocked: bool
+    unlock_time: str | None
+    reward_type: str | None
+    reward_value: str | None
+    rarity_pct: float | None
+    unlocked_platforms: tuple[str, ...]
+    platforms: tuple[AchievementPlatformStatus, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PlatformAchievementSummary:
+    game_id: int
+    title: str
+    platform: str
+    short_platform: str
+    source: str
+    unlocked: int
+    total: int
+    percentage: float
+    achievements_synced_at: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class UnifiedAchievementSummary:
+    unlocked: int
+    total: int
+    percentage: float
+    overlap_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class GameAchievementsDetail:
+    game_id: int
+    unified_summary: UnifiedAchievementSummary
+    per_platform_summary: tuple[PlatformAchievementSummary, ...]
+    achievements: tuple[GroupedAchievement, ...]

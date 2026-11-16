@@ -25,3 +25,27 @@ class CatalogMetadataEntry:
     source: str
     retrieved_at: str
     updated_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogSearchResult:
+    normalized_title: str
+    title: str
+    steam_appid: str | None
+    genres: tuple[str, ...]
+    tags: tuple[str, ...]
+    release_year: int | None
+    critic_score: int | None
+    cover_url: str | None
+    source: str
+    retrieved_at: str
+    cached: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogEnrichmentReport:
+    games_enriched: int
+    covers_filled: int
+    remaining_without_genres: int
+    used_network: bool
+    message: str

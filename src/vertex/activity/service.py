@@ -5,9 +5,16 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, time, timedelta, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from vertex.activity.models import DailyLedgerEntry, ObservationOutcome, PlaySession
+from vertex.activity.models import (
+    DailyLedgerEntry,
+    ObservationOutcome,
+    PlaySession,
+    PlaytimePrompt,
+    PlaytimePromptResolution,
+)
 from vertex.activity.repository import row_to_ledger, row_to_session
 from vertex.infrastructure.errors import NotFoundError, ValidationError
 from vertex.infrastructure.scope import UserScope
@@ -142,7 +149,7 @@ def rebuild_daily_ledger_for_conn(
     conn: sqlite3.Connection,
     *,
     tz_name: str = "UTC",
-    timezone_eras: list[dict[str, str]] | None = None,
+    timezone_eras: list[dict[str, Any]] | None = None,
 ) -> None:
     eras = timezone_eras or []
     conn.execute("DELETE FROM daily_playtime_ledger")
@@ -212,7 +219,7 @@ class ActivityService:
     def __init__(self, db_manager: DatabaseManager) -> None:
         self.db_manager = db_manager
 
-    def _get_user_timezone_config(self, scope: UserScope) -> tuple[str, list[dict[str, str]]]:
+    def _get_user_timezone_config(self, scope: UserScope) -> tuple[str, list[dict[str, Any]]]:
         with self.db_manager.system_connection() as conn:
             row = conn.execute(
                 "SELECT timezone, timezone_eras_json FROM users WHERE id = ?",
@@ -358,6 +365,7 @@ class ActivityService:
                 )
 
             # Positive delta -> update baseline and last_synced_playtime_minutes atomically.
+            prev_obs_dt = _parse_iso(baseline_row["last_observed_at"])
             conn.execute(
                 """
                 UPDATE provider_baselines
@@ -380,6 +388,71 @@ class ActivityService:
                 conn.execute(
                     "UPDATE games SET completion_status = 'Playing', updated_at = ? WHERE id = ?",
                     (now_iso, game_id),
+                )
+            elif (
+                game["status_locked"]
+                and (game["completion_status"] or "Not Played") != "Playing"
+                and not game["playtime_prompt_muted"]
+                and delta >= 30
+            ):
+                prev_hrs = round(prev_baseline / 60.0, 2)
+                new_hrs = round(obs_mins / 60.0, 2)
+                delta_hrs = round(delta / 60.0, 2)
+                conn.execute(
+                    """
+                    INSERT INTO playtime_prompts (
+                        game_id, previous_hours, new_hours, delta_hours, current_status,
+                        detected_at, status, resolved_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL)
+                    ON CONFLICT(game_id) DO UPDATE SET
+                        new_hours = excluded.new_hours,
+                        delta_hours = CASE
+                            WHEN playtime_prompts.status = 'pending'
+                            THEN ROUND(playtime_prompts.delta_hours + excluded.delta_hours, 2)
+                            ELSE excluded.delta_hours
+                        END,
+                        previous_hours = CASE
+                            WHEN playtime_prompts.status = 'pending'
+                            THEN playtime_prompts.previous_hours
+                            ELSE excluded.previous_hours
+                        END,
+                        current_status = excluded.current_status,
+                        detected_at = excluded.detected_at,
+                        status = 'pending',
+                        resolved_at = NULL
+                    """,
+                    (
+                        game_id,
+                        prev_hrs,
+                        new_hrs,
+                        delta_hrs,
+                        game["completion_status"] or "Not Played",
+                        obs_iso,
+                    ),
+                )
+
+            # Avoid double-counting time already recorded by exact interval sources (e.g. Home Assistant).
+            exact_covered = 0
+            exact_rows = conn.execute(
+                """
+                SELECT duration_minutes, started_at, ended_at, source
+                FROM play_sessions
+                WHERE game_id = ? AND precision_level = 'exact' AND source != ?
+                """,
+                (game_id, source),
+            ).fetchall()
+            for er in exact_rows:
+                e_end = _parse_iso(er["ended_at"])
+                if prev_obs_dt < e_end <= obs_dt:
+                    exact_covered += int(er["duration_minutes"] or 0)
+
+            effective_delta = max(0, delta - exact_covered)
+            if effective_delta == 0:
+                return ObservationOutcome(
+                    status="covered_by_exact_session",
+                    delta_minutes=0,
+                    baseline_minutes=obs_mins,
+                    session=None,
                 )
 
             last_sess = conn.execute(
@@ -404,13 +477,13 @@ class ActivityService:
                         SET ended_at = ?, duration_minutes = duration_minutes + ?, updated_at = ?
                         WHERE id = ? AND is_locked = 0
                         """,
-                        (obs_iso, delta, now_iso, last_sess["id"]),
+                        (obs_iso, effective_delta, now_iso, last_sess["id"]),
                     )
                     session_id = int(last_sess["id"])
                     coalesced = True
 
             if not coalesced:
-                started_iso = (obs_dt - timedelta(minutes=delta)).isoformat()
+                started_iso = (obs_dt - timedelta(minutes=effective_delta)).isoformat()
                 cur = conn.execute(
                     """
                     INSERT INTO play_sessions (
@@ -423,7 +496,7 @@ class ActivityService:
                         platform,
                         started_iso,
                         obs_iso,
-                        delta,
+                        effective_delta,
                         source,
                         precision_level,
                         now_iso,
@@ -436,8 +509,202 @@ class ActivityService:
             sess_row = conn.execute("SELECT * FROM play_sessions WHERE id = ?", (session_id,)).fetchone()
             return ObservationOutcome(
                 status="session_coalesced" if coalesced else "session_created",
-                delta_minutes=delta,
+                delta_minutes=effective_delta,
                 baseline_minutes=obs_mins,
+                session=row_to_session(sess_row),
+            )
+
+    def record_interval_observation(
+        self,
+        scope: UserScope,
+        *,
+        game_id: int,
+        source: str,
+        platform: str,
+        started_at: str,
+        ended_at: str,
+        idempotency_key: str,
+        duration_minutes: int | None = None,
+        precision_level: str = "exact",
+        notes: str | None = None,
+        achievements_unlocked: int = 0,
+        active_minutes: float | None = None,
+        idle_minutes: float | None = None,
+        external_session_ref: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> ObservationOutcome:
+        scope.require_active()
+        if precision_level not in ("exact", "estimated", "coarse"):
+            raise ValidationError(f"Invalid precision_level '{precision_level}'")
+        start_dt = _parse_user_iso(started_at, "started_at")
+        end_dt = _parse_user_iso(ended_at, "ended_at")
+        if end_dt < start_dt:
+            raise ValidationError("Interval ended_at cannot be earlier than started_at")
+        dur = (
+            int(duration_minutes)
+            if duration_minutes is not None
+            else max(1, int(round((end_dt - start_dt).total_seconds() / 60.0)))
+        )
+        if dur <= 0:
+            raise ValidationError("Interval duration_minutes must be positive")
+
+        start_iso = start_dt.isoformat()
+        end_iso = end_dt.isoformat()
+        now_iso = _utc_now_iso()
+        tz_name, tz_eras = self._get_user_timezone_config(scope)
+
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            game = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+            if game is None:
+                raise NotFoundError(f"Game {game_id} not found")
+
+            baseline_row = conn.execute(
+                "SELECT COALESCE(MAX(baseline_minutes), 0) AS bm FROM provider_baselines WHERE game_id = ?",
+                (game_id,),
+            ).fetchone()
+            current_base = int(baseline_row["bm"]) if baseline_row else 0
+
+            dup = conn.execute(
+                "SELECT id FROM play_observations WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if dup is not None:
+                return ObservationOutcome(
+                    status="duplicate_ignored",
+                    delta_minutes=0,
+                    baseline_minutes=current_base,
+                    session=None,
+                )
+
+            existing_sessions = conn.execute(
+                "SELECT * FROM play_sessions WHERE game_id = ? ORDER BY started_at ASC, id ASC",
+                (game_id,),
+            ).fetchall()
+
+            overlap_blocking_id: int | None = None
+            unlocked_estimated_overlaps: list[tuple[sqlite3.Row, int]] = []
+            for es in existing_sessions:
+                es_start = _parse_iso(es["started_at"])
+                es_end = _parse_iso(es["ended_at"])
+                # Strictly overlapping intervals (adjacent boundaries touching at exact second do not overlap)
+                overlap_start = max(start_dt, es_start)
+                overlap_end = min(end_dt, es_end)
+                if overlap_end > overlap_start or (es_start == start_dt and es_end == end_dt):
+                    if es["precision_level"] == "exact" or bool(es["is_locked"]):
+                        overlap_blocking_id = int(es["id"])
+                        break
+                    overlap_mins = max(1, int(round((overlap_end - overlap_start).total_seconds() / 60.0)))
+                    unlocked_estimated_overlaps.append((es, overlap_mins))
+
+            obs_payload = dict(payload or {})
+            if overlap_blocking_id is not None:
+                obs_payload["deduplicated_against_session_id"] = overlap_blocking_id
+                conn.execute(
+                    """
+                    INSERT INTO play_observations (
+                        idempotency_key, game_id, source, platform, observation_kind,
+                        observed_at, interval_started_at, interval_ended_at, interval_minutes,
+                        precision_level, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, 'interval', ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        idempotency_key,
+                        game_id,
+                        source,
+                        platform,
+                        end_iso,
+                        start_iso,
+                        end_iso,
+                        dur,
+                        precision_level,
+                        json.dumps(obs_payload),
+                        now_iso,
+                    ),
+                )
+                return ObservationOutcome(
+                    status="overlap_ignored",
+                    delta_minutes=0,
+                    baseline_minutes=current_base,
+                    session=None,
+                )
+
+            # Trim/supersede overlapping unlocked estimated sessions so ledger never double-counts.
+            for es, overlap_mins in unlocked_estimated_overlaps:
+                existing_dur = int(es["duration_minutes"])
+                remaining = existing_dur - overlap_mins
+                if remaining <= 0:
+                    conn.execute("DELETE FROM play_sessions WHERE id = ? AND is_locked = 0", (es["id"],))
+                else:
+                    conn.execute(
+                        "UPDATE play_sessions SET duration_minutes = ?, updated_at = ? WHERE id = ? AND is_locked = 0",
+                        (remaining, now_iso, es["id"]),
+                    )
+
+            conn.execute(
+                """
+                INSERT INTO play_observations (
+                    idempotency_key, game_id, source, platform, observation_kind,
+                    observed_at, interval_started_at, interval_ended_at, interval_minutes,
+                    precision_level, payload_json, created_at
+                ) VALUES (?, ?, ?, ?, 'interval', ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    idempotency_key,
+                    game_id,
+                    source,
+                    platform,
+                    end_iso,
+                    start_iso,
+                    end_iso,
+                    dur,
+                    precision_level,
+                    json.dumps(obs_payload),
+                    now_iso,
+                ),
+            )
+
+            if not game["status_locked"] and game["completion_status"] in (
+                "Plan to Play",
+                "Not Played",
+                "Unplayed",
+            ):
+                conn.execute(
+                    "UPDATE games SET completion_status = 'Playing', updated_at = ? WHERE id = ?",
+                    (now_iso, game_id),
+                )
+
+            cur = conn.execute(
+                """
+                INSERT INTO play_sessions (
+                    game_id, platform, started_at, ended_at, duration_minutes,
+                    source, precision_level, notes, achievements_unlocked, is_locked,
+                    active_minutes, idle_minutes, external_session_ref, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                """,
+                (
+                    game_id,
+                    platform,
+                    start_iso,
+                    end_iso,
+                    dur,
+                    source,
+                    precision_level,
+                    notes,
+                    int(achievements_unlocked or 0),
+                    active_minutes,
+                    idle_minutes,
+                    external_session_ref,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            session_id = int(cur.lastrowid)
+            rebuild_daily_ledger_for_conn(conn, tz_name=tz_name, timezone_eras=tz_eras)
+            sess_row = conn.execute("SELECT * FROM play_sessions WHERE id = ?", (session_id,)).fetchone()
+            return ObservationOutcome(
+                status="session_created",
+                delta_minutes=dur,
+                baseline_minutes=current_base,
                 session=row_to_session(sess_row),
             )
 
@@ -525,3 +792,126 @@ class ActivityService:
                 "SELECT * FROM daily_playtime_ledger ORDER BY date DESC, game_id ASC"
             ).fetchall()
             return [row_to_ledger(r) for r in rows]
+
+    # ── Playtime Prompts ────────────────────────────────────────────────────
+
+    def list_playtime_prompts(self, scope: UserScope) -> list[PlaytimePrompt]:
+        scope.require_active()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT pp.*, g.title, g.platform, g.cover_url, g.completion_status AS game_status,
+                       g.playtime_hours, g.playtime_prompt_muted
+                FROM playtime_prompts pp
+                LEFT JOIN games g ON g.id = pp.game_id
+                WHERE pp.status = 'pending'
+                ORDER BY pp.detected_at DESC, pp.id DESC
+                """
+            ).fetchall()
+
+            prompts: list[PlaytimePrompt] = []
+            stale_ids: list[int] = []
+            for r in rows:
+                if (
+                    r["title"] is None
+                    or r["game_status"] == "Playing"
+                    or bool(r["playtime_prompt_muted"])
+                ):
+                    stale_ids.append(int(r["id"]))
+                    continue
+                prompts.append(
+                    PlaytimePrompt(
+                        id=int(r["id"]),
+                        game_id=int(r["game_id"]),
+                        title=r["title"],
+                        platform=r["platform"],
+                        cover_url=r["cover_url"],
+                        current_status=r["game_status"] or r["current_status"],
+                        previous_hours=round(float(r["previous_hours"] or 0.0), 1),
+                        new_hours=round(float(r["new_hours"] or 0.0), 1),
+                        delta_hours=round(float(r["delta_hours"] or 0.0), 1),
+                        total_playtime_hours=float(r["playtime_hours"] or 0.0),
+                        detected_at=r["detected_at"],
+                        status=r["status"],
+                    )
+                )
+
+            if stale_ids:
+                placeholders = ",".join("?" for _ in stale_ids)
+                conn.execute(
+                    f"DELETE FROM playtime_prompts WHERE id IN ({placeholders})",
+                    stale_ids,
+                )
+            return prompts
+
+    def resolve_playtime_prompt(
+        self,
+        scope: UserScope,
+        prompt_id: int,
+        action: str,
+    ) -> PlaytimePromptResolution:
+        scope.require_active()
+        cleaned_action = (action or "").strip().lower()
+        if cleaned_action not in ("accept", "dismiss", "mute"):
+            raise ValidationError("action must be 'accept', 'dismiss', or 'mute'")
+
+        now_iso = _utc_now_iso()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            row = conn.execute(
+                "SELECT * FROM playtime_prompts WHERE id = ? AND status = 'pending'",
+                (prompt_id,),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError(f"Playtime prompt {prompt_id} not found")
+            game_id = int(row["game_id"])
+            game_row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+            if game_row is None:
+                conn.execute("DELETE FROM playtime_prompts WHERE id = ?", (prompt_id,))
+                raise NotFoundError(f"Game {game_id} for playtime prompt not found")
+
+            cid = game_row["canonical_id"]
+            if cleaned_action == "accept":
+                if cid is not None:
+                    conn.execute(
+                        "UPDATE games SET completion_status = 'Playing', status_locked = 1, updated_at = ? WHERE canonical_id = ?",
+                        (now_iso, cid),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE games SET completion_status = 'Playing', status_locked = 1, updated_at = ? WHERE id = ?",
+                        (now_iso, game_id),
+                    )
+                conn.execute(
+                    "UPDATE playtime_prompts SET status = 'resolved', resolved_at = ? WHERE id = ?",
+                    (now_iso, prompt_id),
+                )
+            elif cleaned_action == "mute":
+                if cid is not None:
+                    conn.execute(
+                        "UPDATE games SET playtime_prompt_muted = 1, updated_at = ? WHERE canonical_id = ?",
+                        (now_iso, cid),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE games SET playtime_prompt_muted = 1, updated_at = ? WHERE id = ?",
+                        (now_iso, game_id),
+                    )
+                conn.execute(
+                    "UPDATE playtime_prompts SET status = 'dismissed', resolved_at = ? WHERE id = ?",
+                    (now_iso, prompt_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE playtime_prompts SET status = 'dismissed', resolved_at = ? WHERE id = ?",
+                    (now_iso, prompt_id),
+                )
+
+            updated = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+            return PlaytimePromptResolution(
+                prompt_id=prompt_id,
+                action=cleaned_action,
+                game_id=game_id,
+                completion_status=updated["completion_status"],
+                status_locked=bool(updated["status_locked"]),
+                playtime_prompt_muted=bool(updated["playtime_prompt_muted"]),
+            )

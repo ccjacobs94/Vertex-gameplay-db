@@ -342,9 +342,8 @@ class IdentityService:
             else:
                 eras = json.loads(row["timezone_eras_json"] or "[]")
                 old_tz = (row["timezone"] or "auto").strip()
-                if old_tz != tz:
-                    prev_zone = "UTC" if old_tz in ("", "auto") else old_tz
-                    eras.append({"timezone": prev_zone, "until": now_iso})
+                if old_tz != tz and old_tz not in ("", "auto"):
+                    eras.append({"timezone": old_tz, "until": now_iso})
                 eras_json = json.dumps(eras)
 
             conn.execute(

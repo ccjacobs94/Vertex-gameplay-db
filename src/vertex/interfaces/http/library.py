@@ -16,13 +16,17 @@ from vertex.interfaces.http.deps import (
     require_write_scope,
 )
 from vertex.interfaces.http.schemas import (
+    GameAchievementsResponse,
     GameCreateRequest,
     GameResponse,
     GameUpdateRequest,
-    LibraryStatsResponse,
     PlaySessionResponse,
+    PlaytimePromptResolutionResponse,
+    PlaytimePromptResponse,
     ReconcileCandidateResponse,
     ReconcileIdsRequest,
+    ResetDismissalsResponse,
+    ResolvePlaytimePromptRequest,
     UpdateSessionRequest,
 )
 
@@ -146,12 +150,14 @@ def delete_game(
     services.library.delete_game(scope, game_id)
 
 
-@router.get("/stats", response_model=LibraryStatsResponse)
-def get_stats(
+@router.get("/games/{game_id}/achievements", response_model=GameAchievementsResponse)
+def get_game_achievements(
+    game_id: int,
     scope: UserScope = Depends(require_read_scope),
     services: AppServices = Depends(get_services),
-) -> LibraryStatsResponse:
-    return LibraryStatsResponse(**asdict(services.library.get_summary_stats(scope)))
+) -> GameAchievementsResponse:
+    detail = services.library.get_game_achievements(scope, game_id)
+    return GameAchievementsResponse(**asdict(detail))
 
 
 @router.get("/reconcile/candidates", response_model=list[ReconcileCandidateResponse])
@@ -195,6 +201,34 @@ def dismiss_reconcile(
     services: AppServices = Depends(get_services),
 ) -> None:
     services.library.dismiss_reconcile_candidate(scope, body.game_ids)
+
+
+@router.post("/reconcile/reset-dismissals", response_model=ResetDismissalsResponse)
+def reset_reconcile_dismissals(
+    scope: UserScope = Depends(require_write_scope),
+    services: AppServices = Depends(get_services),
+) -> ResetDismissalsResponse:
+    cleared = services.library.reset_reconcile_dismissals(scope)
+    return ResetDismissalsResponse(cleared=cleared)
+
+
+@router.get("/playtime-prompts", response_model=list[PlaytimePromptResponse])
+def list_playtime_prompts(
+    scope: UserScope = Depends(require_read_scope),
+    services: AppServices = Depends(get_services),
+) -> list[PlaytimePromptResponse]:
+    return [PlaytimePromptResponse(**asdict(p)) for p in services.activity.list_playtime_prompts(scope)]
+
+
+@router.post("/playtime-prompts/{prompt_id}/resolve", response_model=PlaytimePromptResolutionResponse)
+def resolve_playtime_prompt(
+    prompt_id: int,
+    body: ResolvePlaytimePromptRequest,
+    scope: UserScope = Depends(require_write_scope),
+    services: AppServices = Depends(get_services),
+) -> PlaytimePromptResolutionResponse:
+    res = services.activity.resolve_playtime_prompt(scope, prompt_id, body.action)
+    return PlaytimePromptResolutionResponse(**asdict(res))
 
 
 @router.get("/sessions", response_model=list[PlaySessionResponse])

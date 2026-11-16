@@ -52,6 +52,7 @@ def update_timezone(
         timezone_name=body.timezone,
         timezone_eras=body.timezone_eras,
     )
+    services.activity.rebuild_daily_ledger(scope)
     return UserAccountResponse(**asdict(account))
 
 

@@ -325,3 +325,485 @@ class ImportReportResponse(BaseModel):
     games_skipped: int
     sessions_added: int
     warnings: list[str]
+
+
+class ResetDismissalsResponse(BaseModel):
+    cleared: int
+
+
+class AchievementPlatformStatusResponse(BaseModel):
+    game_id: int
+    platform: str
+    short_platform: str
+    source: str
+    unlocked: bool
+    unlock_time: str | None = None
+    reward_type: str | None = None
+    reward_value: str | None = None
+    rarity_pct: float | None = None
+
+
+class GroupedAchievementResponse(BaseModel):
+    key: str
+    name: str
+    description: str
+    icon_url: str | None = None
+    icon_gray_url: str | None = None
+    is_hidden: bool
+    unlocked: bool
+    unlock_time: str | None = None
+    reward_type: str | None = None
+    reward_value: str | None = None
+    rarity_pct: float | None = None
+    unlocked_platforms: list[str]
+    platforms: list[AchievementPlatformStatusResponse]
+
+
+class PlatformAchievementSummaryResponse(BaseModel):
+    game_id: int
+    title: str
+    platform: str
+    short_platform: str
+    source: str
+    unlocked: int
+    total: int
+    percentage: float
+    achievements_synced_at: str | None = None
+
+
+class UnifiedAchievementSummaryResponse(BaseModel):
+    unlocked: int
+    total: int
+    percentage: float
+    overlap_count: int
+
+
+class GameAchievementsResponse(BaseModel):
+    game_id: int
+    unified_summary: UnifiedAchievementSummaryResponse
+    per_platform_summary: list[PlatformAchievementSummaryResponse]
+    achievements: list[GroupedAchievementResponse]
+
+
+class PlaytimePromptResponse(BaseModel):
+    id: int
+    game_id: int
+    title: str
+    platform: str
+    cover_url: str | None = None
+    current_status: str
+    previous_hours: float
+    new_hours: float
+    delta_hours: float
+    total_playtime_hours: float
+    detected_at: str
+    status: str
+
+
+class ResolvePlaytimePromptRequest(BaseModel):
+    action: str = Field(pattern="^(accept|dismiss|mute)$")
+
+
+class PlaytimePromptResolutionResponse(BaseModel):
+    prompt_id: int
+    action: str
+    game_id: int
+    completion_status: str
+    status_locked: bool
+    playtime_prompt_muted: bool
+
+
+class CatalogSearchResultResponse(BaseModel):
+    normalized_title: str
+    title: str
+    steam_appid: str | None = None
+    genres: list[str]
+    tags: list[str]
+    release_year: int | None = None
+    critic_score: int | None = None
+    cover_url: str | None = None
+    source: str
+    retrieved_at: str
+    cached: bool
+
+
+class CatalogEnrichRequest(BaseModel):
+    limit: int = Field(default=500, ge=1, le=2000)
+    force: bool = False
+
+
+class CatalogEnrichmentReportResponse(BaseModel):
+    games_enriched: int
+    covers_filled: int
+    remaining_without_genres: int
+    used_network: bool
+    message: str
+
+
+class AnalyticsSummaryResponse(BaseModel):
+    total_entries: int
+    unique_titles: int
+    total_hours: float
+    played_games: int
+    beaten_count: int
+    dropped_count: int
+    playing_count: int
+    shelf_of_shame_count: int
+    favorites_count: int
+    completion_rate: float
+    drop_rate: float
+    avg_hours: float
+    avg_played_hours: float
+    avg_beaten_hours: float
+    avg_dropped_hours: float
+    dominant_system: str
+    dominant_genre: str
+    achievements_unlocked: int
+    achievements_total: int
+    achievement_rate: float
+    perfect_games_count: int
+
+
+class PlatformAnalyticsItemResponse(BaseModel):
+    name: str
+    count: int
+    hours: float
+    beaten_count: int
+    playtime_pct: float
+    library_pct: float
+    completion_rate: float
+    top_game_title: str | None = None
+    top_game_hours: float
+
+
+class GenreAnalyticsItemResponse(BaseModel):
+    genre: str
+    count: int
+    hours: float
+    beaten_count: int
+    playing_count: int
+    backlog_count: int
+    dropped_count: int
+    playtime_pct: float
+    completion_rate: float
+
+
+class TagAnalyticsItemResponse(BaseModel):
+    tag: str
+    count: int
+    hours: float
+    dropped_count: int
+    drop_rate: float
+    completion_rate: float
+
+
+class StatusAnalyticsItemResponse(BaseModel):
+    name: str
+    count: int
+    count_pct: float
+    hours: float
+    hours_pct: float
+
+
+class BucketAnalyticsItemResponse(BaseModel):
+    key: str
+    label: str
+    count: int
+    count_pct: float
+    hours: float
+    hours_pct: float
+
+
+class CircadianRhythmResponse(BaseModel):
+    grid: list[list[int]]
+    time_buckets: dict[str, int]
+    total_events: int
+    peak_day: str
+    peak_hour: str
+    archetype: str
+    eras_count: int
+
+
+class LibraryAnalyticsResponse(BaseModel):
+    summary: AnalyticsSummaryResponse
+    platforms: list[PlatformAnalyticsItemResponse]
+    genres: list[GenreAnalyticsItemResponse]
+    tags: list[TagAnalyticsItemResponse]
+    statuses: dict[str, StatusAnalyticsItemResponse]
+    commitment_tiers: list[BucketAnalyticsItemResponse]
+    eras: list[BucketAnalyticsItemResponse]
+    avg_user_rating: float | None = None
+    avg_critic_score: float | None = None
+    backlog_gems: list[dict[str, Any]]
+    hall_of_fame: list[dict[str, Any]]
+    circadian_rhythm: CircadianRhythmResponse
+    subscription_roi: dict[str, Any]
+    cross_platform: dict[str, Any]
+    trophy_pyramid: dict[str, Any]
+    almost_perfect: list[dict[str, Any]]
+
+
+class SessionAnalyticsResponse(BaseModel):
+    kpis: dict[str, Any]
+    heatmap_365: list[dict[str, Any]]
+    circadian_clock: dict[str, Any]
+    snack_vs_binge: dict[str, Any]
+    rotation_gantt_30d: dict[str, Any]
+    recent_sessions: list[dict[str, Any]]
+    total_sessions: int
+    limit: int
+    offset: int
+
+
+class SessionWindowStatsResponse(BaseModel):
+    total_sessions: int
+    total_minutes: int
+    average_duration_minutes: float
+    daily_playtime_series: list[dict[str, Any]]
+    platform_distribution: dict[str, int]
+
+
+class HomeAssistantEventRequest(BaseModel):
+    event: str = Field(pattern="^(start|stop|record)$")
+    title: str | None = None
+    platform: str | None = None
+    external_id: str | None = None
+    source: str = Field(default="homeassistant", max_length=60)
+    started_at: str | None = None
+    ended_at: str | None = None
+    duration_minutes: int | None = Field(default=None, ge=1)
+    active_minutes: float | None = Field(default=None, ge=0.0)
+    idle_minutes: float | None = Field(default=None, ge=0.0)
+    wall_clock_minutes: float | None = Field(default=None, ge=0.0)
+    achievements_unlocked: int = Field(default=0, ge=0)
+    notes: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=200)
+
+
+class HomeAssistantEventResponse(BaseModel):
+    status: str
+    game_id: int
+    session_id: int | None = None
+    duration_minutes: int
+    idempotency_key: str
+
+
+class HomeAssistantImportCsvRequest(BaseModel):
+    csv_content: str = Field(min_length=1)
+    platform: str = Field(default="Xbox", max_length=80)
+    max_gap_seconds: int = Field(default=1800, ge=0, le=86400)
+
+
+class HomeAssistantImportResponse(BaseModel):
+    status: str
+    imported_count: int
+    skipped_count: int
+    total_spans: int
+
+
+class WishlistTargetInput(BaseModel):
+    platform: str = Field(min_length=1, max_length=60)
+    target_price_usd: float = Field(default=19.99, ge=0.0)
+    allowed_storefronts: list[str] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class WishlistCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    platform_targets: list[WishlistTargetInput | str] = Field(default_factory=list)
+    release_year: int | None = None
+    developer: str = ""
+    publisher: str = ""
+    cover_url: str | None = None
+    genres: list[str] = Field(default_factory=list)
+    critic_score: int | None = None
+    allow_smart_upgrade: bool = True
+    preferred_edition_id: int | None = None
+    notes: str = ""
+    force_track_owned: bool = False
+
+
+class WishlistUpdateRequest(BaseModel):
+    allow_smart_upgrade: bool | None = None
+    preferred_edition_id: int | None = None
+    status: str | None = None
+    notes: str | None = None
+
+
+class WishlistPlatformsUpdateRequest(BaseModel):
+    platform_targets: list[WishlistTargetInput | str] = Field(default_factory=list)
+    remove_platforms: list[str] = Field(default_factory=list)
+    allow_smart_upgrade: bool | None = None
+    force_track_owned: bool = False
+
+
+class WishlistPriceRecordRequest(BaseModel):
+    price_usd: float = Field(ge=0.0)
+    platform: str = Field(default="PC", max_length=60)
+    storefront: str = Field(default="manual", max_length=60)
+    edition_name: str = Field(default="Standard Edition", max_length=120)
+    edition_tier: str | None = None
+    regular_price_usd: float | None = Field(default=None, ge=0.0)
+    store_url: str = ""
+    store_sku_id: str | None = None
+    is_drm_free: bool = False
+    is_authorized_seller: bool = True
+
+
+class WishlistPurchaseRequest(BaseModel):
+    platform: str = Field(default="PC", max_length=80)
+    edition_name: str | None = None
+    price_paid_usd: float | None = Field(default=None, ge=0.0)
+    completion_status: str = Field(default="Plan to Play")
+
+
+class CanonicalGameResponse(BaseModel):
+    id: int
+    normalized_title: str
+    title: str
+    release_year: int | None = None
+    developer: str
+    publisher: str
+    cover_url: str | None = None
+    genres: list[str]
+    critic_score: int | None = None
+    library_game_id: int | None = None
+    created_at: str
+    updated_at: str
+
+
+class EditionPlatformSkuResponse(BaseModel):
+    id: int
+    edition_id: int
+    platform_family: str
+    platform_label: str
+    storefront: str
+    store_sku_id: str
+    itad_plain: str | None = None
+    store_url: str
+    msrp_usd: float | None = None
+    current_price_usd: float | None = None
+    regular_price_usd: float | None = None
+    discount_pct: int
+    historical_low_usd: float | None = None
+    is_authorized_seller: bool
+    is_drm_free: bool
+    last_checked_at: str | None = None
+    created_at: str
+    updated_at: str
+
+
+class GameEditionResponse(BaseModel):
+    id: int
+    canonical_game_id: int
+    edition_name: str
+    edition_tier: str
+    tier_rank: int
+    is_base_edition: bool
+    included_dlc_notes: str
+    cover_url: str | None = None
+    skus: list[EditionPlatformSkuResponse]
+    created_at: str
+    updated_at: str
+
+
+class WishlistPlatformTargetResponse(BaseModel):
+    id: int
+    wishlist_item_id: int
+    platform_family: str
+    allowed_storefronts: list[str]
+    target_price_usd: float
+    is_active: bool
+    muted_owned_conflict: bool
+    last_alerted_at: str | None = None
+    last_alerted_price_usd: float | None = None
+    last_alerted_edition_id: int | None = None
+    created_at: str
+    updated_at: str
+
+
+class OwnershipConflictResponse(BaseModel):
+    already_in_library: bool
+    conflicted_platforms: list[str]
+    conflict_warning: str | None = None
+
+
+class WishlistItemResponse(BaseModel):
+    id: int
+    canonical_game_id: int
+    preferred_edition_id: int | None = None
+    allow_smart_upgrade: bool
+    status: str
+    notes: str
+    added_via: str
+    created_at: str
+    updated_at: str
+    canonical_game: CanonicalGameResponse
+    targets: list[WishlistPlatformTargetResponse]
+    editions: list[GameEditionResponse]
+    skus: list[EditionPlatformSkuResponse]
+    conflict: OwnershipConflictResponse
+
+
+class WishlistDealResponse(BaseModel):
+    wishlist_item_id: int
+    canonical_game_id: int
+    game_title: str
+    cover_url: str | None = None
+    edition_id: int
+    edition_name: str
+    edition_tier: str
+    tier_rank: int
+    sku_id: int
+    platform_family: str
+    platform_label: str
+    storefront: str
+    store_url: str
+    current_price_usd: float
+    regular_price_usd: float | None = None
+    discount_pct: int
+    target_price_usd: float
+    savings_below_target_usd: float
+    current_base_edition_price_usd: float | None = None
+    is_smart_upgrade: bool
+    is_all_time_low: bool
+    is_drm_free: bool
+    deal_headline: str
+
+
+class WishlistDealEvaluationResponse(BaseModel):
+    total_deals: int
+    smart_upgrades_count: int
+    all_time_lows_count: int
+    deals: list[WishlistDealResponse]
+
+
+class WishlistPriceRecordResponse(BaseModel):
+    sku_id: int
+    price_usd: float
+    is_all_time_low: bool
+    historical_low_usd: float
+    item: WishlistItemResponse
+
+
+class WishlistPurchaseResponse(BaseModel):
+    item: WishlistItemResponse
+    library_game_id: int
+    already_purchased: bool
+
+
+class PriceHistoryEntryResponse(BaseModel):
+    id: int
+    sku_id: int
+    storefront: str
+    price_usd: float
+    regular_price_usd: float | None = None
+    discount_pct: int
+    is_all_time_low: bool
+    source: str
+    recorded_at: str
+
+
+class WishlistHistoryResponse(BaseModel):
+    item: WishlistItemResponse
+    price_history_by_sku: dict[str, list[PriceHistoryEntryResponse]]

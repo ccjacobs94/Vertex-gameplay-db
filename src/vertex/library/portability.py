@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from vertex import __version__
+from vertex.activity.service import rebuild_daily_ledger_for_conn
 from vertex.catalog.taxonomy import merge_lists, validate_genres, validate_tags
 from vertex.identity.service import IdentityService
 from vertex.infrastructure.errors import ValidationError
@@ -226,6 +227,7 @@ class LibraryPortabilityService:
         sessions_added = 0
         now_iso = _utc_now_iso()
         canon_remap: dict[int, int] = {}
+        account = self.identity_service.get_account(scope)
 
         with self.db_manager.library_connection(scope, immediate=not dry_run) as conn:
             if mode == "replace":
@@ -464,6 +466,12 @@ class LibraryPortabilityService:
 
             if dry_run:
                 conn.rollback()
+            else:
+                rebuild_daily_ledger_for_conn(
+                    conn,
+                    tz_name=account.timezone,
+                    timezone_eras=account.timezone_eras,
+                )
 
         return ImportReport(
             dry_run=dry_run,

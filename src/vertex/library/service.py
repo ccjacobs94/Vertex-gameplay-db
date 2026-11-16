@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -16,11 +17,40 @@ from vertex.infrastructure.sqlite import DatabaseManager
 from vertex.library.models import (
     VALID_COMPLETION_STATUSES,
     VALID_OWNERSHIP_STATUSES,
+    AchievementPlatformStatus,
+    GameAchievementsDetail,
     GameRecord,
+    GroupedAchievement,
     LibraryStats,
+    PlatformAchievementSummary,
     ReconcileCandidate,
+    UnifiedAchievementSummary,
 )
 from vertex.library.repository import row_to_game, upsert_platform_copy
+
+
+_TRADEMARK_RE = re.compile(r"[™®©]")
+_NON_ALNUM_ACH_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _normalize_achievement_text(text: str) -> str:
+    cleaned = _TRADEMARK_RE.sub(" ", (text or "").lower())
+    return _NON_ALNUM_ACH_RE.sub(" ", cleaned).strip()
+
+
+def _short_platform_label(platform: str) -> str:
+    p = (platform or "").strip()
+    mapping = {
+        "PC (Steam)": "Steam",
+        "PC (Xbox)": "PC (Xbox)",
+        "Xbox / PC": "Xbox/PC",
+        "Xbox": "Xbox",
+        "PlayStation 4": "PS4",
+        "PlayStation 5": "PS5",
+        "Nintendo Switch": "Switch",
+        "PC (Other)": "PC",
+    }
+    return mapping.get(p, p)
 
 
 def _utc_now_iso() -> str:
@@ -130,6 +160,172 @@ class LibraryService:
                 raise NotFoundError(f"Game {game_id} not found")
             return row_to_game(row)
 
+    def find_game(self, scope: UserScope, game_id: int) -> GameRecord | None:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+            return row_to_game(row) if row is not None else None
+
+    def find_or_create_by_title(
+        self,
+        scope: UserScope,
+        *,
+        title: str,
+        platform: str = "PC",
+        source: str = "Manual",
+        completion_status: str = "Playing",
+        status_locked: bool = False,
+    ) -> tuple[GameRecord, bool]:
+        scope.require_active()
+        cleaned_title = (title or "").strip()
+        if not cleaned_title:
+            raise ValidationError("Game title is required")
+        cleaned_platform = (platform or "").strip() or "PC"
+        norm_target = normalize_title(cleaned_title)
+
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            exact = conn.execute(
+                "SELECT * FROM games WHERE LOWER(title) = LOWER(?) AND LOWER(platform) = LOWER(?) ORDER BY id ASC LIMIT 1",
+                (cleaned_title, cleaned_platform),
+            ).fetchone()
+            if exact is not None:
+                return row_to_game(exact), False
+
+            by_title = conn.execute(
+                "SELECT * FROM games WHERE LOWER(title) = LOWER(?) ORDER BY id ASC LIMIT 1",
+                (cleaned_title,),
+            ).fetchone()
+            if by_title is not None:
+                return row_to_game(by_title), False
+
+            if norm_target:
+                for cand in conn.execute("SELECT * FROM games ORDER BY id ASC").fetchall():
+                    if normalize_title(cand["title"]) == norm_target:
+                        return row_to_game(cand), False
+
+            now_iso = _utc_now_iso()
+            ext_id = f"manual:{uuid.uuid4()}"
+            norm_status = _normalize_completion_status(completion_status)
+            cur = conn.execute(
+                """
+                INSERT INTO games (
+                    external_id, title, platform, source, playtime_hours, playtime_minutes,
+                    completion_status, status_locked, ownership_status, ownership_locked,
+                    is_game_pass, is_play_anywhere, genres_json, tags_json,
+                    notes, favorite, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 0.0, 0, ?, ?, 'Owned', 0, 0, 0, '[]', '[]', '', 0, ?, ?)
+                """,
+                (
+                    ext_id,
+                    cleaned_title,
+                    cleaned_platform,
+                    (source or "Manual").strip() or "Manual",
+                    norm_status,
+                    1 if status_locked else 0,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            game_id = int(cur.lastrowid)
+            upsert_platform_copy(
+                conn,
+                game_id=game_id,
+                platform=cleaned_platform,
+                source=(source or "Manual").strip() or "Manual",
+                external_id=ext_id,
+                ownership_status="Owned",
+                ownership_locked=False,
+                is_game_pass=False,
+                is_play_anywhere=False,
+                playtime_minutes=0,
+                last_played=None,
+                now_iso=now_iso,
+            )
+            created_row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+            return row_to_game(created_row), True
+
+    def create_or_get_game_by_external_id(
+        self,
+        scope: UserScope,
+        *,
+        external_id: str,
+        title: str,
+        platform: str,
+        source: str = "Manual",
+        completion_status: str = "Plan to Play",
+        status_locked: bool | None = None,
+        ownership_status: str = "Owned",
+        genres: list[str] | None = None,
+        release_year: int | None = None,
+        critic_score: int | None = None,
+        cover_url: str | None = None,
+        notes: str = "",
+    ) -> tuple[GameRecord, bool]:
+        """Idempotently create or fetch a library entry keyed by external_id (e.g., wishlist purchase)."""
+        scope.require_active()
+        cleaned_ext = (external_id or "").strip()
+        cleaned_title = (title or "").strip()
+        cleaned_platform = (platform or "").strip()
+        if not cleaned_ext or not cleaned_title or not cleaned_platform:
+            raise ValidationError("external_id, title, and platform are required")
+        norm_status = _normalize_completion_status(completion_status)
+        norm_ownership, forced_gp = _normalize_ownership_status(ownership_status)
+        clean_genres = validate_genres(genres)
+        now_iso = _utc_now_iso()
+
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            existing = conn.execute(
+                "SELECT * FROM games WHERE external_id = ?",
+                (cleaned_ext,),
+            ).fetchone()
+            if existing is not None:
+                return row_to_game(existing), False
+
+            cur = conn.execute(
+                """
+                INSERT INTO games (
+                    external_id, title, platform, source, playtime_hours, playtime_minutes,
+                    completion_status, status_locked, ownership_status, ownership_locked,
+                    is_game_pass, is_play_anywhere, genres_json, tags_json,
+                    critic_score, release_year, cover_url, notes, favorite, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 0.0, 0, ?, ?, ?, 1, ?, 0, ?, '[]', ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    cleaned_ext,
+                    cleaned_title,
+                    cleaned_platform,
+                    (source or "Manual").strip() or "Manual",
+                    norm_status,
+                    (1 if status_locked else 0) if status_locked is not None else (1 if norm_status != "Not Played" else 0),
+                    norm_ownership,
+                    1 if forced_gp else 0,
+                    json.dumps(clean_genres),
+                    critic_score,
+                    release_year,
+                    cover_url,
+                    notes or "",
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            game_id = int(cur.lastrowid)
+            upsert_platform_copy(
+                conn,
+                game_id=game_id,
+                platform=cleaned_platform,
+                source=(source or "Manual").strip() or "Manual",
+                external_id=cleaned_ext,
+                ownership_status=norm_ownership,
+                ownership_locked=True,
+                is_game_pass=bool(forced_gp),
+                is_play_anywhere=False,
+                playtime_minutes=0,
+                last_played=None,
+                now_iso=now_iso,
+            )
+            row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+            return row_to_game(row), True
+
     def add_manual_game(
         self,
         scope: UserScope,
@@ -138,6 +334,7 @@ class LibraryService:
         platform: str,
         source: str = "Manual",
         completion_status: str = "Not Played",
+        status_locked: bool | None = None,
         ownership_status: str = "Owned",
         is_game_pass: bool = False,
         is_play_anywhere: bool = False,
@@ -189,7 +386,7 @@ class LibraryService:
                     hours,
                     mins,
                     norm_status,
-                    1 if norm_status != "Not Played" else 0,
+                    (1 if status_locked else 0) if status_locked is not None else (1 if norm_status != "Not Played" else 0),
                     norm_ownership,
                     1,
                     1 if gp else 0,
@@ -662,3 +859,249 @@ class LibraryService:
                 "INSERT OR IGNORE INTO reconciliation_dismissals (pair_key, created_at) VALUES (?, ?)",
                 (pair_key, now_iso),
             )
+
+    def reset_reconcile_dismissals(self, scope: UserScope) -> int:
+        scope.require_active()
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            cur = conn.execute("DELETE FROM reconciliation_dismissals")
+            return int(cur.rowcount)
+
+    def apply_catalog_enrichment(
+        self,
+        scope: UserScope,
+        game_id: int,
+        *,
+        genres: list[str] | None = None,
+        tags: list[str] | None = None,
+        release_year: int | None = None,
+        critic_score: int | None = None,
+        cover_url: str | None = None,
+    ) -> tuple[bool, bool]:
+        """Merge taxonomy labels and fill missing metadata across reconciled copies without overwriting user edits.
+
+        Returns (genres_or_meta_updated, cover_filled).
+        """
+        scope.require_active()
+        valid_g = validate_genres(genres)
+        valid_t = validate_tags(tags)
+        clean_cover = (cover_url or "").strip() or None
+        now_iso = _utc_now_iso()
+
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            target = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+            if target is None:
+                raise NotFoundError(f"Game {game_id} not found")
+
+            cid = target["canonical_id"]
+            if cid is not None:
+                members = conn.execute(
+                    "SELECT * FROM games WHERE canonical_id = ? ORDER BY id ASC",
+                    (cid,),
+                ).fetchall()
+            else:
+                members = [target]
+
+            meta_changed = False
+            cover_changed = False
+            for row in members:
+                existing_g = json.loads(row["genres_json"] or "[]")
+                existing_t = json.loads(row["tags_json"] or "[]")
+                merged_g = merge_lists(existing_g, valid_g)
+                merged_t = merge_lists(existing_t, valid_t)
+                needs_cover = bool(clean_cover) and not (row["cover_url"] and str(row["cover_url"]).strip())
+                needs_year = release_year is not None and row["release_year"] is None
+                needs_score = critic_score is not None and row["critic_score"] is None
+                labels_changed = merged_g != existing_g or merged_t != existing_t
+                if not (labels_changed or needs_cover or needs_year or needs_score):
+                    continue
+
+                conn.execute(
+                    """
+                    UPDATE games
+                    SET genres_json = ?,
+                        tags_json = ?,
+                        release_year = COALESCE(release_year, ?),
+                        critic_score = COALESCE(critic_score, ?),
+                        cover_url = CASE
+                            WHEN cover_url IS NULL OR TRIM(cover_url) = '' THEN COALESCE(?, cover_url)
+                            ELSE cover_url
+                        END,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        json.dumps(merged_g),
+                        json.dumps(merged_t),
+                        release_year,
+                        critic_score,
+                        clean_cover,
+                        now_iso,
+                        row["id"],
+                    ),
+                )
+                if labels_changed or needs_year or needs_score:
+                    meta_changed = True
+                if needs_cover:
+                    cover_changed = True
+
+            return meta_changed, cover_changed
+
+    def get_game_achievements(self, scope: UserScope, game_id: int) -> GameAchievementsDetail:
+        scope.require_active()
+        with self.db_manager.library_connection(scope) as conn:
+            target = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
+            if target is None:
+                raise NotFoundError(f"Game {game_id} not found")
+
+            cid = target["canonical_id"]
+            if cid is not None:
+                members = conn.execute(
+                    "SELECT * FROM games WHERE canonical_id = ? ORDER BY playtime_hours DESC, id ASC",
+                    (cid,),
+                ).fetchall()
+            else:
+                members = [target]
+
+            member_ids = [int(m["id"]) for m in members]
+            placeholders = ",".join("?" for _ in member_ids)
+            ach_rows = conn.execute(
+                f"""
+                SELECT * FROM game_achievements
+                WHERE game_id IN ({placeholders})
+                ORDER BY unlocked DESC, unlock_time DESC, name ASC
+                """,
+                member_ids,
+            ).fetchall()
+
+        per_platform: list[PlatformAchievementSummary] = []
+        for m in members:
+            mid = int(m["id"])
+            m_rows = [r for r in ach_rows if int(r["game_id"]) == mid]
+            if m_rows:
+                unl = sum(1 for r in m_rows if r["unlocked"])
+                tot = len(m_rows)
+            else:
+                unl = int(m["achievements_unlocked"] or 0)
+                tot = int(m["achievements_total"] or 0)
+            pct = round((unl / max(tot, 1)) * 100, 1) if tot > 0 else 0.0
+            per_platform.append(
+                PlatformAchievementSummary(
+                    game_id=mid,
+                    title=m["title"],
+                    platform=m["platform"],
+                    short_platform=_short_platform_label(m["platform"]),
+                    source=m["source"],
+                    unlocked=unl,
+                    total=tot,
+                    percentage=pct,
+                    achievements_synced_at=m["achievements_synced_at"],
+                )
+            )
+
+        grouped_map: dict[str, dict[str, Any]] = {}
+        desc_to_key: dict[str, str] = {}
+        for row in ach_rows:
+            name_key = _normalize_achievement_text(row["name"] or "")
+            desc_key = _normalize_achievement_text(row["description"] or "")
+            match_key: str | None = None
+            if name_key:
+                match_key = f"n:{name_key}"
+            elif desc_key and len(desc_key) >= 10:
+                match_key = f"d:{desc_key}"
+            if desc_key and len(desc_key) >= 15 and desc_key in desc_to_key:
+                match_key = desc_to_key[desc_key]
+            if not match_key:
+                match_key = f"raw:{row['id']}"
+            if desc_key and len(desc_key) >= 15 and desc_key not in desc_to_key:
+                desc_to_key[desc_key] = match_key
+
+            m_plat = row["platform"] or ""
+            plat_entry = AchievementPlatformStatus(
+                game_id=int(row["game_id"]),
+                platform=m_plat,
+                short_platform=_short_platform_label(m_plat),
+                source=row["source"] or "",
+                unlocked=bool(row["unlocked"]),
+                unlock_time=row["unlock_time"],
+                reward_type=row["reward_type"],
+                reward_value=row["reward_value"],
+                rarity_pct=row["rarity_pct"],
+            )
+
+            if match_key not in grouped_map:
+                grouped_map[match_key] = {
+                    "key": match_key,
+                    "name": row["name"],
+                    "description": row["description"] or "",
+                    "icon_url": row["icon_url"],
+                    "icon_gray_url": row["icon_gray_url"],
+                    "is_hidden": bool(row["is_hidden"]),
+                    "reward_type": row["reward_type"],
+                    "reward_value": row["reward_value"],
+                    "rarity_pct": row["rarity_pct"],
+                    "platforms": [plat_entry],
+                }
+            else:
+                entry = grouped_map[match_key]
+                if not entry["description"] and row["description"]:
+                    entry["description"] = row["description"]
+                if not entry["icon_url"] and row["icon_url"]:
+                    entry["icon_url"] = row["icon_url"]
+                if not entry["icon_gray_url"] and row["icon_gray_url"]:
+                    entry["icon_gray_url"] = row["icon_gray_url"]
+                if not entry["reward_type"] and row["reward_type"]:
+                    entry["reward_type"] = row["reward_type"]
+                    entry["reward_value"] = row["reward_value"]
+                if entry["rarity_pct"] is None and row["rarity_pct"] is not None:
+                    entry["rarity_pct"] = row["rarity_pct"]
+                entry["platforms"].append(plat_entry)
+
+        grouped_list: list[GroupedAchievement] = []
+        overlap_count = 0
+        for entry in grouped_map.values():
+            plats: list[AchievementPlatformStatus] = entry["platforms"]
+            unlocked_plats = tuple(p.short_platform for p in plats if p.unlocked)
+            if len(unlocked_plats) > 1:
+                overlap_count += 1
+            unlock_times = [p.unlock_time for p in plats if p.unlock_time]
+            grouped_list.append(
+                GroupedAchievement(
+                    key=entry["key"],
+                    name=entry["name"],
+                    description=entry["description"],
+                    icon_url=entry["icon_url"],
+                    icon_gray_url=entry["icon_gray_url"],
+                    is_hidden=entry["is_hidden"],
+                    unlocked=len(unlocked_plats) > 0,
+                    unlock_time=min(unlock_times) if unlock_times else None,
+                    reward_type=entry["reward_type"],
+                    reward_value=entry["reward_value"],
+                    rarity_pct=entry["rarity_pct"],
+                    unlocked_platforms=unlocked_plats,
+                    platforms=tuple(plats),
+                )
+            )
+
+        grouped_list.sort(
+            key=lambda a: (
+                1 if a.unlocked else 0,
+                a.unlock_time or "",
+                a.name.lower(),
+            ),
+            reverse=True,
+        )
+        unique_unlocked = sum(1 for a in grouped_list if a.unlocked)
+        unique_total = len(grouped_list)
+        pct = round((unique_unlocked / max(unique_total, 1)) * 100, 1) if unique_total > 0 else 0.0
+
+        return GameAchievementsDetail(
+            game_id=game_id,
+            unified_summary=UnifiedAchievementSummary(
+                unlocked=unique_unlocked,
+                total=unique_total,
+                percentage=pct,
+                overlap_count=overlap_count,
+            ),
+            per_platform_summary=tuple(per_platform),
+            achievements=tuple(grouped_list),
+        )

@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from vertex import __version__
 from vertex.activity.service import ActivityService
+from vertex.analytics.service import AnalyticsService
 from vertex.catalog.service import CatalogService
 from vertex.config import Settings
 from vertex.identity.service import IdentityService
@@ -34,20 +35,27 @@ from vertex.infrastructure.errors import (
 from vertex.infrastructure.jobs import JobQueue
 from vertex.infrastructure.secrets import SecretBox
 from vertex.infrastructure.sqlite import DatabaseManager
+from vertex.integrations.catalog_lookup import HttpCatalogLookupProvider
+from vertex.integrations.homeassistant.service import HomeAssistantService
 from vertex.integrations.platforms.sync_service import PlatformSyncService
 from vertex.interfaces.http import (
     account,
     admin,
+    analytics,
     auth,
+    catalog as catalog_http,
     connections,
     health,
+    homeassistant,
     jobs,
     library,
     portability,
+    wishlist as wishlist_http,
 )
 from vertex.interfaces.http.deps import AppServices, validate_request_host_and_csrf
 from vertex.library.portability import LibraryPortabilityService
 from vertex.library.service import LibraryService
+from vertex.wishlist.service import WishlistService
 
 logger = logging.getLogger("vertex.app")
 
@@ -62,10 +70,18 @@ def create_app(
     secret_box = SecretBox(cfg.secret_key, cfg.previous_secret_keys)
     job_queue = JobQueue(db_manager)
     identity = IdentityService(db_manager, secret_box, job_queue)
-    catalog = CatalogService(db_manager)
+    catalog_lookup = HttpCatalogLookupProvider(client_factory=client_factory)
+    catalog = CatalogService(
+        db_manager,
+        outbound_sync_enabled=cfg.outbound_sync_enabled,
+        lookup_provider=catalog_lookup,
+    )
     library_svc = LibraryService(db_manager)
     portability_svc = LibraryPortabilityService(db_manager, identity)
     activity_svc = ActivityService(db_manager)
+    analytics_svc = AnalyticsService(db_manager)
+    wishlist_svc = WishlistService(db_manager, library_svc)
+    ha_svc = HomeAssistantService(db_manager, library_svc, activity_svc)
     platform_sync = PlatformSyncService(
         db_manager=db_manager,
         job_queue=job_queue,
@@ -86,6 +102,9 @@ def create_app(
         library=library_svc,
         portability=portability_svc,
         activity=activity_svc,
+        analytics=analytics_svc,
+        wishlist=wishlist_svc,
+        homeassistant=ha_svc,
         platform_sync=platform_sync,
     )
 
@@ -176,6 +195,10 @@ def create_app(
     app.include_router(connections.router)
     app.include_router(jobs.router)
     app.include_router(library.router)
+    app.include_router(analytics.router)
+    app.include_router(catalog_http.router)
+    app.include_router(homeassistant.router)
+    app.include_router(wishlist_http.router)
     app.include_router(portability.router)
 
     dist_dir = Path(cfg.frontend_dist_dir)
