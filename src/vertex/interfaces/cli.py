@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
+import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -188,11 +190,38 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             from vertex.main import create_app
 
-            uvicorn.run(
-                create_app(settings),
-                host=args.host or settings.bind_host,
-                port=args.port or settings.port,
-            )
+            web_app = create_app(settings)
+            web_host = args.host or settings.bind_host
+            web_port = args.port or settings.port
+            standalone_mcp = os.environ.get("VERTEX_MCP_STANDALONE_ENABLED", "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            if not standalone_mcp:
+                uvicorn.run(web_app, host=web_host, port=web_port)
+                return 0
+
+            from vertex.interfaces.mcp.server import create_mcp_app
+
+            mcp_app = create_mcp_app(settings, services=web_app.state.services)
+
+            async def _serve_dual() -> None:
+                web_server = uvicorn.Server(
+                    uvicorn.Config(web_app, host=web_host, port=web_port, log_level="info")
+                )
+                mcp_server = uvicorn.Server(
+                    uvicorn.Config(
+                        mcp_app,
+                        host=settings.mcp_bind_host,
+                        port=settings.mcp_port,
+                        log_level="info",
+                    )
+                )
+                await asyncio.gather(web_server.serve(), mcp_server.serve())
+
+            asyncio.run(_serve_dual())
             return 0
 
         if args.command == "serve-mcp":

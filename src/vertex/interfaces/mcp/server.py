@@ -24,7 +24,7 @@ from vertex.catalog.taxonomy import GENRES, TAGS, normalize_genre, normalize_tag
 from vertex.config import Settings
 from vertex.identity.models import UserScope
 from vertex.infrastructure.errors import AuthenticationError, AuthorizationError
-from vertex.interfaces.http.deps import AppServices
+from vertex.interfaces.http.deps import AppServices, host_matches_allowed
 
 MCP_TOOL_NAMES: tuple[str, ...] = (
     "get_gaming_profile_and_metrics",
@@ -159,7 +159,7 @@ def _is_origin_allowed(origin_header: str, settings: Settings) -> bool:
         return True
     if host in {"localhost", "127.0.0.1", "::1", "testserver"} and scheme in {"http", "https"}:
         return True
-    if host in get_allowed_mcp_hosts(settings) and scheme in {"http", "https"}:
+    if host_matches_allowed(host, get_allowed_mcp_hosts(settings)) and scheme in {"http", "https"}:
         return True
     return False
 
@@ -219,7 +219,7 @@ class McpSecurityMiddleware:
         host_val = headers.get("host", "")
         hostname = _extract_hostname(host_val)
         allowed_hosts = get_allowed_mcp_hosts(self.services.settings)
-        if not hostname or hostname not in allowed_hosts:
+        if not hostname or not host_matches_allowed(hostname, allowed_hosts):
             await self._send_json_error(scope, receive, send, 400, "Invalid Host header")
             return
 

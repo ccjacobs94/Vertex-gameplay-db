@@ -3,6 +3,8 @@
 !.env.example
 data/
 data-qa/
+data-v2/
+data-v2-qa/
 *.db
 *.db-shm
 *.db-wal

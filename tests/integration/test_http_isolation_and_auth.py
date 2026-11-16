@@ -298,3 +298,67 @@ class TestHttpIsolationAndAuth(unittest.TestCase):
                 },
             )
             self.assertEqual(bad_imp.status_code, 422)
+
+    def test_wildcard_allowed_hosts_and_origin_validation(self) -> None:
+        from fastapi import HTTPException
+        from starlette.requests import Request
+        from vertex.interfaces.http.deps import validate_request_host_and_csrf
+
+        with tempfile.TemporaryDirectory() as root:
+            cfg = Settings(
+                data_dir=Path(root),
+                migrations_dir=MIGRATIONS_DIR,
+                frontend_dist_dir=Path(root) / "dist",
+                secret_key="http-test-secret-key-1234",
+                worker_enabled=False,
+                allowed_hosts=("*.crjacobs.cc", "testserver"),
+            )
+            # Wildcard Host + Origin match
+            ok_req = Request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/api/games",
+                    "headers": [
+                        (b"host", b"app.crjacobs.cc:8095"),
+                        (b"origin", b"https://app.crjacobs.cc"),
+                    ],
+                    "client": ("127.0.0.1", 54325),
+                }
+            )
+            validate_request_host_and_csrf(ok_req, cfg)
+
+            # Non-matching lookalike Host is rejected with 400
+            with self.assertRaises(HTTPException) as bad_host_exc:
+                validate_request_host_and_csrf(
+                    Request(
+                        {
+                            "type": "http",
+                            "method": "GET",
+                            "path": "/api/games",
+                            "headers": [(b"host", b"evilcrjacobs.cc")],
+                            "client": ("127.0.0.1", 54326),
+                        }
+                    ),
+                    cfg,
+                )
+            self.assertEqual(bad_host_exc.exception.status_code, 400)
+
+            # Lookalike Origin on valid Host is rejected with 403
+            with self.assertRaises(HTTPException) as bad_origin_exc:
+                validate_request_host_and_csrf(
+                    Request(
+                        {
+                            "type": "http",
+                            "method": "POST",
+                            "path": "/api/games",
+                            "headers": [
+                                (b"host", b"app.crjacobs.cc"),
+                                (b"origin", b"https://evilcrjacobs.cc"),
+                            ],
+                            "client": ("127.0.0.1", 54327),
+                        }
+                    ),
+                    cfg,
+                )
+            self.assertEqual(bad_origin_exc.exception.status_code, 403)

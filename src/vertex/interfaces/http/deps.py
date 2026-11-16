@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import ipaddress
+from typing import Iterable
 from urllib.parse import urlparse
 
 from fastapi import Depends, HTTPException, Request
@@ -101,6 +102,24 @@ def _is_loopback_host(host: str) -> bool:
     return host.strip("[]") in ("127.0.0.1", "localhost", "::1")
 
 
+def host_matches_allowed(host: str, patterns: Iterable[str]) -> bool:
+    """Match a normalized hostname against exact entries or explicit `*.domain` wildcard patterns."""
+    cleaned = (host or "").strip().strip("[]").lower()
+    if not cleaned:
+        return False
+    for raw in patterns:
+        pat = (raw or "").strip().strip("[]").lower()
+        if not pat:
+            continue
+        if pat.startswith("*."):
+            suffix = pat[1:]  # '.domain'
+            if len(cleaned) > len(suffix) and cleaned.endswith(suffix):
+                return True
+        elif cleaned == pat:
+            return True
+    return False
+
+
 def validate_request_host_and_csrf(request: Request, settings: Settings) -> None:
     peer = request.client.host if request.client else ""
     raw_host = request.headers.get("host")
@@ -114,7 +133,7 @@ def validate_request_host_and_csrf(request: Request, settings: Settings) -> None
         and not request.headers.get("x-forwarded-host")
         and _is_loopback_host(host)
     )
-    if allowed_norm and not is_local_health_probe and (not host or host.strip("[]") not in allowed_norm):
+    if allowed_norm and not is_local_health_probe and not host_matches_allowed(host, allowed_norm):
         raise HTTPException(status_code=400, detail="Disallowed Host header")
 
     if request.method in _MUTATING_METHODS:
@@ -134,10 +153,10 @@ def validate_request_host_and_csrf(request: Request, settings: Settings) -> None
         if origin:
             parsed = urlparse(origin)
             origin_host = (parsed.hostname or "").lower()
-            allowed = {h.lower().strip("[]") for h in settings.allowed_hosts}
+            allowed = set(allowed_norm)
             if host:
                 allowed.add(host.strip("[]"))
-            if not origin_host or origin_host not in allowed:
+            if not origin_host or not host_matches_allowed(origin_host, allowed):
                 raise HTTPException(status_code=403, detail="Untrusted Origin header")
 
 

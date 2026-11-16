@@ -1056,3 +1056,68 @@ class TestMcpAllToolsResourcesSecurityAndIsolation(unittest.IsolatedAsyncioTestC
                     self.assertEqual(ha_ps["imported_count"], 1)
                     ps5_games = await call_tool(107, "search_game_library", {"query": "Astro Bot"})
                     self.assertEqual(ps5_games["games"][0]["platform"], "PS5")
+
+    async def test_mcp_wildcard_host_and_origin_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cfg = _make_settings(
+                td,
+                allowed_hosts=("*.crjacobs.cc", "*.ts.net", "testserver"),
+                mcp_allowed_origins=("https://*.crjacobs.cc",),
+            )
+            app = create_app(
+                cfg,
+                client_factory=lambda: httpx.AsyncClient(
+                    transport=httpx.MockTransport(_mock_storefront_transport)
+                ),
+            )
+            services: AppServices = app.state.services
+
+            async with app.router.lifespan_context(app):
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                    r_boot = await client.post(
+                        "/api/auth/bootstrap",
+                        json={"username": "alice", "password": "StrongPassword!123"},
+                    )
+                    self.assertEqual(r_boot.status_code, 201)
+                    alice_scope = UserScope(
+                        user_id=r_boot.json()["account"]["id"],
+                        username="alice",
+                        role="admin",
+                        status="active",
+                    )
+                    pat = services.identity.create_pat(
+                        alice_scope, name="mcp-wildcard", scopes=["read:library"]
+                    )
+
+                    # Wildcard Host + Origin succeeds
+                    sid = await _mcp_init_session(
+                        client,
+                        pat.token,
+                        extra_headers={
+                            "Host": "gaming-mcp.crjacobs.cc",
+                            "Origin": "https://sub.crjacobs.cc",
+                        },
+                    )
+                    self.assertTrue(sid)
+
+                    # Lookalike Host fails with 400
+                    bad_host = await _mcp_post(
+                        client,
+                        pat.token,
+                        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                        headers={"Host": "evilcrjacobs.cc"},
+                    )
+                    self.assertEqual(bad_host.status_code, 400)
+
+                    # Lookalike Origin fails with 403
+                    bad_origin = await _mcp_post(
+                        client,
+                        pat.token,
+                        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                        headers={
+                            "Host": "gaming-mcp.crjacobs.cc",
+                            "Origin": "https://evilcrjacobs.cc",
+                        },
+                    )
+                    self.assertEqual(bad_origin.status_code, 403)
