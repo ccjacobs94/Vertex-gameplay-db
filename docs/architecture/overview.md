@@ -16,20 +16,28 @@ This document describes the replacement architecture under `src/vertex/` alongsi
   - `models.py` / `repository.py` / `service.py`: One-time local bootstrap admin creation, local authentication with per-IP + per-username throttling, single-use expiring invites, administrator user lifecycle with last-admin & self-delete protections, revocable sessions & scoped PATs, encrypted connection credentials, and timezone/era settings.
 - **`src/vertex/catalog/`**:
   - `taxonomy.py`: Exact controlled `GENRES`, `TAGS`, and `RETIRED_GENRES` plus case-insensitive merge/validation helpers.
-  - `repository.py` / `service.py`: Shared public `catalog_cache` storing provenance and retrieval timestamps (no personal data).
+  - `repository.py` / `service.py`: Shared public `catalog_cache` storing provenance and retrieval timestamps (no personal data), `search_catalog`, and `CatalogLookupProvider` boundary for merge-only enrichment.
 - **`src/vertex/library/`**:
-  - `models.py` / `repository.py` / `service.py`: Personal library entries, independent platform copies, cross-platform reconciliation & reversible unlink, strict preservation of `status_locked`, `ownership_locked`, `user_rating`, `notes`, `favorite`, and Game Pass vs `ownership_status` separation.
-  - `portability.py`: Schema-validated versioned JSON export/import (`format_version: 1`, dry-run preview, `merge` vs `replace` policy, zero secrets/passwords) and size/header/integrity-validated legacy SQLite snapshot import.
+  - `models.py` / `repository.py` / `service.py`: Personal library entries, independent platform copies, cross-platform reconciliation (merge, dismiss, reset-dismissals, unlink), grouped achievements, strict preservation of `status_locked`, `ownership_locked`, `user_rating`, `notes`, `favorite`, and Game Pass vs `ownership_status` separation.
+  - `portability.py`: Schema-validated versioned JSON export/import (`format_version: 1`, dry-run preview, `merge` vs `replace` policy, zero secrets/passwords, ledger rebuild on apply) and size/header/integrity-validated legacy SQLite snapshot import.
 - **`src/vertex/activity/`**:
-  - `models.py` / `repository.py` / `service.py`: Unified `play_observations` ledger, separate `provider_baselines`, `play_sessions` with `is_locked`, 30-minute delta coalescing excluding locked sessions, non-recreation on session deletion, negative-delta guard, unlocked backlog-to-`Playing` auto-transition, and timezone-aware `daily_playtime_ledger` projection.
-- **`src/vertex/integrations/platforms/`**:
-  - `base.py`: `PlatformAdapter` protocol declaring capabilities, auth modes, normalized snapshots, and structured errors (`timeout`, `rate_limited`, `auth_failed`, `upstream_error`).
-  - `steam.py`: Async `httpx` Steam library/vanity client (sanitized errors, timeout/retry safe) + durable job runner execution (`sync_steam_for_user`).
+  - `models.py` / `repository.py` / `service.py`: Unified `play_observations` ledger, separate `provider_baselines`, `play_sessions` with `is_locked`, exact-interval vs cumulative-delta deduplication, 30-minute delta coalescing excluding locked sessions, non-recreation on session deletion, negative-delta guard, unlocked backlog-to-`Playing` auto-transition, `playtime_prompts` creation/resolution (`accept`/`dismiss`/`mute`), and timezone-aware `daily_playtime_ledger` projection.
+- **`src/vertex/analytics/`**:
+  - `models.py` / `repository.py` / `service.py`: Strictly read-only library habits, completion rates, circadian rhythm, session streaks, snack vs binge, 30d rotation, and window statistics derived from authoritative records.
+- **`src/vertex/wishlist/`**:
+  - `models.py` / `repository.py` / `service.py`: Personal wishlist tracking, canonical editions/SKUs, ownership conflict auto-muting, manual price & all-time low history, smart upgrade deal evaluation, and idempotent library purchase conversion.
+- **`src/vertex/integrations/`**:
+  - `platforms/base.py` & `steam.py`: `PlatformAdapter` protocol + async `httpx` Steam library/vanity client + durable job runner execution (`sync_steam_for_user`).
+  - `prices/base.py`: `PriceAdapter` boundary for storefront price adapters.
+  - `homeassistant/`: Home Assistant state span parser, CSV importer, and authenticated live event webhook feeding `ActivityService`.
+  - `catalog_lookup.py`: Optional `HttpCatalogLookupProvider` implementation kept outside `catalog/` domain core.
 - **`src/vertex/migration/legacy_importer.py`**:
   - Non-destructive versioned importer reading legacy single-user or multi-user SQLite layouts into a fresh destination directory, producing canonical parity verification reports and translating legacy billing/approval states cleanly.
 - **`src/vertex/interfaces/`**:
-  - `http/`: Modular FastAPI `APIRouter`s (`health`, `auth`, `account`, `admin`, `library`, `connections`, `jobs`, `portability`), middleware enforcing Host/CSRF/TrustedProxy rules, and Pydantic OpenAPI schemas.
+  - `http/`: Modular FastAPI `APIRouter`s (`health`, `auth`, `account`, `admin`, `library`, `analytics`, `catalog`, `homeassistant`, `wishlist`, `connections`, `jobs`, `portability`), middleware enforcing Host/CSRF/TrustedProxy rules, and Pydantic OpenAPI schemas.
   - `cli.py`: Explicit maintenance CLI (`migrate`, `bootstrap-admin`, `reset-password`, `backup`, `restore`, `import-legacy`, `diagnostics`, `serve`).
+- **`frontend/`**:
+  - Four-view TypeScript modular UI (`Library`, `Activity`, `Insights`, `Wishlist`, plus `Settings` and `Administration`), compiled deterministically offline via `scripts/build_frontend.py`, paired with static-only service worker caching (`sw.js`).
 
 ## Data Flow Rules
 

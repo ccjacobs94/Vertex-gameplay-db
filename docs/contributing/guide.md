@@ -14,8 +14,10 @@
    PYTHONPATH=src python3 -m unittest discover -s tests/integration
    PYTHONPATH=src python3 -m unittest discover -s tests/migration
    PYTHONPATH=src python3 -m unittest discover -s tests/contracts
+   PYTHONPATH=src python3 -m unittest discover -s tests/e2e
    ```
-4. Build modular frontend assets & regenerate OpenAPI TypeScript types offline:
+4. Pinned reproducibility & linting: `.python-version` (`3.12`), `requirements.lock`, `frontend/package-lock.json`, and `[tool.ruff]` / `[tool.mypy]` configuration in `pyproject.toml` define the supported environment.
+5. Build modular frontend assets & regenerate OpenAPI TypeScript types offline:
    ```bash
    PYTHONPATH=src python3 scripts/export_openapi.py
    PYTHONPATH=src python3 scripts/build_frontend.py

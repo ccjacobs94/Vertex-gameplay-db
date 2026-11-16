@@ -13,3 +13,12 @@ The legacy application runs on the user's home server and includes 28 test files
 2. **Isolate new implementation under `src/vertex/`, `migrations/`, `frontend/`, `deploy/`**: New unit, integration, contract, and migration tests live in `tests/unit/`, `tests/integration/`, `tests/contracts/`, and `tests/migration/` and execute offline alongside the legacy oracle inside `scripts/check.sh`.
 3. **Import into a clean destination data directory**: Never point `src/vertex` directly at a live legacy `data/` directory for implicit startup upgrades. Use `python -m vertex import-legacy` to inventory, verify checksums/keys, translate statuses (`awaiting_approval` / `awaiting_payment` / `subscription_lapsed` -> `suspended` with explicit audit reason, revoking old sessions/OAuth tokens), and produce canonical verification counts + reproducible reports.
 4. **Reversible Cutover**: Phase 6 swaps the running container only after parity tests, offline restore drills, and migration verification succeed, retaining the frozen legacy backup and old container image for safe rollback.
+
+## Alternatives Considered
+
+- **In-place refactoring of `app.py`, `db.py`, and `static/app.js`**: Rejected because high-density interdependencies (single-user fallbacks, inline startup migrations, mixed SQLite tables) risk breaking the running home-server deployment and muddying legacy invariant tests before parity is proven.
+- **Big-bang parallel rewrite without legacy oracle checks**: Rejected because dropping parity with `test_invariants.py`, `test_multiuser_isolation.py`, and edge-case fixes verified over 28 legacy test modules would cause subtle data loss regressions.
+
+## Revisit Triggers
+
+- Legacy oracle freeze lifts at Phase 6 cutover once MCP parity (Phase 5), Xbox/PSN sync adapters, and live backup/restore verification pass acceptance checks and user approval is granted.

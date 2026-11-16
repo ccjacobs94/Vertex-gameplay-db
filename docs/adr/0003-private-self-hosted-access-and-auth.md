@@ -20,3 +20,14 @@ Legacy Vertex included hosted SaaS constructs (Stripe subscriptions, billing-onl
 
 - Password resets for non-email home deployments occur via authenticated administrator action or the host CLI (`python -m vertex reset-password`).
 - Public cloud AI assistants cannot assume reachability to a private LAN server without explicit VPN/private ingress.
+
+## Alternatives Considered
+
+- **Optional anonymous single-user mode (`VERTEX_REQUIRE_AUTH=false`)**: Rejected because single-account self-hosted servers frequently expose LAN/VPN URLs to household devices and scripts; requiring a session or scoped PAT uniformly removes fallback-scope bugs.
+- **Keep Stripe/subscription tables active with free-tier bypass**: Rejected because carrying billing session restrictions and signup approval queues increases attack surface and complexity without purpose in a private household deployment.
+- **Implicit ephemeral secret generation on first boot**: Rejected because restarting without persisting `.env` silently renders encrypted connector credentials unreadable; explicit key configuration fails fast and loudly.
+
+## Revisit Triggers
+
+- Revisit OAuth 2.1 / dynamic client registration deferral if a chosen private-network MCP client cannot send static `Authorization: Bearer <PAT>` headers in Phase 5.
+- Revisit email/OIDC password recovery if household deployments grow beyond local administrator resets.
