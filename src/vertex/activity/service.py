@@ -45,7 +45,7 @@ def _platform_family(platform: str) -> str:
         return "PC"
     if "xbox" in p:
         return "Xbox"
-    if "ps" in p or "playstation" in p:
+    if any(k in p for k in ("playstation", "psn", "ps1", "ps2", "ps3", "ps4", "ps5", "psp", "ps vita")):
         return "PlayStation"
     if "switch" in p or "nintendo" in p:
         return "Nintendo"

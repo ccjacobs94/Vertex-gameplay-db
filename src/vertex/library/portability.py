@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from vertex import __version__
-from vertex.activity.service import rebuild_daily_ledger_for_conn
+from vertex.activity.service import _parse_user_iso, rebuild_daily_ledger_for_conn
 from vertex.catalog.taxonomy import merge_lists, validate_genres, validate_tags
 from vertex.identity.service import IdentityService
 from vertex.infrastructure.errors import ValidationError
@@ -187,6 +187,15 @@ class LibraryPortabilityService:
                     raise ValidationError(f"Play session at index {idx} must be an object")
                 if not (s.get("started_at") and s.get("ended_at")):
                     raise ValidationError(f"Play session at index {idx} missing started_at or ended_at")
+                start_dt = _parse_user_iso(str(s["started_at"]), f"play_sessions[{idx}].started_at")
+                end_dt = _parse_user_iso(str(s["ended_at"]), f"play_sessions[{idx}].ended_at")
+                if end_dt < start_dt:
+                    raise ValidationError(f"Play session at index {idx} ended_at cannot be earlier than started_at")
+                prec = str(s.get("precision_level") or "estimated")
+                if prec not in ("exact", "estimated", "coarse"):
+                    raise ValidationError(
+                        f"Play session at index {idx} has invalid precision_level '{prec}'"
+                    )
                 try:
                     int(s.get("duration_minutes") or 0)
                 except (TypeError, ValueError) as exc:
@@ -390,17 +399,18 @@ class LibraryPortabilityService:
                 if not ext_str or ext_str not in planned_ext_ids:
                     warnings.append(f"Skipped session for unresolved game external_id '{ext}'")
                     continue
-                if not dry_run:
-                    assert gid is not None
+                if gid is not None:
                     exists = conn.execute(
                         """
                         SELECT 1 FROM play_sessions
                         WHERE game_id = ? AND started_at = ? AND ended_at = ? AND duration_minutes = ?
                         """,
-                        (gid, s["started_at"], s["ended_at"], dur),
+                        (gid, str(s["started_at"]), str(s["ended_at"]), dur),
                     ).fetchone()
                     if exists:
                         continue
+                if not dry_run:
+                    assert gid is not None
                     conn.execute(
                         """
                         INSERT INTO play_sessions (

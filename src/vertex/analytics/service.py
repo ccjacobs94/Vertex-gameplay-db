@@ -251,8 +251,8 @@ class AnalyticsService:
                     fam,
                     {"hours": 0.0, "count": 0, "beaten": 0, "top_title": None, "top_hours": -1.0},
                 )
-                c_hrs = round(copy.playtime_minutes / 60.0, 2)
-                st["hours"] = round(st["hours"] + c_hrs, 1)
+                c_hrs = copy.playtime_minutes / 60.0
+                st["hours"] = float(st["hours"]) + c_hrs
                 if fam not in seen_fams:
                     seen_fams.add(fam)
                     st["count"] += 1
@@ -264,13 +264,14 @@ class AnalyticsService:
 
         platforms_out: list[PlatformAnalyticsItem] = []
         for fam, st in sorted(plat_acc.items(), key=lambda kv: kv[1]["hours"], reverse=True):
+            fam_hours = round(float(st["hours"]), 1)
             platforms_out.append(
                 PlatformAnalyticsItem(
                     name=fam,
                     count=st["count"],
-                    hours=st["hours"],
+                    hours=fam_hours,
                     beaten_count=st["beaten"],
-                    playtime_pct=round((st["hours"] / max(total_hours, 0.1)) * 100, 1) if total_hours else 0.0,
+                    playtime_pct=round((fam_hours / max(total_hours, 0.1)) * 100, 1) if total_hours else 0.0,
                     library_pct=round((st["count"] / max(unique_titles, 1)) * 100, 1) if unique_titles else 0.0,
                     completion_rate=round((st["beaten"] / max(st["count"], 1)) * 100, 1),
                     top_game_title=st["top_title"],
@@ -288,7 +289,7 @@ class AnalyticsService:
                     gen,
                     {"hours": 0.0, "count": 0, "beaten": 0, "playing": 0, "backlog": 0, "dropped": 0},
                 )
-                gd["hours"] = round(float(gd["hours"]) + g_hrs, 1)
+                gd["hours"] = float(gd["hours"]) + g_hrs
                 gd["count"] = int(gd["count"]) + 1
                 if st_name in ("Beaten", "Completed"):
                     gd["beaten"] = int(gd["beaten"]) + 1
@@ -303,12 +304,14 @@ class AnalyticsService:
             GenreAnalyticsItem(
                 genre=gen,
                 count=int(gd["count"]),
-                hours=float(gd["hours"]),
+                hours=round(float(gd["hours"]), 1),
                 beaten_count=int(gd["beaten"]),
                 playing_count=int(gd["playing"]),
                 backlog_count=int(gd["backlog"]),
                 dropped_count=int(gd["dropped"]),
-                playtime_pct=round((float(gd["hours"]) / max(total_hours, 0.1)) * 100, 1) if total_hours else 0.0,
+                playtime_pct=round((round(float(gd["hours"]), 1) / max(total_hours, 0.1)) * 100, 1)
+                if total_hours
+                else 0.0,
                 completion_rate=round((int(gd["beaten"]) / max(int(gd["count"]), 1)) * 100, 1),
             )
             for gen, gd in sorted(genre_acc.items(), key=lambda kv: kv[1]["hours"], reverse=True)
@@ -320,7 +323,7 @@ class AnalyticsService:
             for t in c["tags"]:
                 td = tag_acc.setdefault(t, {"count": 0, "hours": 0.0, "beaten": 0, "dropped": 0})
                 td["count"] = int(td["count"]) + 1
-                td["hours"] = round(float(td["hours"]) + c["hours"], 1)
+                td["hours"] = float(td["hours"]) + c["hours"]
                 if c["status"] in ("Beaten", "Completed"):
                     td["beaten"] = int(td["beaten"]) + 1
                 elif c["status"] == "Dropped":
@@ -330,7 +333,7 @@ class AnalyticsService:
             TagAnalyticsItem(
                 tag=t,
                 count=int(td["count"]),
-                hours=float(td["hours"]),
+                hours=round(float(td["hours"]), 1),
                 dropped_count=int(td["dropped"]),
                 drop_rate=min(100.0, round((int(td["dropped"]) / max(int(td["count"]), 1)) * 100, 1)),
                 completion_rate=min(100.0, round((int(td["beaten"]) / max(int(td["count"]), 1)) * 100, 1)),
@@ -657,27 +660,41 @@ class AnalyticsService:
 
         games_by_id = {int(g["id"]): g for g in snap["games"]}
         target_game_id = game_id
-        if target_game_id is None and title:
+        if target_game_id is None and title and title.strip():
             q = title.strip().lower()
+            matched_title_gid: int | None = None
             for gid, grow in games_by_id.items():
                 if grow["title"].strip().lower() == q:
-                    target_game_id = gid
+                    matched_title_gid = gid
                     break
+            target_game_id = matched_title_gid if matched_title_gid is not None else -1
 
         plat_filter = (platform or "").strip().lower()
+        target_fam = _platform_family(platform) if plat_filter else None
         cutoff_utc = now_utc - timedelta(days=max(1, days)) if days > 0 else None
+        cutoff_90d = now_utc - timedelta(days=90)
+
+        def _matches_plat(raw_plat: str) -> bool:
+            if not plat_filter:
+                return True
+            low = raw_plat.lower()
+            return plat_filter in low or _platform_family(raw_plat).lower() == plat_filter
 
         sessions_filtered: list[dict[str, Any]] = []
+        count_90d = 0
         for s in snap["sessions"]:
             gid = int(s["game_id"])
             if target_game_id is not None and gid != target_game_id:
                 continue
-            if plat_filter and plat_filter not in str(s["platform"] or "").lower():
+            raw_plat = str(s["platform"] or "")
+            if not _matches_plat(raw_plat):
                 continue
             try:
                 end_dt = _parse_iso(s["ended_at"])
             except Exception:
                 continue
+            if end_dt >= cutoff_90d:
+                count_90d += 1
             if cutoff_utc is not None and end_dt < cutoff_utc:
                 continue
             g = games_by_id.get(gid)
@@ -704,13 +721,19 @@ class AnalyticsService:
             )
 
         # Ledger projection filtered cleanly
-        target_fam = _platform_family(platform) if plat_filter else None
         ledger_rows = []
         for lr in snap["ledger"]:
-            if target_game_id is not None and int(lr["game_id"]) != target_game_id:
+            gid = int(lr["game_id"])
+            if target_game_id is not None and gid != target_game_id:
                 continue
-            if target_fam and lr["platform_family"] != target_fam:
-                continue
+            if plat_filter:
+                fam_val = str(lr["platform_family"] or "")
+                g_row = games_by_id.get(gid)
+                g_plat = str(g_row["platform"] or "") if g_row else ""
+                if target_fam and fam_val.lower() != target_fam.lower():
+                    continue
+                if target_fam and plat_filter != target_fam.lower() and not _matches_plat(g_plat):
+                    continue
             ledger_rows.append(lr)
 
         # 1. Streaks from daily_playtime_ledger (dates >= 15 mins)
@@ -772,8 +795,6 @@ class AnalyticsService:
             median_mins = 0.0
             avg_mins = 0.0
 
-        cutoff_90d = now_utc - timedelta(days=90)
-        count_90d = sum(1 for s in sessions_filtered if _parse_iso(s["ended_at"]) >= cutoff_90d)
         sessions_per_week = round(count_90d / (90.0 / 7.0), 1)
 
         tot_active = round(sum(s["active_minutes"] for s in sessions_filtered), 1)
@@ -791,7 +812,8 @@ class AnalyticsService:
                 gid = int(lr["game_id"])
                 m = float(lr["minutes_played"] or 0.0)
                 mins_30d_by_game[gid] = mins_30d_by_game.get(gid, 0.0) + m
-                game_30d_days.setdefault(gid, {})[lr["date"]] = round(m, 1)
+                prev_day = game_30d_days.setdefault(gid, {}).get(lr["date"], 0.0)
+                game_30d_days[gid][lr["date"]] = round(prev_day + m, 1)
 
         total_30d_mins = sum(mins_30d_by_game.values())
         ranked_30d = sorted(mins_30d_by_game.items(), key=lambda kv: kv[1], reverse=True)
@@ -992,7 +1014,10 @@ class AnalyticsService:
         plat_map: dict[str, int] = {}
 
         for r in rows:
-            end_dt = _parse_iso(r["ended_at"])
+            try:
+                end_dt = _parse_iso(r["ended_at"])
+            except Exception:
+                continue
             if cutoff is not None and end_dt < cutoff:
                 continue
             dur = int(r["duration_minutes"] or 0)

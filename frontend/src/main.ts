@@ -89,7 +89,9 @@ async function renderApp(): Promise<void> {
   } else if (currentView === "wishlist") {
     await renderWishlistView(mainHost);
   } else if (currentView === "settings") {
-    await renderSettingsView(mainHost, userSnapshot);
+    await renderSettingsView(mainHost, userSnapshot, (updated) => {
+      currentUser = updated;
+    });
   } else if (currentView === "admin" && userSnapshot.role === "admin") {
     await renderAdminView(mainHost, userSnapshot);
   } else {

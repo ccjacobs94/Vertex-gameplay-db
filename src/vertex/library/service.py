@@ -130,9 +130,7 @@ class LibraryService:
         if search.strip():
             clauses.append("LOWER(title) LIKE ?")
             params.append(f"%{search.strip().lower()}%")
-        if platform.strip():
-            clauses.append("platform = ?")
-            params.append(platform.strip())
+        plat_q = platform.strip().lower()
         if status.strip():
             clauses.append("completion_status = ?")
             params.append(status.strip())
@@ -150,7 +148,16 @@ class LibraryService:
 
         with self.db_manager.library_connection(scope) as conn:
             rows = conn.execute(sql, params).fetchall()
-            return [row_to_game(r) for r in rows]
+            games = [row_to_game(r) for r in rows]
+        if plat_q:
+            from vertex.activity.service import _platform_family
+
+            games = [
+                g
+                for g in games
+                if plat_q in g.platform.lower() or _platform_family(g.platform).lower() == plat_q
+            ]
+        return games
 
     def get_game(self, scope: UserScope, game_id: int) -> GameRecord:
         scope.require_active()

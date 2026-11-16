@@ -18,9 +18,9 @@ export async function renderAdminView(container: HTMLElement, currentUser: UserA
   const invitesList = el("div", { class: "stack" });
   const inviteOut = el("pre", { class: "code-out" });
 
-  const newUsername = el("input", { type: "text", required: true, placeholder: "household-member" }) as HTMLInputElement;
-  const newPass = el("input", { type: "password", required: true, minlength: "8", placeholder: "Temporary password" }) as HTMLInputElement;
-  const inviteNote = el("input", { type: "text", placeholder: "Invite note (e.g. Alex)" }) as HTMLInputElement;
+  const newUsername = el("input", { type: "text", required: true, placeholder: "household-member", "aria-label": "New member username" }) as HTMLInputElement;
+  const newPass = el("input", { type: "password", required: true, minlength: "8", placeholder: "Temporary password", "aria-label": "New member temporary password" }) as HTMLInputElement;
+  const inviteNote = el("input", { type: "text", placeholder: "Invite note (e.g. Alex)", "aria-label": "Invite note" }) as HTMLInputElement;
 
   function openResetPasswordDialog(user: UserAccountResponse): void {
     openModalDialog(`Reset Password: ${user.username}`, (dialog, body) => {

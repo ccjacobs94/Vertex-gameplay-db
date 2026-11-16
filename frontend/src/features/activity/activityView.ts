@@ -191,15 +191,26 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
     }
   }
 
-  const evtTitle = el("input", { type: "text", required: true, placeholder: "Halo Infinite" }) as HTMLInputElement;
-  const evtPlatform = el("input", { type: "text", value: "PC (Steam)" }) as HTMLInputElement;
-  const evtKind = el("select", {}, [
+  const evtTitle = el("input", { type: "text", required: true, placeholder: "Halo Infinite", "aria-label": "Game title" }) as HTMLInputElement;
+  const evtPlatform = el("input", { type: "text", value: "PC (Steam)", "aria-label": "Platform" }) as HTMLInputElement;
+  const evtKind = el("select", { "aria-label": "Event type" }, [
     el("option", { value: "record" }, ["record (exact duration)"]),
     el("option", { value: "start" }, ["start"]),
     el("option", { value: "stop" }, ["stop"]),
   ]) as HTMLSelectElement;
-  const evtMins = el("input", { type: "number", min: "1", value: "45" }) as HTMLInputElement;
-  const evtNotes = el("input", { type: "text", placeholder: "Optional session note" }) as HTMLInputElement;
+  const evtMins = el("input", { type: "number", min: "1", value: "45", "aria-label": "Duration in minutes" }) as HTMLInputElement;
+  const evtNotes = el("input", { type: "text", placeholder: "Optional session note", "aria-label": "Session note" }) as HTMLInputElement;
+  evtKind.addEventListener("change", () => {
+    if (evtKind.value === "stop") {
+      evtMins.value = "";
+      evtMins.placeholder = "Auto from start (or mins)";
+    } else if (evtKind.value === "start") {
+      evtMins.placeholder = "Unused on start";
+    } else {
+      evtMins.placeholder = "Minutes";
+      if (!evtMins.value) evtMins.value = "45";
+    }
+  });
 
   const csvPlatform = el("input", { type: "text", value: "Xbox" }) as HTMLInputElement;
   const csvArea = el("textarea", {
@@ -223,11 +234,13 @@ export async function renderActivityView(container: HTMLElement): Promise<void> 
           showBanner(bannerBox, "");
           try {
             const kind = evtKind.value;
+            const rawMins = evtMins.value.trim();
+            const durVal = kind === "start" || (kind === "stop" && !rawMins) ? null : Number(rawMins || 1);
             const res = await ingestHomeAssistantEvent({
               event: kind,
               title: evtTitle.value.trim(),
               platform: evtPlatform.value.trim() || "PC",
-              duration_minutes: kind === "start" ? null : Number(evtMins.value || 1),
+              duration_minutes: durVal,
               notes: evtNotes.value.trim() || null,
             });
             showBanner(bannerBox, `Event recorded: ${res.status} (${res.duration_minutes}m)`, "info");

@@ -225,6 +225,48 @@ class TestHttpIsolationAndAuth(unittest.TestCase):
             self.assertEqual(resolve_client_ip(proxied_req, cfg), "100.64.2.15")
             validate_request_host_and_csrf(proxied_req, cfg)
 
+            # Local loopback Docker HEALTHCHECK (/readyz & /healthz) works even when allowed_hosts is custom LAN hostname
+            loopback_ready = Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/readyz",
+                    "headers": [(b"host", b"127.0.0.1:8090")],
+                    "client": ("127.0.0.1", 54322),
+                }
+            )
+            validate_request_host_and_csrf(loopback_ready, cfg)
+
+            # Non-health loopback requests or spoofed external Hosts remain blocked
+            from fastapi import HTTPException
+
+            with self.assertRaises(HTTPException):
+                validate_request_host_and_csrf(
+                    Request(
+                        {
+                            "type": "http",
+                            "method": "GET",
+                            "path": "/api/games",
+                            "headers": [(b"host", b"127.0.0.1:8090")],
+                            "client": ("127.0.0.1", 54323),
+                        }
+                    ),
+                    cfg,
+                )
+            with self.assertRaises(HTTPException):
+                validate_request_host_and_csrf(
+                    Request(
+                        {
+                            "type": "http",
+                            "method": "GET",
+                            "path": "/readyz",
+                            "headers": [(b"host", b"evil.invalid")],
+                            "client": ("127.0.0.1", 54324),
+                        }
+                    ),
+                    cfg,
+                )
+
             # Empty Host header is rejected
             client = self._make_client(root)
             self.assertEqual(client.get("/api/games", headers={"Host": ""}).status_code, 400)

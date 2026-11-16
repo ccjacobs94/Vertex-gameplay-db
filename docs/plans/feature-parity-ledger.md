@@ -37,7 +37,7 @@ Legacy baseline: `scripts/check.sh` passes **295 tests across 28 test modules** 
 
 ---
 
-## Complete HTTP Route Inventory (`app.py` 85 decorators / 70 distinct paths + `/static` mount; `oauth_provider.py` 10 routes = 95 handlers across 80 distinct paths)
+## Complete HTTP Route Inventory (`app.py` 85 decorators across 70 paths + `/static` mount; `oauth_provider.py` 10 routes = 81 distinct non-OpenAPI paths, 95 handlers + `/static`)
 
 ### Auth, Onboarding, Invites, & Removed Hosted Routes
 

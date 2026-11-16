@@ -12,21 +12,21 @@ import {
 } from "../../shared/api.ts";
 import { clearEl, el, showBanner } from "../../shared/dom.ts";
 
-export async function renderSettingsView(container: HTMLElement, account: UserAccountResponse): Promise<void> {
+export async function renderSettingsView(container: HTMLElement, account: UserAccountResponse, onAccountUpdated?: (updated: UserAccountResponse) => void): Promise<void> {
   clearEl(container);
   const bannerBox = el("div");
   const jobsBox = el("div", { class: "stack" });
   const patsBox = el("div", { class: "stack" });
   const steamStatusLbl = el("span", { class: "muted" });
 
-  const tzIn = el("input", { type: "text", value: account.timezone || "auto" }) as HTMLInputElement;
+  const tzIn = el("input", { type: "text", value: account.timezone || "auto", "aria-label": "Account timezone" }) as HTMLInputElement;
   const steamIdIn = el("input", { type: "text", placeholder: "SteamID64 or vanity" }) as HTMLInputElement;
   const steamKeyIn = el("input", { type: "password", placeholder: "Optional Steam Web API key (encrypted)" }) as HTMLInputElement;
 
   const curPwIn = el("input", { type: "password", required: true }) as HTMLInputElement;
   const newPwIn = el("input", { type: "password", required: true, minlength: "8" }) as HTMLInputElement;
 
-  const patNameIn = el("input", { type: "text", placeholder: "Home Assistant / MCP script" }) as HTMLInputElement;
+  const patNameIn = el("input", { type: "text", placeholder: "Home Assistant / MCP script", "aria-label": "Token name" }) as HTMLInputElement;
   const patOut = el("pre", { class: "code-out" });
 
   async function refreshData(): Promise<void> {
@@ -148,7 +148,8 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
         onSubmit: async (ev: Event) => {
           ev.preventDefault();
           try {
-            await updateTimezone(tzIn.value);
+            const updated = await updateTimezone(tzIn.value);
+            if (onAccountUpdated) onAccountUpdated(updated);
             showBanner(bannerBox, "Timezone updated", "info");
           } catch (err) {
             showBanner(bannerBox, err instanceof Error ? err.message : "Timezone update failed", "error");

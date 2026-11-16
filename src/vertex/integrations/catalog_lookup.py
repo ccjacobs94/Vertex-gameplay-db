@@ -8,9 +8,43 @@ from typing import Any, Callable
 
 import httpx
 
-from vertex.catalog.taxonomy import validate_genres, validate_tags
+from vertex.catalog.taxonomy import GENRES, validate_genres, validate_tags
 
 logger = logging.getLogger("vertex.integrations.catalog_lookup")
+
+_WIKIPEDIA_GENRE_PHRASES: list[tuple[str, str]] = sorted(
+    [
+        *((g.lower(), g) for g in GENRES),
+        ("action-adventure", "Action-Adventure"),
+        ("action role-playing", "Action RPG"),
+        ("tactical role-playing", "Tactical RPG"),
+        ("role-playing", "RPG"),
+        ("first-person shooter", "FPS"),
+        ("third-person shooter", "Third-Person Shooter"),
+        ("turn-based strategy", "Turn-Based Strategy"),
+        ("puzzle-platform", "Puzzle Platformer"),
+        ("puzzle platformer", "Puzzle Platformer"),
+        ("platform", "Platformer"),
+        ("survival horror", "Horror"),
+        ("hack-and-slash", "Hack and Slash"),
+        ("hack and slash", "Hack and Slash"),
+        ("roguelite", "Roguelike"),
+        ("visual novel", "Visual Novel"),
+    ],
+    key=lambda pair: len(pair[0]),
+    reverse=True,
+)
+
+
+def _extract_genres_from_description(desc: str) -> list[str]:
+    low = (desc or "").lower()
+    if not low:
+        return []
+    found: list[str] = []
+    for phrase, canonical in _WIKIPEDIA_GENRE_PHRASES:
+        if re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", low) and canonical not in found:
+            found.append(canonical)
+    return validate_genres(found[:4])
 
 
 class HttpCatalogLookupProvider:
@@ -112,30 +146,30 @@ class HttpCatalogLookupProvider:
                             "generator": "search",
                             "gsrsearch": f"{q} video game",
                             "gsrlimit": str(min(5, capped)),
-                            "prop": "pageimages|extracts",
+                            "prop": "pageimages|description",
                             "piprop": "thumbnail",
+                            "pilicense": "any",
                             "pithumbsize": "600",
-                            "exintro": "1",
-                            "explaintext": "1",
                             "format": "json",
                         },
                     )
                     if rw.status_code == 200:
-                        pages = ((rw.json().get("query") or {}).get("pages") or {}).values()
-                        for page in pages:
+                        pages = (rw.json().get("query") or {}).get("pages") or {}
+                        sorted_pages = sorted(pages.values(), key=lambda p: int(p.get("index") or 99))
+                        for page in sorted_pages:
                             raw_title = str(page.get("title") or "")
-                            clean_title = re.sub(r"\s*\(video game\)\s*$", "", raw_title, flags=re.I).strip()
+                            clean_title = re.sub(r"\s*\(.*?video game.*?\)\s*", "", raw_title, flags=re.I).strip()
                             if not clean_title or clean_title.lower() in seen:
                                 continue
                             seen.add(clean_title.lower())
-                            extract = str(page.get("extract") or "")
-                            yr_m = re.search(r"\b(19[7-9]\d|20[0-3]\d)\b", extract)
+                            desc = str(page.get("description") or "")
+                            yr_m = re.search(r"\b(19[7-9]\d|20[0-3]\d)\b", desc)
                             thumb = (page.get("thumbnail") or {}).get("source")
                             results.append(
                                 {
                                     "title": clean_title,
                                     "steam_appid": None,
-                                    "genres": validate_genres(re.findall(r"\b[A-Za-z-]+\b", extract)),
+                                    "genres": _extract_genres_from_description(desc),
                                     "tags": [],
                                     "release_year": int(yr_m.group(1)) if yr_m else None,
                                     "critic_score": None,
@@ -159,9 +193,12 @@ class HttpCatalogLookupProvider:
             if ext.startswith("steam:"):
                 appid_part = ext.split(":", 1)[1]
                 if appid_part.isdigit():
-                    details = await self._fetch_steam_appdetails(client, int(appid_part))
-                    if details:
-                        return details
+                    try:
+                        details = await self._fetch_steam_appdetails(client, int(appid_part))
+                        if details:
+                            return details
+                    except Exception as exc:
+                        logger.debug("Steam appdetails lookup failed for %s: %s", ext, exc)
         matches = await self.search(title, limit=3)
         if not matches:
             return None

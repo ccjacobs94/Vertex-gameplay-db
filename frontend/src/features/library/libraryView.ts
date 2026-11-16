@@ -369,17 +369,25 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
                   type: "button",
                   class: "btn btn-primary",
                   onClick: async () => {
-                    await confirmReconcile(ids);
-                    await loadCandidates();
-                    await refresh();
+                    try {
+                      await confirmReconcile(ids);
+                      await loadCandidates();
+                      await refresh();
+                    } catch (err) {
+                      showBanner(modalBanner, err instanceof Error ? err.message : "Failed merging titles", "error");
+                    }
                   },
                 }, ["Merge"]),
                 el("button", {
                   type: "button",
                   class: "btn btn-ghost",
                   onClick: async () => {
-                    await dismissReconcile(ids);
-                    await loadCandidates();
+                    try {
+                      await dismissReconcile(ids);
+                      await loadCandidates();
+                    } catch (err) {
+                      showBanner(modalBanner, err instanceof Error ? err.message : "Failed dismissing candidate", "error");
+                    }
                   },
                 }, ["Dismiss"]),
               ]),
@@ -397,9 +405,13 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
             type: "button",
             class: "btn btn-secondary",
             onClick: async () => {
-              const res = await resetReconcileDismissals();
-              showBanner(modalBanner, `Restored ${res.cleared} dismissed candidate pair(s)`, "info");
-              await loadCandidates();
+              try {
+                const res = await resetReconcileDismissals();
+                showBanner(modalBanner, `Restored ${res.cleared} dismissed candidate pair(s)`, "info");
+                await loadCandidates();
+              } catch (err) {
+                showBanner(modalBanner, err instanceof Error ? err.message : "Failed resetting dismissals", "error");
+              }
             },
           }, ["Reset Dismissals"]),
           el("button", { type: "button", class: "btn btn-ghost", onClick: () => dialog.close() }, ["Close"]),

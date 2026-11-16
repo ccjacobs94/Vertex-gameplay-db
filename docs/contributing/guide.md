@@ -47,6 +47,6 @@ Never commit `.env`, `*.db`, `data/`, or real platform API keys.
 
 ## Module Ownership & Rules
 
-- Keep domain services (`identity`, `catalog`, `library`, `activity`) free of `fastapi` and `httpx` imports.
+- Keep domain services (`identity`, `catalog`, `library`, `activity`, `analytics`, `wishlist`) free of `fastapi` and `httpx` imports.
 - Every personal service method requires an explicit `UserScope`.
 - Follow Conventional Commits (`<type>(<scope>): <summary>`). Wait for Phase 6 cutover approval before altering legacy deployment hooks/scripts covered by `tests/test_cicd.py`.

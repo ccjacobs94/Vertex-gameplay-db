@@ -263,6 +263,22 @@ class HomeAssistantService:
 
         eff_platform = (platform or "").strip() or "PC"
         eff_source = (source or "").strip() or "homeassistant"
+        explicit_idem = (idempotency_key or "").strip()
+        if explicit_idem and ev in ("stop", "record"):
+            with self.db_manager.library_connection(scope) as conn:
+                dup = conn.execute(
+                    "SELECT game_id FROM play_observations WHERE idempotency_key = ?",
+                    (explicit_idem,),
+                ).fetchone()
+            if dup is not None:
+                return HomeAssistantEventResult(
+                    status="duplicate_ignored",
+                    game_id=int(dup["game_id"]),
+                    session_id=None,
+                    duration_minutes=0,
+                    idempotency_key=explicit_idem,
+                )
+
         active_map = self._load_active_sessions(scope)
 
         # Resolve game if title is provided, else match active session/external_id.

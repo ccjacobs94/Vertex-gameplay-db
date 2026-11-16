@@ -8,9 +8,11 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
+
 import tests._path  # noqa: F401
 from tests._path import MIGRATIONS_DIR
-from vertex.activity.service import ActivityService
+from vertex.activity.service import ActivityService, _platform_family
 from vertex.analytics.service import AnalyticsService
 from vertex.catalog.service import CatalogService
 from vertex.config import Settings
@@ -19,6 +21,7 @@ from vertex.infrastructure.errors import NotFoundError, ValidationError
 from vertex.infrastructure.jobs import JobQueue
 from vertex.infrastructure.secrets import SecretBox
 from vertex.infrastructure.sqlite import DatabaseManager
+from vertex.integrations.catalog_lookup import HttpCatalogLookupProvider
 from vertex.integrations.homeassistant.service import HomeAssistantService, parse_ha_csv_to_spans
 from vertex.library.service import LibraryService
 from vertex.wishlist.service import WishlistService
@@ -593,6 +596,115 @@ class TestRound2Services(unittest.TestCase):
                 idempotency_key="steam_cum:sts:3",
             )
             self.assertEqual(act.list_playtime_prompts(scope), [])
+
+    def test_regression_analytics_filters_platform_family_and_cadence_and_list_games(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scope, _, _, lib, act, ana, _, _ = self._setup(Path(tmp))
+            self.assertEqual(_platform_family("FPS Arcade"), "FPS Arcade")
+            self.assertEqual(_platform_family("PS5"), "PlayStation")
+
+            g_ps5 = lib.add_manual_game(scope, title="Astro Bot", platform="PS5")
+            g_steam = lib.add_manual_game(scope, title="Portal 2", platform="PC (Steam)")
+            self.assertEqual([g.title for g in lib.list_games(scope, platform="Steam")], ["Portal 2"])
+            self.assertEqual([g.title for g in lib.list_games(scope, platform="PlayStation")], ["Astro Bot"])
+
+            now = datetime.now(timezone.utc)
+            for d in (5, 10, 40, 50, 60, 70):
+                s = (now - timedelta(days=d, hours=1)).isoformat()
+                e = (now - timedelta(days=d)).isoformat()
+                act.record_interval_observation(
+                    scope,
+                    game_id=g_ps5.id,
+                    source="manual",
+                    platform="PS5",
+                    started_at=s,
+                    ended_at=e,
+                    duration_minutes=60,
+                    idempotency_key=f"ps5:{d}",
+                )
+
+            # Platform family filter matches PS5 sessions + PlayStation ledger consistently
+            sa_ps = ana.get_session_analytics(scope, days=30, platform="PlayStation")
+            self.assertEqual(sa_ps.total_sessions, 2)
+            # 6 sessions over 90d -> 0.5/week even when viewing a 30-day window
+            self.assertEqual(sa_ps.kpis["sweet_spot"]["sessions_per_week"], 0.5)
+            # Non-matching title filter returns empty instead of all sessions
+            self.assertEqual(ana.get_session_analytics(scope, title="DoesNotExist").total_sessions, 0)
+            self.assertEqual(len(lib.list_games(scope)), 2)
+            self.assertGreater(g_steam.id, 0)
+
+    def test_regression_http_catalog_lookup_wikipedia_and_steam_fallback(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            host = request.url.host or ""
+            if host == "store.steampowered.com" and request.url.path.endswith("/api/appdetails"):
+                return httpx.Response(500, text="upstream error")
+            if host == "store.steampowered.com" and request.url.path.endswith("/api/storesearch/"):
+                return httpx.Response(200, json={"items": []})
+            if host == "en.wikipedia.org":
+                return httpx.Response(
+                    200,
+                    json={
+                        "query": {
+                            "pages": {
+                                "10": {
+                                    "index": 2,
+                                    "title": "Tetris Effect",
+                                    "description": "2018 puzzle video game",
+                                    "thumbnail": {"source": "https://upload.example.test/te.jpg"},
+                                },
+                                "2": {
+                                    "index": 1,
+                                    "title": "Tetris (video game)",
+                                    "description": "1985 puzzle video game",
+                                    "extract": "Marketed with a strategy involving sports and action.",
+                                    "thumbnail": {"source": "https://upload.example.test/tetris.jpg"},
+                                },
+                            }
+                        }
+                    },
+                )
+            return httpx.Response(404)
+
+        prov = HttpCatalogLookupProvider(client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        hits = asyncio.run(prov.search("Tetris", limit=5))
+        self.assertEqual(hits[0]["title"], "Tetris")
+        self.assertEqual(hits[0]["genres"], ["Puzzle"])
+        self.assertEqual(hits[0]["release_year"], 1985)
+
+        # lookup_game falls back to Wikipedia/search when steam appdetails returns 500
+        fallback = asyncio.run(prov.lookup_game(title="Tetris", external_id="steam:999999"))
+        self.assertIsNotNone(fallback)
+        assert fallback is not None
+        self.assertEqual(fallback["title"], "Tetris")
+
+    def test_regression_ha_duplicate_stop_without_title_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scope, _, _, _, _, _, _, ha = self._setup(Path(tmp))
+            ha.ingest_event(
+                scope,
+                event="start",
+                title="Forza Horizon 5",
+                platform="Xbox",
+                external_id="xbox_fh5",
+                started_at="2026-10-02T19:00:00Z",
+            )
+            first = ha.ingest_event(
+                scope,
+                event="stop",
+                external_id="xbox_fh5",
+                ended_at="2026-10-02T20:00:00Z",
+                idempotency_key="ha_stop_retry_1",
+            )
+            self.assertEqual(first.status, "session_created")
+            retry = ha.ingest_event(
+                scope,
+                event="stop",
+                external_id="xbox_fh5",
+                ended_at="2026-10-02T20:00:00Z",
+                idempotency_key="ha_stop_retry_1",
+            )
+            self.assertEqual(retry.status, "duplicate_ignored")
+            self.assertEqual(retry.game_id, first.game_id)
 
 
 if __name__ == "__main__":

@@ -138,7 +138,8 @@ export async function renderInsightsView(container: HTMLElement): Promise<void> 
     // Hall of Fame & Backlog Gems
     const hofList = el("ul", { class: "bullet-list" });
     for (const item of lib.hall_of_fame.slice(0, 6)) {
-      hofList.appendChild(el("li", {}, [`${String(item.title || "")} (${String(item.platform || "")}) - ${Number(item.hours || 0)}h`]));
+      const hofHours = Number(item.playtime_hours ?? item.hours ?? 0);
+      hofList.appendChild(el("li", {}, [`${String(item.title || "")} (${String(item.platform || "")}) - ${hofHours}h`]));
     }
     const gemsList = el("ul", { class: "bullet-list" });
     for (const item of lib.backlog_gems.slice(0, 6)) {

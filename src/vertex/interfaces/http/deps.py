@@ -87,6 +87,14 @@ def resolve_client_ip(request: Request, settings: Settings) -> str:
     return peer
 
 
+def _is_loopback_peer(peer: str) -> bool:
+    return peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+
+def _is_loopback_host(host: str) -> bool:
+    return host.strip("[]") in ("127.0.0.1", "localhost", "::1")
+
+
 def validate_request_host_and_csrf(request: Request, settings: Settings) -> None:
     peer = request.client.host if request.client else ""
     raw_host = request.headers.get("host")
@@ -94,7 +102,13 @@ def validate_request_host_and_csrf(request: Request, settings: Settings) -> None
         raw_host = request.headers.get("x-forwarded-host")
     host = _extract_host(raw_host)
     allowed_norm = {h.lower().strip("[]") for h in settings.allowed_hosts}
-    if allowed_norm and (not host or host.strip("[]") not in allowed_norm):
+    is_local_health_probe = (
+        request.url.path in ("/healthz", "/readyz")
+        and _is_loopback_peer(peer)
+        and not request.headers.get("x-forwarded-host")
+        and _is_loopback_host(host)
+    )
+    if allowed_norm and not is_local_health_probe and (not host or host.strip("[]") not in allowed_norm):
         raise HTTPException(status_code=400, detail="Disallowed Host header")
 
     if request.method in _MUTATING_METHODS:

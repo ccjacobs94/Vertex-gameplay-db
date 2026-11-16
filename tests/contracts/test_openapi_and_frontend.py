@@ -72,6 +72,10 @@ class TestContractsAndFrontend(unittest.TestCase):
             lib_js = (dist_dir / "assets" / "features" / "library" / "libraryView.js").read_text(encoding="utf-8")
             for expected_st in ('"Beaten"', '"Dropped"', '"Borrowed"', '"None"'):
                 self.assertIn(expected_st, lib_js)
+            insights_js = (dist_dir / "assets" / "features" / "insights" / "insightsView.js").read_text(encoding="utf-8")
+            self.assertIn("playtime_hours", insights_js)
+            ledger_doc = (REPO_ROOT / "docs" / "plans" / "feature-parity-ledger.md").read_text(encoding="utf-8")
+            self.assertIn("81 distinct non-OpenAPI paths", ledger_doc)
 
             # Verify Dockerfile.v2 builds frontend cleanly, includes HEALTHCHECK, and uses pinned lockfile
             dockerfile_v2 = (REPO_ROOT / "deploy" / "Dockerfile.v2").read_text(encoding="utf-8")

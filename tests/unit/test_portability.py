@@ -339,3 +339,60 @@ class TestPortability(unittest.TestCase):
                     for r in conn2.execute("SELECT date, minutes_played FROM daily_playtime_ledger").fetchall()
                 }
             self.assertEqual(rows2, {"2026-10-15": 90.0})
+
+    def test_portability_validates_session_precision_and_timestamps_in_dry_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scope, _ident, _lib, port = self._setup(Path(tmp) / "app")
+            with self.assertRaises(ValidationError):
+                port.import_json(
+                    scope,
+                    {
+                        "format_version": 1,
+                        "games": [{"external_id": "m:1", "title": "Game A", "platform": "PC"}],
+                        "play_sessions": [
+                            {
+                                "game_external_id": "m:1",
+                                "started_at": "2026-10-15T18:00:00Z",
+                                "ended_at": "2026-10-15T19:00:00Z",
+                                "duration_minutes": 60,
+                                "precision_level": "invalid_level",
+                            }
+                        ],
+                    },
+                    dry_run=True,
+                )
+            with self.assertRaises(ValidationError):
+                port.import_json(
+                    scope,
+                    {
+                        "format_version": 1,
+                        "games": [{"external_id": "m:1", "title": "Game A", "platform": "PC"}],
+                        "play_sessions": [
+                            {
+                                "game_external_id": "m:1",
+                                "started_at": "not-a-timestamp",
+                                "ended_at": "2026-10-15T19:00:00Z",
+                                "duration_minutes": 60,
+                            }
+                        ],
+                    },
+                    dry_run=True,
+                )
+
+            # Duplicate session should report sessions_added=0 in both dry_run and apply
+            valid_payload = {
+                "format_version": 1,
+                "games": [{"external_id": "m:1", "title": "Game A", "platform": "PC"}],
+                "play_sessions": [
+                    {
+                        "game_external_id": "m:1",
+                        "started_at": "2026-10-15T18:00:00Z",
+                        "ended_at": "2026-10-15T19:00:00Z",
+                        "duration_minutes": 60,
+                    }
+                ],
+            }
+            first = port.import_json(scope, valid_payload, mode="merge", dry_run=False)
+            self.assertEqual(first.sessions_added, 1)
+            dry_dup = port.import_json(scope, valid_payload, mode="merge", dry_run=True)
+            self.assertEqual(dry_dup.sessions_added, 0)

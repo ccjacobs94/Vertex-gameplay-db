@@ -197,12 +197,36 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
   function openTargetsModal(item: WishlistItemResponse): void {
     openModalDialog(`Targets & Settings: ${item.canonical_game.title}`, (dialog, body) => {
       const modalBanner = el("div");
-      const platSel = el("select", {}, PLATFORM_FAMILIES.map((p) => el("option", { value: p }, [p]))) as HTMLSelectElement;
-      const targetIn = el("input", { type: "number", step: "0.01", min: "0", value: "25.00" }) as HTMLInputElement;
+      const defaultPlat = item.targets.length ? item.targets[0].platform_family : PLATFORM_FAMILIES[0];
+      const platSel = el("select", {}, PLATFORM_FAMILIES.map((p) => {
+        const opt = el("option", { value: p }, [p]) as HTMLOptionElement;
+        if (p === defaultPlat) opt.selected = true;
+        return opt;
+      })) as HTMLSelectElement;
+      const findTarget = (plat: string) => item.targets.find((t) => t.platform_family === plat);
+      const initialTarget = findTarget(platSel.value);
+      const targetIn = el("input", {
+        type: "number",
+        step: "0.01",
+        min: "0",
+        value: initialTarget ? initialTarget.target_price_usd.toFixed(2) : "25.00",
+      }) as HTMLInputElement;
       const smartIn = el("input", { type: "checkbox" }) as HTMLInputElement;
       smartIn.checked = item.allow_smart_upgrade;
       const forceIn = el("input", { type: "checkbox" }) as HTMLInputElement;
+      forceIn.checked = Boolean(initialTarget && !initialTarget.muted_owned_conflict && item.conflict.conflicted_platforms.includes(platSel.value));
       const notesIn = el("textarea", { rows: "2" }, [item.notes || ""]) as HTMLTextAreaElement;
+
+      platSel.addEventListener("change", () => {
+        const match = findTarget(platSel.value);
+        if (match) {
+          targetIn.value = match.target_price_usd.toFixed(2);
+          forceIn.checked = !match.muted_owned_conflict && item.conflict.conflicted_platforms.includes(platSel.value);
+        } else {
+          targetIn.value = "25.00";
+          forceIn.checked = false;
+        }
+      });
 
       const form = el("form", {
         class: "stack",
@@ -224,13 +248,27 @@ export async function renderWishlistView(container: HTMLElement): Promise<void> 
         },
       }, [
         modalBanner,
-        el("label", {}, ["Upsert Platform Target", platSel]),
+        el("label", {}, ["Platform Target", platSel]),
         el("label", {}, ["Target Price ($ USD)", targetIn]),
         el("label", { class: "row-check" }, [smartIn, "Allow smart edition upgrades"]),
         el("label", { class: "row-check" }, [forceIn, "Unmute / force track if owned"]),
         el("label", {}, ["Notes", notesIn]),
         el("div", { class: "row-actions" }, [
           el("button", { type: "submit", class: "btn btn-primary" }, ["Save"]),
+          el("button", {
+            type: "button",
+            class: "btn btn-secondary",
+            onClick: async () => {
+              showBanner(modalBanner, "");
+              try {
+                await updateWishlistPlatforms(item.id, { remove_platforms: [platSel.value] });
+                dialog.close("removed");
+                await refresh();
+              } catch (err) {
+                showBanner(modalBanner, err instanceof Error ? err.message : "Failed removing platform target", "error");
+              }
+            },
+          }, ["Remove Target"]),
           el("button", { type: "button", class: "btn btn-ghost", onClick: () => dialog.close("cancel") }, ["Cancel"]),
         ]),
       ]);
