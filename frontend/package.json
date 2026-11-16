@@ -1,0 +1,10 @@
+{
+  "name": "vertex-frontend",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "python3 ../scripts/build_frontend.py",
+    "typegen": "python3 ../scripts/export_openapi.py"
+  }
+}

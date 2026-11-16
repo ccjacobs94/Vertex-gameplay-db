@@ -1,0 +1,28 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends sqlite3 && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt requirements.lock pyproject.toml /app/
+RUN pip install --no-cache-dir -r requirements.lock
+
+COPY src /app/src
+COPY migrations /app/migrations
+COPY frontend /app/frontend
+
+ENV PYTHONPATH=/app/src
+RUN printf '#!/bin/sh\nexec python -m vertex "$@"\n' > /usr/local/bin/vertex && chmod +x /usr/local/bin/vertex
+RUN python -m vertex build-frontend --out-dir /app/frontend/dist
+
+ENV VERTEX_BIND_HOST=0.0.0.0
+ENV VERTEX_PORT=8090
+ENV VERTEX_DATA_DIR=/app/data
+
+EXPOSE 8090
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/readyz', timeout=3)"]
+
+# Never ignore migration or startup failures.
+CMD ["sh", "-c", "python -m vertex migrate && exec python -m vertex serve"]

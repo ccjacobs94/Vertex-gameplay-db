@@ -7,16 +7,25 @@ services:
     environment:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+      - VERTEX_DATA_DIR=/app/data
+      - VERTEX_BIND_HOST=0.0.0.0
+      - VERTEX_PORT=8090
+      - VERTEX_MCP_ENABLED=${VERTEX_MCP_ENABLED:-true}
+      - VERTEX_MCP_STANDALONE_ENABLED=${VERTEX_MCP_STANDALONE_ENABLED:-true}
+      - VERTEX_MCP_BIND_HOST=0.0.0.0
+      - VERTEX_MCP_PORT=8096
+      - VERTEX_WEB_PUSH_ENABLED=${VERTEX_WEB_PUSH_ENABLED:-false}
+      - VERTEX_COOKIE_SECURE=${VERTEX_COOKIE_SECURE:-false}
     ports:
       - "8095:8090"
       - "8097:8096"
     volumes:
-      - ${GAMEHUB_DATA_PATH:-./data}:/app/data
+      - ${VERTEX_DATA_PATH:-./data}:/app/data
       - ${GAMEHUB_BACKUP_PATH:-./data/backups}:/app/backups
       - ${GAMEHUB_CACHE_PATH:-./data/cache}:/app/cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/readyz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -34,16 +43,25 @@ services:
       - PGID=${PGID:-1000}
       - QA_PORT=${QA_PORT:-8098}
       - QA_MCP_PORT=${QA_MCP_PORT:-8099}
+      - VERTEX_DATA_DIR=/app/data
+      - VERTEX_BIND_HOST=0.0.0.0
+      - VERTEX_PORT=8090
+      - VERTEX_MCP_ENABLED=${VERTEX_MCP_ENABLED:-true}
+      - VERTEX_MCP_STANDALONE_ENABLED=${VERTEX_MCP_STANDALONE_ENABLED:-true}
+      - VERTEX_MCP_BIND_HOST=0.0.0.0
+      - VERTEX_MCP_PORT=8096
+      - VERTEX_WEB_PUSH_ENABLED=${VERTEX_WEB_PUSH_ENABLED:-false}
+      - VERTEX_COOKIE_SECURE=false
     ports:
       - "${QA_PORT:-8098}:8090"
       - "${QA_MCP_PORT:-8099}:8096"
     volumes:
-      - ${GAMEHUB_QA_DATA_PATH:-./data-qa}:/app/data
+      - ${VERTEX_QA_DATA_PATH:-./data-qa}:/app/data
       - ${GAMEHUB_QA_BACKUP_PATH:-./data-qa/backups}:/app/backups
       - ${GAMEHUB_QA_CACHE_PATH:-./data-qa/cache}:/app/cache
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8090/healthz"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/readyz"]
       interval: 30s
       timeout: 10s
       retries: 3
