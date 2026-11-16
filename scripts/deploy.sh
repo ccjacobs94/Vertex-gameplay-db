@@ -208,7 +208,7 @@ elif [[ "$TARGET" == "develop" ]]; then
       docker compose --profile qa run --rm --no-deps \
         -v "$LEGACY_QA_SRC:/legacy-src:ro" \
         --entrypoint python game-hub-qa -m vertex import-legacy \
-        --source /legacy-src --target /app/data \
+        --source-dir /legacy-src --dest-dir /app/data \
         --legacy-key "${GAMEHUB_SECRET_KEY:-}" --allow-legacy-fallback-key
     fi
   fi
