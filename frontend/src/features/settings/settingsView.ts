@@ -84,6 +84,7 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
   }
 
   container.appendChild(el("section", { class: "stack" }, [
+    el("h1", {}, ["Settings & Sync"]),
     bannerBox,
     el("div", { class: "panel" }, [
       el("h2", {}, ["Connections & Steam Sync"]),

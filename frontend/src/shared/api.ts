@@ -6,23 +6,50 @@ import type {
   AuthCredentialsRequest,
   AuthResponse,
   BootstrapStatusResponse,
+  CatalogEnrichmentReportResponse,
+  CatalogEnrichRequest,
+  CatalogSearchResultResponse,
   ConnectionsSummaryResponse,
   CreatedInviteResponse,
   CreatedPatResponse,
   CreateInviteRequest,
   CreatePatRequest,
+  GameAchievementsResponse,
   GameCreateRequest,
   GameResponse,
   GameUpdateRequest,
+  HomeAssistantEventRequest,
+  HomeAssistantEventResponse,
+  HomeAssistantImportCsvRequest,
+  HomeAssistantImportResponse,
   ImportReportResponse,
   InviteResponse,
   JobResponse,
   JobsOverviewResponse,
+  LibraryAnalyticsResponse,
   LibraryStatsResponse,
   PasswordChangeRequest,
   PatResponse,
+  PlaySessionResponse,
+  PlaytimePromptResolutionResponse,
+  PlaytimePromptResponse,
+  ReconcileCandidateResponse,
+  ResetDismissalsResponse,
+  SessionAnalyticsResponse,
+  SessionWindowStatsResponse,
   UpdateConnectionsRequest,
+  UpdateSessionRequest,
   UserAccountResponse,
+  WishlistCreateRequest,
+  WishlistDealEvaluationResponse,
+  WishlistHistoryResponse,
+  WishlistItemResponse,
+  WishlistPlatformsUpdateRequest,
+  WishlistPriceRecordRequest,
+  WishlistPriceRecordResponse,
+  WishlistPurchaseRequest,
+  WishlistPurchaseResponse,
+  WishlistUpdateRequest,
 } from "./api-types.ts";
 
 export class ApiError extends Error {
@@ -256,4 +283,180 @@ export function adminCreateInvite(body: CreateInviteRequest): Promise<CreatedInv
 
 export function adminRevokeInvite(codeHash: string): Promise<void> {
   return apiFetch<void>(`/api/admin/invites/${encodeURIComponent(codeHash)}`, { method: "DELETE" });
+}
+
+export function getGameAchievements(gameId: number): Promise<GameAchievementsResponse> {
+  return apiFetch<GameAchievementsResponse>(`/api/games/${gameId}/achievements`);
+}
+
+export function getReconcileCandidates(): Promise<Array<ReconcileCandidateResponse>> {
+  return apiFetch<Array<ReconcileCandidateResponse>>("/api/reconcile/candidates");
+}
+
+export function confirmReconcile(gameIds: Array<number>): Promise<{ canonical_id: number }> {
+  return apiFetch<{ canonical_id: number }>("/api/reconcile/confirm", {
+    method: "POST",
+    body: JSON.stringify({ game_ids: gameIds }),
+  });
+}
+
+export function dismissReconcile(gameIds: Array<number>): Promise<void> {
+  return apiFetch<void>("/api/reconcile/dismiss", {
+    method: "POST",
+    body: JSON.stringify({ game_ids: gameIds }),
+  });
+}
+
+export function unlinkReconcile(gameId: number): Promise<void> {
+  return apiFetch<void>(`/api/reconcile/unlink/${gameId}`, { method: "POST" });
+}
+
+export function resetReconcileDismissals(): Promise<ResetDismissalsResponse> {
+  return apiFetch<ResetDismissalsResponse>("/api/reconcile/reset-dismissals", { method: "POST" });
+}
+
+export function listPlaytimePrompts(): Promise<Array<PlaytimePromptResponse>> {
+  return apiFetch<Array<PlaytimePromptResponse>>("/api/playtime-prompts");
+}
+
+export function resolvePlaytimePrompt(promptId: number, action: string): Promise<PlaytimePromptResolutionResponse> {
+  return apiFetch<PlaytimePromptResolutionResponse>(`/api/playtime-prompts/${promptId}/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ action }),
+  });
+}
+
+export function listSessions(gameId?: number, limit = 50): Promise<Array<PlaySessionResponse>> {
+  const qs = new URLSearchParams();
+  if (gameId !== undefined) qs.set("game_id", String(gameId));
+  qs.set("limit", String(limit));
+  return apiFetch<Array<PlaySessionResponse>>(`/api/sessions?${qs.toString()}`);
+}
+
+export function updateSession(sessionId: number, body: UpdateSessionRequest): Promise<PlaySessionResponse> {
+  return apiFetch<PlaySessionResponse>(`/api/sessions/${sessionId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteSession(sessionId: number): Promise<void> {
+  return apiFetch<void>(`/api/sessions/${sessionId}`, { method: "DELETE" });
+}
+
+export function getSessionWindowStats(days = 30): Promise<SessionWindowStatsResponse> {
+  return apiFetch<SessionWindowStatsResponse>(`/api/sessions/stats?days=${days}`);
+}
+
+export function getDailyLedger(): Promise<Array<Record<string, unknown>>> {
+  return apiFetch<Array<Record<string, unknown>>>("/api/ledger");
+}
+
+export function rebuildDailyLedger(): Promise<Array<Record<string, unknown>>> {
+  return apiFetch<Array<Record<string, unknown>>>("/api/ledger/rebuild", { method: "POST" });
+}
+
+export function ingestHomeAssistantEvent(body: HomeAssistantEventRequest): Promise<HomeAssistantEventResponse> {
+  return apiFetch<HomeAssistantEventResponse>("/api/integrations/homeassistant/events", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function importHomeAssistantCsv(body: HomeAssistantImportCsvRequest): Promise<HomeAssistantImportResponse> {
+  return apiFetch<HomeAssistantImportResponse>("/api/integrations/homeassistant/import-csv", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function getLibraryAnalytics(search = "", platform = "", status = ""): Promise<LibraryAnalyticsResponse> {
+  const qs = new URLSearchParams();
+  if (search) qs.set("search", search);
+  if (platform) qs.set("platform", platform);
+  if (status) qs.set("status", status);
+  const clientTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (clientTz) qs.set("client_timezone", clientTz);
+  const query = qs.toString();
+  return apiFetch<LibraryAnalyticsResponse>(`/api/analytics${query ? `?${query}` : ""}`);
+}
+
+export function getSessionAnalytics(days = 365, limit = 50, offset = 0, platform = ""): Promise<SessionAnalyticsResponse> {
+  const qs = new URLSearchParams();
+  qs.set("days", String(days));
+  qs.set("limit", String(limit));
+  qs.set("offset", String(offset));
+  if (platform) qs.set("platform", platform);
+  const clientTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (clientTz) qs.set("client_timezone", clientTz);
+  return apiFetch<SessionAnalyticsResponse>(`/api/analytics/sessions?${qs.toString()}`);
+}
+
+export function searchCatalog(query: string, limit = 10): Promise<Array<CatalogSearchResultResponse>> {
+  const qs = new URLSearchParams({ q: query, limit: String(limit) });
+  return apiFetch<Array<CatalogSearchResultResponse>>(`/api/catalog/search?${qs.toString()}`);
+}
+
+export function enrichLibrary(body: CatalogEnrichRequest = { limit: 500, force: false }): Promise<CatalogEnrichmentReportResponse> {
+  return apiFetch<CatalogEnrichmentReportResponse>("/api/catalog/enrich", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function listWishlist(status = "active"): Promise<Array<WishlistItemResponse>> {
+  const qs = new URLSearchParams({ status });
+  return apiFetch<Array<WishlistItemResponse>>(`/api/wishlist?${qs.toString()}`);
+}
+
+export function createWishlistItem(body: WishlistCreateRequest): Promise<WishlistItemResponse> {
+  return apiFetch<WishlistItemResponse>("/api/wishlist", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateWishlistItem(itemId: number, body: WishlistUpdateRequest): Promise<WishlistItemResponse> {
+  return apiFetch<WishlistItemResponse>(`/api/wishlist/${itemId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function updateWishlistPlatforms(itemId: number, body: WishlistPlatformsUpdateRequest): Promise<WishlistItemResponse> {
+  return apiFetch<WishlistItemResponse>(`/api/wishlist/${itemId}/platforms`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+export function deleteWishlistItem(itemId: number): Promise<void> {
+  return apiFetch<void>(`/api/wishlist/${itemId}`, { method: "DELETE" });
+}
+
+export function recordWishlistPrice(itemId: number, body: WishlistPriceRecordRequest): Promise<WishlistPriceRecordResponse> {
+  return apiFetch<WishlistPriceRecordResponse>(`/api/wishlist/${itemId}/price`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function purchaseWishlistItem(itemId: number, body: WishlistPurchaseRequest): Promise<WishlistPurchaseResponse> {
+  return apiFetch<WishlistPurchaseResponse>(`/api/wishlist/${itemId}/purchase`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export function getWishlistHistory(itemId: number, limit = 50): Promise<WishlistHistoryResponse> {
+  return apiFetch<WishlistHistoryResponse>(`/api/wishlist/${itemId}/history?limit=${limit}`);
+}
+
+export function getWishlistDeals(smartUpgradesOnly = false, includeAboveTarget = false, platform = ""): Promise<WishlistDealEvaluationResponse> {
+  const qs = new URLSearchParams({
+    smart_upgrades_only: String(smartUpgradesOnly),
+    include_above_target: String(includeAboveTarget),
+  });
+  if (platform) qs.set("platform", platform);
+  return apiFetch<WishlistDealEvaluationResponse>(`/api/wishlist/deals?${qs.toString()}`);
 }

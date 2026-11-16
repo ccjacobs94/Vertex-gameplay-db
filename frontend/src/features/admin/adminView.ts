@@ -117,6 +117,7 @@ export async function renderAdminView(container: HTMLElement, currentUser: UserA
   }
 
   container.appendChild(el("section", { class: "stack" }, [
+    el("h1", {}, ["Administration"]),
     bannerBox,
     el("div", { class: "panel" }, [
       el("h2", {}, ["Single-Use Household Invitations"]),

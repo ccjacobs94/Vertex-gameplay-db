@@ -53,6 +53,17 @@ class TestContractsAndFrontend(unittest.TestCase):
             self.assertIn('"/api/"', sw_text)
             self.assertIn("return;", sw_text)
             self.assertIn("cache.addAll(STATIC_ASSETS)", sw_text)
+            for asset_path in (
+                "/assets/features/library/libraryView.js",
+                "/assets/features/activity/activityView.js",
+                "/assets/features/insights/insightsView.js",
+                "/assets/features/wishlist/wishlistView.js",
+                "/assets/features/settings/settingsView.js",
+                "/assets/features/admin/adminView.js",
+                "/assets/features/auth/authView.js",
+            ):
+                self.assertIn(asset_path, sw_text)
+                self.assertTrue((dist_dir / asset_path.lstrip("/")).is_file(), f"Missing built view: {asset_path}")
 
             # Verify strict TS class field erasure and canonical Vertex statuses in compiled JS
             api_js = (dist_dir / "assets" / "shared" / "api.js").read_text(encoding="utf-8")
@@ -62,10 +73,23 @@ class TestContractsAndFrontend(unittest.TestCase):
             for expected_st in ('"Beaten"', '"Dropped"', '"Borrowed"', '"None"'):
                 self.assertIn(expected_st, lib_js)
 
-            # Verify Dockerfile.v2 builds frontend without depending on .dockerignore-excluded scripts/
+            # Verify Dockerfile.v2 builds frontend cleanly, includes HEALTHCHECK, and uses pinned lockfile
             dockerfile_v2 = (REPO_ROOT / "deploy" / "Dockerfile.v2").read_text(encoding="utf-8")
             self.assertNotIn("COPY scripts", dockerfile_v2)
             self.assertIn("vertex build-frontend", dockerfile_v2)
+            self.assertIn("HEALTHCHECK", dockerfile_v2)
+            self.assertIn("/readyz", dockerfile_v2)
+            self.assertIn("requirements.lock", dockerfile_v2)
+
+            # Verify all ADRs have required sections and README index
+            adr_dir = REPO_ROOT / "docs" / "adr"
+            self.assertTrue((adr_dir / "README.md").is_file())
+            for adr_num in ("0001", "0002", "0003", "0004", "0005"):
+                matches = list(adr_dir.glob(f"{adr_num}-*.md"))
+                self.assertEqual(len(matches), 1)
+                adr_text = matches[0].read_text(encoding="utf-8")
+                self.assertIn("Alternatives Considered", adr_text)
+                self.assertIn("Revisit Triggers", adr_text)
 
             app = create_app(
                 Settings(
@@ -89,6 +113,17 @@ class TestContractsAndFrontend(unittest.TestCase):
                 r_main_js = client.get("/assets/main.js")
                 self.assertEqual(r_main_js.status_code, 200)
                 self.assertIn("function boot()", r_main_js.text)
+
+                for view_path in (
+                    "/assets/features/library/libraryView.js",
+                    "/assets/features/activity/activityView.js",
+                    "/assets/features/insights/insightsView.js",
+                    "/assets/features/wishlist/wishlistView.js",
+                    "/assets/features/settings/settingsView.js",
+                    "/assets/features/admin/adminView.js",
+                ):
+                    rv = client.get(view_path)
+                    self.assertEqual(rv.status_code, 200, f"Failed serving {view_path}")
 
                 r_sw = client.get("/sw.js")
                 self.assertEqual(r_sw.status_code, 200)

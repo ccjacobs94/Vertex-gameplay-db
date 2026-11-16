@@ -3,6 +3,9 @@ import { getAccount, logout } from "./shared/api.ts";
 import { clearEl, el } from "./shared/dom.ts";
 import { renderAuthView } from "./features/auth/authView.ts";
 import { renderLibraryView } from "./features/library/libraryView.ts";
+import { renderActivityView } from "./features/activity/activityView.ts";
+import { renderInsightsView } from "./features/insights/insightsView.ts";
+import { renderWishlistView } from "./features/wishlist/wishlistView.ts";
 import { renderSettingsView } from "./features/settings/settingsView.ts";
 import { renderAdminView } from "./features/admin/adminView.ts";
 
@@ -36,6 +39,9 @@ async function renderApp(): Promise<void> {
   const userSnapshot = currentUser;
   const navItems: Array<[string, string]> = [
     ["library", "Library"],
+    ["activity", "Activity"],
+    ["insights", "Insights"],
+    ["wishlist", "Wishlist"],
     ["settings", "Settings"],
   ];
   if (userSnapshot.role === "admin") {
@@ -49,6 +55,7 @@ async function renderApp(): Promise<void> {
       ...navItems.map(([key, label]) => el("button", {
         type: "button",
         class: currentView === key ? "btn btn-primary" : "btn btn-ghost",
+        ...(currentView === key ? { "aria-current": "page" } : {}),
         onClick: async () => {
           currentView = key;
           await renderApp();
@@ -75,7 +82,13 @@ async function renderApp(): Promise<void> {
   root.appendChild(navBar);
   root.appendChild(mainHost);
 
-  if (currentView === "settings") {
+  if (currentView === "activity") {
+    await renderActivityView(mainHost);
+  } else if (currentView === "insights") {
+    await renderInsightsView(mainHost);
+  } else if (currentView === "wishlist") {
+    await renderWishlistView(mainHost);
+  } else if (currentView === "settings") {
     await renderSettingsView(mainHost, userSnapshot);
   } else if (currentView === "admin" && userSnapshot.role === "admin") {
     await renderAdminView(mainHost, userSnapshot);
