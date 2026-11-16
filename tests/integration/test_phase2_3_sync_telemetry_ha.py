@@ -211,7 +211,9 @@ class TestPhase2And3Integration(unittest.IsolatedAsyncioTestCase):
                                         "titleId": "2002",
                                         "name": "Hades",
                                         "devices": ["XboxSeries", "PC"],
-                                        "titleHistory": {"lastTimePlayed": "2026-10-15T12:00:00Z"},
+                                        "titleHistory": {
+                                            "lastTimePlayed": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+                                        },
                                         "achievement": {"currentAchievements": 1, "totalAchievements": 1},
                                         "gamePass": {"isGamePass": True},
                                         "images": imgs,

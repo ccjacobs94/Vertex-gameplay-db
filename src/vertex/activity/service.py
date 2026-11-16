@@ -354,11 +354,13 @@ class ActivityService:
                 (idempotency_key, game_id, source, platform, obs_iso, obs_mins, precision_level, now_iso),
             )
 
+            prev_obs_dt = _parse_iso(baseline_row["last_observed_at"])
             if delta == 0:
-                conn.execute(
-                    "UPDATE provider_baselines SET last_observed_at = ?, updated_at = ? WHERE game_id = ? AND source = ?",
-                    (obs_iso, now_iso, game_id, source),
-                )
+                if obs_dt > prev_obs_dt:
+                    conn.execute(
+                        "UPDATE provider_baselines SET last_observed_at = ?, updated_at = ? WHERE game_id = ? AND source = ?",
+                        (obs_iso, now_iso, game_id, source),
+                    )
                 return ObservationOutcome(
                     status="no_change",
                     delta_minutes=0,
@@ -367,17 +369,17 @@ class ActivityService:
                 )
 
             # Positive delta -> update baseline and last_synced_playtime_minutes atomically.
-            prev_obs_dt = _parse_iso(baseline_row["last_observed_at"])
+            next_obs_iso = obs_iso if obs_dt >= prev_obs_dt else baseline_row["last_observed_at"]
             conn.execute(
                 """
                 UPDATE provider_baselines
                 SET baseline_minutes = ?, last_observed_at = ?, updated_at = ?
                 WHERE game_id = ? AND source = ?
                 """,
-                (obs_mins, obs_iso, now_iso, game_id, source),
+                (obs_mins, next_obs_iso, now_iso, game_id, source),
             )
             conn.execute(
-                "UPDATE games SET last_synced_playtime_minutes = ?, updated_at = ? WHERE id = ?",
+                "UPDATE games SET last_synced_playtime_minutes = MAX(COALESCE(last_synced_playtime_minutes, 0), ?), updated_at = ? WHERE id = ?",
                 (obs_mins, now_iso, game_id),
             )
 
@@ -445,8 +447,11 @@ class ActivityService:
                 (game_id, source),
             ).fetchall()
             for er in exact_rows:
+                e_start = _parse_iso(er["started_at"])
                 e_end = _parse_iso(er["ended_at"])
-                if prev_obs_dt < e_end <= exact_window_end:
+                if (prev_obs_dt < e_end <= exact_window_end) or (
+                    e_start <= obs_dt <= e_end and e_end > prev_obs_dt
+                ):
                     exact_covered += int(er["duration_minutes"] or 0)
 
             effective_delta = max(0, delta - exact_covered)
@@ -969,6 +974,70 @@ class ActivityService:
                 (game_id, source),
             ).fetchone()
             return int(row["baseline_minutes"]) if row is not None else None
+
+    def advance_baseline_from_telemetry(
+        self,
+        scope: UserScope,
+        *,
+        game_id: int,
+        source: str,
+        platform: str,
+        observed_minutes: int,
+        observed_at: str,
+        idempotency_key: str,
+    ) -> None:
+        """Advance provider baseline after an exact telemetry close so deletions/sweeps never recreate or double-count."""
+        scope.require_active()
+        obs_mins = max(0, int(observed_minutes))
+        obs_dt = _parse_user_iso(observed_at, "observed_at")
+        obs_iso = obs_dt.isoformat()
+        now_iso = _utc_now_iso()
+
+        with self.db_manager.library_connection(scope, immediate=True) as conn:
+            dup = conn.execute(
+                "SELECT 1 FROM play_observations WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if dup is not None:
+                return
+            conn.execute(
+                """
+                INSERT INTO play_observations (
+                    idempotency_key, game_id, source, platform, observation_kind,
+                    observed_at, cumulative_minutes, precision_level, created_at
+                ) VALUES (?, ?, ?, ?, 'cumulative_total', ?, ?, 'exact', ?)
+                """,
+                (idempotency_key, game_id, source, platform, obs_iso, obs_mins, now_iso),
+            )
+            existing = conn.execute(
+                "SELECT baseline_minutes, last_observed_at FROM provider_baselines WHERE game_id = ? AND source = ?",
+                (game_id, source),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO provider_baselines (
+                        game_id, source, baseline_minutes, last_observed_at, reset_count, updated_at
+                    ) VALUES (?, ?, ?, ?, 0, ?)
+                    """,
+                    (game_id, source, obs_mins, obs_iso, now_iso),
+                )
+            else:
+                next_mins = max(int(existing["baseline_minutes"]), obs_mins)
+                prev_dt = _parse_iso(existing["last_observed_at"])
+                next_obs = obs_iso if obs_dt >= prev_dt else existing["last_observed_at"]
+                conn.execute(
+                    """
+                    UPDATE provider_baselines
+                    SET baseline_minutes = ?, last_observed_at = ?, updated_at = ?
+                    WHERE game_id = ? AND source = ?
+                    """,
+                    (next_mins, next_obs, now_iso, game_id, source),
+                )
+            conn.execute(
+                "UPDATE games SET last_synced_playtime_minutes = MAX(COALESCE(last_synced_playtime_minutes, 0), ?), updated_at = ? WHERE id = ?",
+                (obs_mins, now_iso, game_id),
+            )
 
     def get_active_telemetry_session(
         self,

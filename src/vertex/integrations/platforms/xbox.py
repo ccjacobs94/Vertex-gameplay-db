@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import quote
@@ -16,6 +16,47 @@ from vertex.integrations.platforms.base import (
     PlatformAdapterError,
     PlatformGameSnapshot,
 )
+
+SYSTEM_APPS: set[str] = {
+    "750323071",   # Xbox Home / Dashboard
+    "328178078",   # Microsoft Edge
+    "1683392974",  # Blu-ray Player
+}
+
+SYSTEM_APP_NAMES: set[str] = {
+    "xbox home",
+    "home",
+    "dashboard",
+    "microsoft edge",
+    "edge",
+    "blu-ray player",
+    "netflix",
+    "youtube",
+    "spotify",
+    "disney+",
+    "hulu",
+    "prime video",
+    "twitch",
+    "settings",
+    "microsoft store",
+    "xbox accessories",
+    "captures",
+    "media player",
+    "tv & movies",
+}
+
+
+def is_system_app(title_id: Any, title_name: str | None = None) -> bool:
+    tid_str = str(title_id or "").strip()
+    if tid_str in SYSTEM_APPS:
+        return True
+    if title_name:
+        clean_name = title_name.strip().lower()
+        if clean_name in SYSTEM_APP_NAMES or any(
+            clean_name.startswith(app) for app in SYSTEM_APP_NAMES
+        ):
+            return True
+    return False
 
 
 def _parse_retry_after(raw_header: str | None) -> int:
@@ -612,8 +653,11 @@ class XboxAdapter:
         api_key: str,
         xuid: str,
         client: httpx.AsyncClient,
+        now: datetime | None = None,
+        max_age_hours: float = 24.0,
     ) -> list[dict[str, Any]]:
         headers = self._headers(api_key)
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=max_age_hours)
         for ep in (
             f"https://api.xbl.io/v2/achievements/player/{xuid}",
             f"https://xbl.io/api/v2/achievements/player/{xuid}",
@@ -627,9 +671,26 @@ class XboxAdapter:
             if resp.status_code == 200:
                 try:
                     _, titles = self._unwrap_titles(resp.json())
-                    return titles
                 except Exception:
                     continue
+                recent: list[dict[str, Any]] = []
+                for t in titles:
+                    tid = str(t.get("titleId") or "").strip()
+                    name = str(t.get("name") or "").strip()
+                    if not tid or is_system_app(tid, name):
+                        continue
+                    th = t.get("titleHistory") if isinstance(t.get("titleHistory"), dict) else {}
+                    raw_last = th.get("lastTimePlayed") or t.get("lastTimePlayed")
+                    iso_last = _parse_iso_optional(raw_last)
+                    if not iso_last:
+                        continue
+                    if datetime.fromisoformat(iso_last) < cutoff:
+                        continue
+                    enriched = dict(t)
+                    enriched["titleId"] = tid
+                    enriched["lastTimePlayed"] = iso_last
+                    recent.append(enriched)
+                return recent
         return []
 
     async def verify_connection(
@@ -638,6 +699,7 @@ class XboxAdapter:
         credential: str,
         server_xbl_key: str,
         client: httpx.AsyncClient,
+        credential_is_api_key: bool = False,
     ) -> dict[str, Any]:
         cleaned = (credential or "").strip()
         if not cleaned:
@@ -646,7 +708,7 @@ class XboxAdapter:
                 "platform": "xbox",
                 "message": "Xbox Gamertag or OpenXBL API key cannot be empty",
             }
-        if server_xbl_key:
+        if not credential_is_api_key and server_xbl_key:
             try:
                 gt_res = await self.resolve_gamertag(
                     gamertag=cleaned,
@@ -663,8 +725,9 @@ class XboxAdapter:
                         "avatar_url": gt_res.get("avatar_url", ""),
                         "message": f"Xbox account verified successfully as {gt_res['gamertag']} ({gt_res['gamerscore']} G)",
                     }
-            except PlatformAdapterError:
-                pass
+            except PlatformAdapterError as exc:
+                if exc.code in ("rate_limited", "timeout", "upstream_error", "auth_failed"):
+                    return {"status": "error", "platform": "xbox", "message": exc.safe_message}
             except Exception:
                 pass
 
@@ -681,7 +744,7 @@ class XboxAdapter:
                     "message": f"Xbox account verified successfully as {acc['gamertag']} ({acc['gamerscore']} G)",
                 }
         except PlatformAdapterError as exc:
-            if server_xbl_key:
+            if not credential_is_api_key and server_xbl_key:
                 return {
                     "status": "error",
                     "platform": "xbox",
@@ -694,7 +757,7 @@ class XboxAdapter:
             "platform": "xbox",
             "message": (
                 f"Could not find Xbox Gamertag '{cleaned}'"
-                if server_xbl_key
+                if (not credential_is_api_key and server_xbl_key)
                 else "Invalid OpenXBL API key or unreachable Xbox account"
             ),
         }

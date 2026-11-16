@@ -285,12 +285,30 @@ class GOGAdapter:
         ref = (refresh_token or "").strip()
         uid = (user_id or "").strip() or None
         uname = (username or "").strip() or None
-        if not acc and ref:
-            code = extract_gog_auth_code(ref)
-            if code:
-                bundle = await self.exchange_auth_code(code=code, client=client)
-            else:
-                bundle = await self.refresh_access_token(refresh_token=ref, client=client)
+
+        if acc.startswith("{"):
+            try:
+                parsed = json.loads(acc)
+                if isinstance(parsed, dict):
+                    acc = str(parsed.get("access_token") or "").strip()
+                    if not ref and parsed.get("refresh_token"):
+                        ref = str(parsed.get("refresh_token") or "").strip()
+                    if not uid and parsed.get("user_id"):
+                        uid = str(parsed.get("user_id") or "").strip() or None
+            except Exception:
+                pass
+
+        code_from_acc = extract_gog_auth_code(acc) if acc else None
+        code_from_ref = extract_gog_auth_code(ref) if ref else None
+        if code_from_acc or code_from_ref:
+            code = code_from_acc or code_from_ref
+            assert code is not None
+            bundle = await self.exchange_auth_code(code=code, client=client)
+            acc = bundle.access_token
+            ref = bundle.refresh_token or ("" if code_from_ref else ref)
+            uid = bundle.user_id or uid
+        elif not acc and ref:
+            bundle = await self.refresh_access_token(refresh_token=ref, client=client)
             acc = bundle.access_token
             ref = bundle.refresh_token or ref
             uid = bundle.user_id or uid
@@ -430,9 +448,29 @@ class GOGAdapter:
                     )
                 else:
                     resp = await client.get(url, params=params)
-            except Exception:
+            except httpx.TimeoutException as exc:
+                if bundle is None:
+                    raise PlatformAdapterError(
+                        code="timeout",
+                        message="Timed out contacting GOG profile stats",
+                        retryable=True,
+                    ) from exc
+                break
+            except httpx.HTTPError as exc:
+                if bundle is None:
+                    raise PlatformAdapterError(
+                        code="upstream_error",
+                        message=f"Network error contacting GOG profile stats: {exc}",
+                        retryable=True,
+                    ) from exc
+                break
+            except PlatformAdapterError:
+                if bundle is None:
+                    raise
                 break
 
+            if bundle is None and (resp.status_code == 429 or resp.status_code >= 500):
+                self._check_status(resp, "GOG profile stats")
             if resp.status_code != 200:
                 break
             try:
@@ -469,7 +507,10 @@ class GOGAdapter:
                     playtime = item.get("playtime") or item.get("time_sum") or 0
                 last_sess = _parse_gog_timestamp(
                     user_stat.get("lastSessionDate")
+                    or user_stat.get("lastSession")
+                    or user_stat.get("last_session_date")
                     or item.get("lastSessionDate")
+                    or item.get("lastSession")
                     or item.get("last_session_date")
                 )
                 stats_by_pid[pid] = {
@@ -598,10 +639,24 @@ class GOGAdapter:
                         owned_ids = []
                     for i in range(0, len(owned_ids), 50):
                         chunk = owned_ids[i : i + 50]
-                        prod_resp = await client.get(
-                            f"{self.API_URL}/products",
-                            params={"ids": ",".join(chunk)},
-                        )
+                        try:
+                            prod_resp = await client.get(
+                                f"{self.API_URL}/products",
+                                params={"ids": ",".join(chunk)},
+                            )
+                        except httpx.TimeoutException as exc:
+                            raise PlatformAdapterError(
+                                code="timeout",
+                                message="Timed out fetching GOG product details",
+                                retryable=True,
+                            ) from exc
+                        except httpx.HTTPError as exc:
+                            raise PlatformAdapterError(
+                                code="upstream_error",
+                                message=f"Network error fetching GOG product details: {exc}",
+                                retryable=True,
+                            ) from exc
+                        self._check_status(prod_resp, "GOG products", allow_404=True)
                         if prod_resp.status_code == 200:
                             try:
                                 plist = prod_resp.json()
@@ -648,19 +703,31 @@ class GOGAdapter:
                 for p in products
                 if p.get("id") is not None and str(p["id"]) not in stats_map
             ]
+            bundle_lock = asyncio.Lock()
 
             async def _pull_sess(pid: str) -> None:
+                nonlocal bundle
                 async with sem:
-                    assert bundle is not None
-                    mins, lp, _ = await self.fetch_game_sessions(
-                        bundle=bundle,
+                    async with bundle_lock:
+                        cur_bundle = bundle
+                    assert cur_bundle is not None
+                    mins, lp, next_bundle = await self.fetch_game_sessions(
+                        bundle=cur_bundle,
                         product_id=pid,
                         client=client,
                     )
+                    async with bundle_lock:
+                        bundle = next_bundle
                     session_playtime[pid] = (mins, lp)
 
             if missing_pids:
-                await asyncio.gather(*[_pull_sess(pid) for pid in missing_pids], return_exceptions=True)
+                results = await asyncio.gather(
+                    *[_pull_sess(pid) for pid in missing_pids],
+                    return_exceptions=True,
+                )
+                for res in results:
+                    if isinstance(res, PlatformAdapterError):
+                        raise res
 
         snapshots: list[PlatformGameSnapshot] = []
         seen_pids: set[str] = set()
@@ -687,7 +754,11 @@ class GOGAdapter:
             if isinstance(p.get("category"), str) and p["category"].strip():
                 raw_genres.append(p["category"].strip())
             if isinstance(p.get("genres"), list):
-                raw_genres.extend(str(g) for g in p["genres"] if g)
+                for g in p["genres"]:
+                    if isinstance(g, dict) and g.get("name"):
+                        raw_genres.append(str(g["name"]))
+                    elif g:
+                        raw_genres.append(str(g))
             clean_genres = tuple(validate_genres(raw_genres))
 
             images_obj = p.get("images") if isinstance(p.get("images"), dict) else {}

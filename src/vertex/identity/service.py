@@ -1119,7 +1119,17 @@ class IdentityService:
                     if bundled_uid and not (gog_user_id and gog_user_id.strip()):
                         updates["gog_user_id"] = bundled_uid
                 if gog_access_token is not None and gog_access_token.strip():
-                    updates["gog_access_token_encrypted"] = self.secret_box.encrypt(gog_access_token.strip())
+                    raw_acc = gog_access_token.strip()
+                    if raw_acc.startswith("{"):
+                        b_ref, b_acc, b_uid = _parse_gog_token_bundle(raw_acc)
+                        if b_acc:
+                            updates["gog_access_token_encrypted"] = self.secret_box.encrypt(b_acc)
+                        if b_ref and not (gog_refresh_token and gog_refresh_token.strip()):
+                            updates["gog_refresh_token_encrypted"] = self.secret_box.encrypt(b_ref)
+                        if b_uid and not (gog_user_id and gog_user_id.strip()):
+                            updates["gog_user_id"] = b_uid
+                    else:
+                        updates["gog_access_token_encrypted"] = self.secret_box.encrypt(raw_acc)
 
             if ha_url is not None:
                 updates["ha_url"] = ha_url.strip() or None

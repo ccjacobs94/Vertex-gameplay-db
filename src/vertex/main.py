@@ -40,7 +40,7 @@ from vertex.integrations.homeassistant.client import HttpHomeAssistantHistoryPro
 from vertex.integrations.homeassistant.service import HomeAssistantService
 from vertex.integrations.platforms.base import PlatformAdapterError
 from vertex.integrations.platforms.sync_service import PlatformSyncService
-from vertex.integrations.platforms.telemetry import TelemetryService, XboxRtaClient
+from vertex.integrations.platforms.telemetry import TelemetryService, XboxRtaManager
 from vertex.interfaces.http import (
     account,
     admin,
@@ -132,7 +132,10 @@ def create_app(
     async def lifespan(_app: FastAPI):
         db_manager.ensure_system_ready()
         background_tasks: list[asyncio.Task[None]] = []
-        rta_clients: list[XboxRtaClient] = []
+        rta_manager = XboxRtaManager(
+            identity_service=identity,
+            telemetry_service=telemetry_svc,
+        )
         stop_event = asyncio.Event()
 
         async def _worker_loop() -> None:
@@ -182,6 +185,11 @@ def create_app(
                     await telemetry_svc.poll_all_users(sleep_before_flush=True)
                 except Exception as exc:
                     logger.warning("Telemetry poll loop error: %s", exc)
+                if cfg.worker_enabled:
+                    try:
+                        await rta_manager.reconcile()
+                    except Exception as exc:
+                        logger.warning("Xbox RTA reconcile error: %s", exc)
 
         async def _daily_sweep_loop() -> None:
             while not stop_event.is_set():
@@ -204,30 +212,19 @@ def create_app(
             if cfg.scheduled_sync_enabled and cfg.outbound_sync_enabled:
                 background_tasks.append(asyncio.create_task(_scheduled_sync_loop()))
         if cfg.telemetry_enabled and cfg.outbound_sync_enabled:
+            if cfg.worker_enabled:
+                try:
+                    await rta_manager.reconcile()
+                except Exception as exc:
+                    logger.warning("Initial Xbox RTA reconcile error: %s", exc)
             background_tasks.append(asyncio.create_task(_telemetry_loop()))
             background_tasks.append(asyncio.create_task(_daily_sweep_loop()))
-            if cfg.worker_enabled:
-                for user_scope in identity.list_active_user_scopes():
-                    try:
-                        u_creds = identity.get_decrypted_connections(user_scope)
-                        if u_creds.xbl_watcher_api_key and u_creds.xbox_xuid:
-                            rta = XboxRtaClient(
-                                scope=user_scope,
-                                watcher_api_key=u_creds.xbl_watcher_api_key,
-                                xuid=u_creds.xbox_xuid,
-                                telemetry_service=telemetry_svc,
-                            )
-                            rta_clients.append(rta)
-                            background_tasks.append(asyncio.create_task(rta.run()))
-                    except Exception:
-                        continue
 
         try:
             yield
         finally:
             stop_event.set()
-            for rta in rta_clients:
-                rta.stop()
+            await rta_manager.shutdown()
             for task in background_tasks:
                 task.cancel()
             for task in background_tasks:

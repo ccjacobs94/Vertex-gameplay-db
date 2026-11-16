@@ -18,51 +18,15 @@ from vertex.infrastructure.scope import UserScope
 from vertex.infrastructure.sqlite import DatabaseManager
 from vertex.integrations.platforms.base import AchievementSnapshot, sanitize_error_message
 from vertex.integrations.platforms.gog import GOGAdapter, GogActivePresence, GogTokenBundle
-from vertex.integrations.platforms.xbox import XboxAdapter
+from vertex.integrations.platforms.xbox import (
+    SYSTEM_APP_NAMES,
+    SYSTEM_APPS,
+    XboxAdapter,
+    is_system_app,
+)
 from vertex.library.service import LibraryService
 
 logger = logging.getLogger("vertex.telemetry")
-
-SYSTEM_APPS: set[str] = {
-    "750323071",   # Xbox Home / Dashboard
-    "328178078",   # Microsoft Edge
-    "1683392974",  # Blu-ray Player
-}
-
-SYSTEM_APP_NAMES: set[str] = {
-    "xbox home",
-    "home",
-    "dashboard",
-    "microsoft edge",
-    "edge",
-    "blu-ray player",
-    "netflix",
-    "youtube",
-    "spotify",
-    "disney+",
-    "hulu",
-    "prime video",
-    "twitch",
-    "settings",
-    "microsoft store",
-    "xbox accessories",
-    "captures",
-    "media player",
-    "tv & movies",
-}
-
-
-def is_system_app(title_id: Any, title_name: str | None = None) -> bool:
-    tid_str = str(title_id or "").strip()
-    if tid_str in SYSTEM_APPS:
-        return True
-    if title_name:
-        clean_name = title_name.strip().lower()
-        if clean_name in SYSTEM_APP_NAMES or any(
-            clean_name.startswith(app) for app in SYSTEM_APP_NAMES
-        ):
-            return True
-    return False
 
 
 def _parse_iso(raw: str | None) -> datetime:
@@ -185,13 +149,22 @@ class TelemetryService:
             if flush_delay_seconds is not None
             else float(db_manager.settings.telemetry_flush_delay_seconds)
         )
+        self._provider_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+    def _get_lock(self, user_id: str, provider: str) -> asyncio.Lock:
+        key = (user_id, provider)
+        lock = self._provider_locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._provider_locks[key] = lock
+        return lock
 
     def get_status(self, scope: UserScope) -> dict[str, Any]:
         scope.require_active()
         creds = self.identity_service.get_decrypted_connections(scope)
         active_sessions = self.activity_service.list_active_telemetry_sessions(scope)
         xbl_key = (creds.xbl_watcher_api_key or creds.xbl_api_key or "").strip()
-        xbox_configured = bool(xbl_key and (creds.xbox_xuid or creds.xbox_gamertag))
+        xbox_configured = bool(xbl_key)
         gog_configured = bool(
             (creds.gog_access_token or creds.gog_refresh_token)
             and (creds.gog_user_id or creds.gog_access_token)
@@ -204,7 +177,7 @@ class TelemetryService:
             "flush_delay_seconds": self.flush_delay_seconds,
             "providers": {
                 "xbox": xbox_configured,
-                "xbox_rta": bool(creds.xbl_watcher_api_key and (creds.xbox_xuid or creds.xbox_gamertag)),
+                "xbox_rta": bool(creds.xbl_watcher_api_key and xbl_key),
                 "gog": gog_configured,
             },
             "active_sessions": active_sessions,
@@ -261,7 +234,7 @@ class TelemetryService:
 
         async with self.client_factory() as client:
             xbl_key = self._xbox_telemetry_key(creds)
-            if xbl_key and (creds.xbox_xuid or creds.xbox_gamertag):
+            if xbl_key:
                 try:
                     xuid = await self._resolve_xbox_xuid(scope, creds, xbl_key, client)
                     presence_payload = await self.xbox_adapter.fetch_presence(
@@ -321,40 +294,64 @@ class TelemetryService:
         scope.require_active()
         current_dt = now or datetime.now(timezone.utc)
         now_iso = current_dt.isoformat()
-        creds = self.identity_service.get_decrypted_connections(scope)
-        key = (api_key or self._xbox_telemetry_key(creds)).strip()
-        target_xuid = (xuid or creds.xbox_xuid or "").strip() or None
-        active = self.activity_service.get_active_telemetry_session(scope, "xbox")
         detected = extract_active_xbox_title(presence_payload)
 
         async def _run_with_client(http: httpx.AsyncClient) -> list[dict[str, Any]]:
-            events: list[dict[str, Any]] = []
-            if detected:
-                tid = detected["title_id"] or ""
-                title = detected["title"] or f"Xbox Title {tid}"
-                rich = detected.get("rich_presence")
-                if active is None:
-                    started = await self._start_xbox_session(
-                        scope,
-                        title_id=tid,
-                        title=title,
-                        rich_presence=rich,
-                        api_key=key,
-                        xuid=target_xuid,
-                        detection_method=detection_method,
-                        now_iso=now_iso,
-                        client=http,
-                    )
-                    events.append({"provider": "xbox", "action": "started", "title": started.title, "game_id": started.game_id})
-                elif active.external_title_id == tid:
-                    self.activity_service.touch_active_telemetry_session(
-                        scope,
-                        "xbox",
-                        last_seen_at=now_iso,
-                        rich_presence=rich,
-                    )
-                    events.append({"provider": "xbox", "action": "touched", "title": active.title, "game_id": active.game_id})
-                else:
+            async with self._get_lock(scope.user_id, "xbox"):
+                creds = self.identity_service.get_decrypted_connections(scope)
+                key = (api_key or self._xbox_telemetry_key(creds)).strip()
+                target_xuid = (xuid or creds.xbox_xuid or "").strip() or None
+                active = self.activity_service.get_active_telemetry_session(scope, "xbox")
+                events: list[dict[str, Any]] = []
+                if detected:
+                    tid = detected["title_id"] or ""
+                    title = detected["title"] or f"Xbox Title {tid}"
+                    rich = detected.get("rich_presence")
+                    if active is None:
+                        started = await self._start_xbox_session(
+                            scope,
+                            title_id=tid,
+                            title=title,
+                            rich_presence=rich,
+                            api_key=key,
+                            xuid=target_xuid,
+                            detection_method=detection_method,
+                            now_iso=now_iso,
+                            client=http,
+                        )
+                        events.append({"provider": "xbox", "action": "started", "title": started.title, "game_id": started.game_id})
+                    elif active.external_title_id == tid:
+                        self.activity_service.touch_active_telemetry_session(
+                            scope,
+                            "xbox",
+                            last_seen_at=now_iso,
+                            rich_presence=rich,
+                        )
+                        events.append({"provider": "xbox", "action": "touched", "title": active.title, "game_id": active.game_id})
+                    else:
+                        closed = await self._close_xbox_session(
+                            scope,
+                            active,
+                            api_key=key,
+                            xuid=target_xuid,
+                            ended_at=current_dt,
+                            sleep_before_flush=sleep_before_flush,
+                            client=http,
+                        )
+                        events.append(closed)
+                        started = await self._start_xbox_session(
+                            scope,
+                            title_id=tid,
+                            title=title,
+                            rich_presence=rich,
+                            api_key=key,
+                            xuid=target_xuid,
+                            detection_method=detection_method,
+                            now_iso=now_iso,
+                            client=http,
+                        )
+                        events.append({"provider": "xbox", "action": "started", "title": started.title, "game_id": started.game_id})
+                elif active is not None:
                     closed = await self._close_xbox_session(
                         scope,
                         active,
@@ -365,30 +362,7 @@ class TelemetryService:
                         client=http,
                     )
                     events.append(closed)
-                    started = await self._start_xbox_session(
-                        scope,
-                        title_id=tid,
-                        title=title,
-                        rich_presence=rich,
-                        api_key=key,
-                        xuid=target_xuid,
-                        detection_method=detection_method,
-                        now_iso=now_iso,
-                        client=http,
-                    )
-                    events.append({"provider": "xbox", "action": "started", "title": started.title, "game_id": started.game_id})
-            elif active is not None:
-                closed = await self._close_xbox_session(
-                    scope,
-                    active,
-                    api_key=key,
-                    xuid=target_xuid,
-                    ended_at=current_dt,
-                    sleep_before_flush=sleep_before_flush,
-                    client=http,
-                )
-                events.append(closed)
-            return events
+                return events
 
         if client is not None:
             return await _run_with_client(client)
@@ -557,6 +531,15 @@ class TelemetryService:
                     playtime_minutes=int(round(updated_minutes)),
                     last_played=recorded_end.isoformat(),
                 )
+                self.activity_service.advance_baseline_from_telemetry(
+                    scope,
+                    game_id=active.game_id,
+                    source="Xbox",
+                    platform=active.platform,
+                    observed_minutes=int(round(updated_minutes)),
+                    observed_at=recorded_end.isoformat(),
+                    idempotency_key=f"telemetry_base:xbox:{active.external_title_id}:{active.started_at}:{recorded_end.isoformat()}",
+                )
             return {
                 "provider": "xbox",
                 "action": "closed",
@@ -579,6 +562,24 @@ class TelemetryService:
         }
 
     async def _poll_gog_user(
+        self,
+        scope: UserScope,
+        creds: DecryptedConnections,
+        *,
+        client: httpx.AsyncClient,
+        now: datetime,
+        sleep_before_flush: bool,
+    ) -> list[dict[str, Any]]:
+        async with self._get_lock(scope.user_id, "gog"):
+            return await self._poll_gog_user_locked(
+                scope,
+                creds,
+                client=client,
+                now=now,
+                sleep_before_flush=sleep_before_flush,
+            )
+
+    async def _poll_gog_user_locked(
         self,
         scope: UserScope,
         creds: DecryptedConnections,
@@ -859,6 +860,15 @@ class TelemetryService:
                     playtime_minutes=int(round(updated_minutes)),
                     last_played=recorded_end.isoformat(),
                 )
+                self.activity_service.advance_baseline_from_telemetry(
+                    scope,
+                    game_id=active.game_id,
+                    source="GOG",
+                    platform=active.platform,
+                    observed_minutes=int(round(updated_minutes)),
+                    observed_at=recorded_end.isoformat(),
+                    idempotency_key=f"telemetry_base:gog:{active.external_title_id}:{active.started_at}:{recorded_end.isoformat()}",
+                )
             return (
                 {
                     "provider": "gog",
@@ -955,7 +965,7 @@ class TelemetryService:
 
         async with self.client_factory() as client:
             xbl_key = self._xbox_telemetry_key(creds)
-            if xbl_key and (creds.xbox_xuid or creds.xbox_gamertag):
+            if xbl_key:
                 try:
                     xuid = await self._resolve_xbox_xuid(scope, creds, xbl_key, client)
                     if xuid:
@@ -964,6 +974,7 @@ class TelemetryService:
                             api_key=xbl_key,
                             xuid=xuid,
                             client=client,
+                            now=current_dt,
                         )
                         titles_checked += len(recent_titles)
                         if recent_titles:
@@ -979,6 +990,12 @@ class TelemetryService:
                                 if mins is None:
                                     continue
                                 mins_int = int(round(mins))
+                                th = t_info.get("titleHistory")
+                                last_played_val = (
+                                    t_info.get("lastTimePlayed")
+                                    or (th.get("lastTimePlayed") if isinstance(th, dict) else None)
+                                    or now_iso
+                                )
                                 ext_id = f"xbox:{tid}"
                                 legacy_game = self.library_service.find_game_by_external_id(scope, f"xbox_{tid}")
                                 if legacy_game is not None and self.library_service.find_game_by_external_id(scope, ext_id) is None:
@@ -990,7 +1007,7 @@ class TelemetryService:
                                     platform="Xbox",
                                     source="Xbox",
                                     playtime_minutes=mins_int,
-                                    last_played=t_info.get("lastTimePlayed") or now_iso,
+                                    last_played=last_played_val,
                                 )
                                 outcome = self.activity_service.record_cumulative_observation(
                                     scope,
@@ -998,7 +1015,7 @@ class TelemetryService:
                                     source="Xbox",
                                     platform=game.platform,
                                     observed_minutes=mins_int,
-                                    observed_at=t_info.get("lastTimePlayed") or now_iso,
+                                    observed_at=last_played_val,
                                     idempotency_key=f"daily_sweep:xbox:{tid}:{date_bucket}:{mins_int}",
                                     precision_level="estimated",
                                 )
@@ -1159,3 +1176,71 @@ class XboxRtaClient:
 
     def stop(self) -> None:
         self._running = False
+
+
+class XboxRtaManager:
+    """Dynamically reconciles per-user Xbox RTA WebSocket tasks against active user connections."""
+
+    def __init__(
+        self,
+        *,
+        identity_service: IdentityService,
+        telemetry_service: TelemetryService,
+    ) -> None:
+        self.identity_service = identity_service
+        self.telemetry_service = telemetry_service
+        self.active_clients: dict[str, tuple[str, str, XboxRtaClient, asyncio.Task[None]]] = {}
+
+    def _spawn_task(self, client: XboxRtaClient) -> asyncio.Task[None]:
+        return asyncio.create_task(client.run())
+
+    async def reconcile(self) -> None:
+        desired: dict[str, tuple[UserScope, str, str]] = {}
+        for scope in self.identity_service.list_active_user_scopes():
+            try:
+                creds = self.identity_service.get_decrypted_connections(scope)
+                wkey = (creds.xbl_watcher_api_key or "").strip()
+                xuid = (creds.xbox_xuid or "").strip()
+                if wkey and not xuid:
+                    async with self.telemetry_service.client_factory() as http:
+                        resolved = await self.telemetry_service._resolve_xbox_xuid(
+                            scope, creds, wkey, http
+                        )
+                        xuid = (resolved or "").strip()
+                if wkey and xuid:
+                    desired[scope.user_id] = (scope, wkey, xuid)
+            except Exception:
+                continue
+
+        for uid in list(self.active_clients.keys()):
+            old_key, old_xuid, old_client, old_task = self.active_clients[uid]
+            target = desired.get(uid)
+            if target is None or target[1] != old_key or target[2] != old_xuid or old_task.done():
+                old_client.stop()
+                old_task.cancel()
+                self.active_clients.pop(uid, None)
+
+        for uid, (scope, wkey, xuid) in desired.items():
+            if uid in self.active_clients:
+                continue
+            client = XboxRtaClient(
+                scope=scope,
+                watcher_api_key=wkey,
+                xuid=xuid,
+                telemetry_service=self.telemetry_service,
+            )
+            task = self._spawn_task(client)
+            self.active_clients[uid] = (wkey, xuid, client, task)
+
+    async def shutdown(self) -> None:
+        tasks: list[asyncio.Task[None]] = []
+        for _key, _xuid, client, task in list(self.active_clients.values()):
+            client.stop()
+            task.cancel()
+            tasks.append(task)
+        self.active_clients.clear()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass

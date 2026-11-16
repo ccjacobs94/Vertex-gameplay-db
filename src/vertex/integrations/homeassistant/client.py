@@ -8,6 +8,7 @@ from typing import Any, Callable
 import httpx
 
 from vertex.infrastructure.errors import ValidationError
+from vertex.integrations.platforms.base import PlatformAdapterError, sanitize_error_message
 
 
 class HttpHomeAssistantHistoryProvider:
@@ -33,6 +34,8 @@ class HttpHomeAssistantHistoryProvider:
         clean_entity = entity_id.strip()
         if not clean_url or not clean_token or not clean_entity:
             raise ValidationError("Home Assistant URL, token, and entity_id are all required")
+        if not clean_url.lower().startswith(("http://", "https://")):
+            raise ValidationError("Home Assistant URL must use http:// or https://")
 
         start_iso = start_time.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         url = f"{clean_url}/api/history/period/{start_iso}"
@@ -45,12 +48,44 @@ class HttpHomeAssistantHistoryProvider:
             "Content-Type": "application/json",
         }
         async with self.client_factory() as client:
-            resp = await client.get(url, params=params, headers=headers)
+            try:
+                resp = await client.get(url, params=params, headers=headers)
+            except httpx.TimeoutException as exc:
+                raise PlatformAdapterError(
+                    code="timeout",
+                    message=f"Home Assistant history request timed out: {sanitize_error_message(str(exc))}",
+                    retryable=True,
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise PlatformAdapterError(
+                    code="upstream_error",
+                    message=f"Home Assistant history request failed: {sanitize_error_message(str(exc))}",
+                    retryable=True,
+                ) from exc
             if resp.status_code in (401, 403):
                 raise ValidationError(f"Home Assistant rejected access token (HTTP {resp.status_code})")
+            if resp.status_code == 429:
+                raise PlatformAdapterError(
+                    code="rate_limited",
+                    message="Home Assistant rate-limited history request (HTTP 429)",
+                    retryable=True,
+                )
+            if resp.status_code >= 500:
+                raise PlatformAdapterError(
+                    code="upstream_error",
+                    message=f"Home Assistant server error (HTTP {resp.status_code})",
+                    retryable=True,
+                )
             if resp.status_code >= 400:
                 raise ValidationError(f"Home Assistant history request failed (HTTP {resp.status_code})")
-            data = resp.json()
+            try:
+                data = resp.json()
+            except ValueError as exc:
+                raise PlatformAdapterError(
+                    code="upstream_error",
+                    message=f"Home Assistant returned invalid JSON history payload: {sanitize_error_message(str(exc))}",
+                    retryable=True,
+                ) from exc
 
         if isinstance(data, list) and data:
             if isinstance(data[0], list):

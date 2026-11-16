@@ -33,6 +33,7 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
   const psnStatusLbl = el("span", { class: "muted" });
   const gogStatusLbl = el("span", { class: "muted" });
   const haStatusLbl = el("span", { class: "muted" });
+  let gogTokenConfigured = false;
 
   const tzIn = el("input", { type: "text", value: account.timezone || "auto", "aria-label": "Account timezone" }) as HTMLInputElement;
 
@@ -108,6 +109,7 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
 
       gogUsernameIn.value = conns.gog_username || "";
       gogUserIdIn.value = conns.gog_user_id || "";
+      gogTokenConfigured = Boolean(conns.gog_token_configured);
       gogStatusLbl.textContent = conns.gog_token_configured
         ? `GOG Galaxy OAuth tokens: configured${conns.gog_username ? ` (${conns.gog_username})` : ""}`
         : "GOG Galaxy OAuth tokens: not configured (public username library fallback available)";
@@ -234,18 +236,26 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
             type: "button",
             class: "btn btn-ghost",
             onClick: async () => {
-              await updateConnections({ clear_steam_api_key: true });
-              showBanner(bannerBox, "Cleared saved personal Steam API key", "info");
-              await refreshData();
+              try {
+                await updateConnections({ clear_steam_api_key: true });
+                showBanner(bannerBox, "Cleared saved personal Steam API key", "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed to clear Steam key", "error");
+              }
             },
           }, ["Clear Steam Key"]),
           el("button", {
             type: "button",
             class: "btn btn-secondary",
             onClick: async () => {
-              const job = await enqueueSteamSync();
-              showBanner(bannerBox, `Queued Steam sync job #${job.id} (${job.state})`, "info");
-              await refreshData();
+              try {
+                const job = await enqueueSteamSync();
+                showBanner(bannerBox, `Queued Steam sync job #${job.id} (${job.state})`, "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed to queue Steam sync", "error");
+              }
             },
           }, ["Queue Steam Sync"]),
         ]),
@@ -257,23 +267,35 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
         el("label", {}, ["OpenXBL API Key", xblKeyIn]),
         el("label", {}, ["Xbox Telemetry Watcher Key (Optional)", xblWatcherKeyIn]),
         el("div", { class: "row-actions" }, [
-          el("button", { type: "button", class: "btn btn-ghost", onClick: () => runProviderTest("xbox", xboxGamertagIn.value || xblKeyIn.value, xblKeyIn.value) }, ["Test Xbox"]),
+          el("button", {
+            type: "button",
+            class: "btn btn-ghost",
+            onClick: () => runProviderTest("xbox", xboxGamertagIn.value.trim() || xblKeyIn.value.trim(), xblKeyIn.value.trim()),
+          }, ["Test Xbox"]),
           el("button", {
             type: "button",
             class: "btn btn-ghost",
             onClick: async () => {
-              await updateConnections({ clear_xbl_api_key: true, clear_xbl_watcher_api_key: true });
-              showBanner(bannerBox, "Cleared Xbox OpenXBL API keys", "info");
-              await refreshData();
+              try {
+                await updateConnections({ clear_xbl_api_key: true, clear_xbl_watcher_api_key: true });
+                showBanner(bannerBox, "Cleared Xbox OpenXBL API keys", "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed to clear Xbox keys", "error");
+              }
             },
           }, ["Clear Xbox Keys"]),
           el("button", {
             type: "button",
             class: "btn btn-secondary",
             onClick: async () => {
-              const job = await enqueueXboxSync();
-              showBanner(bannerBox, `Queued Xbox sync job #${job.id} (${job.state})`, "info");
-              await refreshData();
+              try {
+                const job = await enqueueXboxSync();
+                showBanner(bannerBox, `Queued Xbox sync job #${job.id} (${job.state})`, "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed to queue Xbox sync", "error");
+              }
             },
           }, ["Queue Xbox Sync"]),
         ]),
@@ -287,18 +309,26 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
             type: "button",
             class: "btn btn-ghost",
             onClick: async () => {
-              await updateConnections({ clear_psn_npsso: true });
-              showBanner(bannerBox, "Cleared PSN NPSSO token", "info");
-              await refreshData();
+              try {
+                await updateConnections({ clear_psn_npsso: true });
+                showBanner(bannerBox, "Cleared PSN NPSSO token", "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed to clear PSN token", "error");
+              }
             },
           }, ["Clear PSN Token"]),
           el("button", {
             type: "button",
             class: "btn btn-secondary",
             onClick: async () => {
-              const job = await enqueuePsnSync();
-              showBanner(bannerBox, `Queued PSN sync job #${job.id} (${job.state})`, "info");
-              await refreshData();
+              try {
+                const job = await enqueuePsnSync();
+                showBanner(bannerBox, `Queued PSN sync job #${job.id} (${job.state})`, "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed to queue PSN sync", "error");
+              }
             },
           }, ["Queue PSN Sync"]),
         ]),
@@ -310,23 +340,41 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
         el("label", {}, ["GOG OAuth Access Token / Code URL / JSON", gogAccessIn]),
         el("label", {}, ["GOG OAuth Refresh Token", gogRefreshIn]),
         el("div", { class: "row-actions" }, [
-          el("button", { type: "button", class: "btn btn-ghost", onClick: () => runProviderTest("gog", gogAccessIn.value || gogRefreshIn.value || gogUsernameIn.value) }, ["Test GOG"]),
+          el("button", {
+            type: "button",
+            class: "btn btn-ghost",
+            onClick: () => {
+              const gogCred =
+                gogAccessIn.value.trim() ||
+                gogRefreshIn.value.trim() ||
+                (gogTokenConfigured ? "" : gogUsernameIn.value.trim());
+              return runProviderTest("gog", gogCred);
+            },
+          }, ["Test GOG"]),
           el("button", {
             type: "button",
             class: "btn btn-ghost",
             onClick: async () => {
-              await updateConnections({ clear_gog_tokens: true });
-              showBanner(bannerBox, "Cleared GOG Galaxy OAuth tokens", "info");
-              await refreshData();
+              try {
+                await updateConnections({ clear_gog_tokens: true });
+                showBanner(bannerBox, "Cleared GOG Galaxy OAuth tokens", "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed to clear GOG tokens", "error");
+              }
             },
           }, ["Clear GOG Tokens"]),
           el("button", {
             type: "button",
             class: "btn btn-secondary",
             onClick: async () => {
-              const job = await enqueueGogSync();
-              showBanner(bannerBox, `Queued GOG sync job #${job.id} (${job.state})`, "info");
-              await refreshData();
+              try {
+                const job = await enqueueGogSync();
+                showBanner(bannerBox, `Queued GOG sync job #${job.id} (${job.state})`, "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed to queue GOG sync", "error");
+              }
             },
           }, ["Queue GOG Sync"]),
         ]),
@@ -342,9 +390,13 @@ export async function renderSettingsView(container: HTMLElement, account: UserAc
             type: "button",
             class: "btn btn-ghost",
             onClick: async () => {
-              await updateConnections({ clear_ha_token: true });
-              showBanner(bannerBox, "Cleared Home Assistant token", "info");
-              await refreshData();
+              try {
+                await updateConnections({ clear_ha_token: true });
+                showBanner(bannerBox, "Cleared Home Assistant token", "info");
+                await refreshData();
+              } catch (err) {
+                showBanner(bannerBox, err instanceof Error ? err.message : "Failed to clear Home Assistant token", "error");
+              }
             },
           }, ["Clear HA Token"]),
         ]),

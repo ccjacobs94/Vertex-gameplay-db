@@ -150,9 +150,7 @@ class PlatformSyncService:
         providers: list[str] = []
         if (creds.steam_id or "").strip() and (creds.steam_api_key or "").strip():
             providers.append("steam")
-        if (
-            (creds.xbox_gamertag or "").strip() or (creds.xbox_xuid or "").strip()
-        ) and (creds.xbl_api_key or "").strip():
+        if (creds.xbl_api_key or "").strip():
             providers.append("xbox")
         if (creds.psn_npsso or "").strip():
             providers.append("psn")
@@ -160,7 +158,6 @@ class PlatformSyncService:
             (creds.gog_access_token or "").strip()
             or (creds.gog_refresh_token or "").strip()
             or (creds.gog_username or "").strip()
-            or (creds.gog_user_id or "").strip()
         ):
             providers.append("gog")
         return providers
@@ -463,10 +460,10 @@ class PlatformSyncService:
             api_key = (creds.xbl_api_key or "").strip()
             gamertag = (creds.xbox_gamertag or "").strip() or None
             xuid = (creds.xbox_xuid or "").strip() or None
-            if not api_key or (not gamertag and not xuid):
+            if not api_key:
                 raise PlatformAdapterError(
                     code="missing_credentials",
-                    message="Configure Xbox Gamertag/XUID and OpenXBL API key before syncing",
+                    message="Configure Xbox Gamertag/XUID or personal OpenXBL API key before syncing",
                     retryable=False,
                 )
 
@@ -629,7 +626,6 @@ class PlatformSyncService:
                     creds.gog_access_token,
                     creds.gog_refresh_token,
                     creds.gog_username,
-                    creds.gog_user_id,
                 )
             ):
                 raise PlatformAdapterError(
@@ -928,21 +924,33 @@ class PlatformSyncService:
                 )
 
             if normalized == "xbox":
+                raw_cred = (credential or "").strip()
+                raw_sec = (secondary_credential or "").strip()
                 cand = (
-                    (credential or "").strip()
+                    raw_cred
                     or (creds.xbox_gamertag or "").strip()
                     or (creds.xbl_api_key or "").strip()
                     or (creds.xbox_xuid or "").strip()
                 )
                 server_xbl = (
-                    (secondary_credential or "").strip()
+                    raw_sec
                     or (creds.xbl_api_key or "").strip()
                     or (self.db_manager.settings.xbl_api_key or "").strip()
+                )
+                cred_is_key = bool(
+                    (raw_cred and raw_sec and raw_cred == raw_sec)
+                    or (
+                        not raw_cred
+                        and not (creds.xbox_gamertag or "").strip()
+                        and not (creds.xbox_xuid or "").strip()
+                        and (creds.xbl_api_key or "").strip()
+                    )
                 )
                 return await self.xbox_adapter.verify_connection(
                     credential=cand,
                     server_xbl_key=server_xbl,
                     client=client,
+                    credential_is_api_key=cred_is_key,
                 )
 
             if normalized == "psn":
@@ -951,8 +959,13 @@ class PlatformSyncService:
 
             if normalized == "gog":
                 raw_cand = (credential or "").strip()
-                if not raw_cand:
-                    if creds.gog_access_token or creds.gog_refresh_token:
+                has_saved_tokens = bool(creds.gog_access_token or creds.gog_refresh_token)
+                if not raw_cand or (
+                    has_saved_tokens
+                    and creds.gog_username
+                    and raw_cand == creds.gog_username.strip()
+                ):
+                    if has_saved_tokens:
                         raw_cand = json.dumps(
                             {
                                 "access_token": creds.gog_access_token,
@@ -961,7 +974,7 @@ class PlatformSyncService:
                                 "username": creds.gog_username,
                             }
                         )
-                    else:
+                    elif not raw_cand:
                         raw_cand = (creds.gog_username or creds.gog_user_id or "").strip()
                 return await self.gog_adapter.verify_connection(
                     credential=raw_cand,
