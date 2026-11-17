@@ -13,7 +13,7 @@
   <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png?v=56">
   <link rel="icon" type="image/svg+xml" href="/static/vertex_logo.svg?v=56">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png?v=56">
-  <link rel="stylesheet" href="/static/styles.css?v=58">
+  <link rel="stylesheet" href="/static/styles.css?v=65">
 </head>
 <body>
   <div id="pwa-install-banner" class="pwa-install-banner" hidden>
@@ -447,18 +447,23 @@
           </div>
 
           <div class="heatmap-circadian-layout">
-            <div class="heatmap-side-col">
-              <div class="heatmap-scroll-container" id="contribution-heatmap-container">
-                <!-- 52-week x 7-day grid rendered dynamically -->
+            <div class="heatmap-side-col" id="heatmap-side-col">
+              <div class="heatmap-scroll-viewport" id="heatmap-scroll-viewport">
+                <div class="heatmap-scroll-container" id="contribution-heatmap-container">
+                  <!-- 52-week x 7-day grid rendered dynamically -->
+                </div>
               </div>
-              <div class="heatmap-legend-strip">
-                <span class="heatmap-legend-label">Less</span>
-                <span class="heatmap-legend-box" data-level="0" title="0m logged"></span>
-                <span class="heatmap-legend-box" data-level="1" title="< 1h (< 60m)"></span>
-                <span class="heatmap-legend-box" data-level="2" title="1h – 3h (60–180m)"></span>
-                <span class="heatmap-legend-box" data-level="3" title="3h – 5h (180–300m)"></span>
-                <span class="heatmap-legend-box" data-level="4" title="5h+ Marathon (300m+)"></span>
-                <span class="heatmap-legend-label">More</span>
+              <div class="heatmap-footer-bar">
+                <span class="heatmap-scroll-hint" id="heatmap-scroll-hint" aria-hidden="true">← Scroll for earlier months</span>
+                <div class="heatmap-legend-strip">
+                  <span class="heatmap-legend-label">Less</span>
+                  <span class="heatmap-legend-box" data-level="0" title="0m logged"></span>
+                  <span class="heatmap-legend-box" data-level="1" title="< 1h (< 60m)"></span>
+                  <span class="heatmap-legend-box" data-level="2" title="1h – 3h (60–180m)"></span>
+                  <span class="heatmap-legend-box" data-level="3" title="3h – 5h (180–300m)"></span>
+                  <span class="heatmap-legend-box" data-level="4" title="5h+ Marathon (300m+)"></span>
+                  <span class="heatmap-legend-label">More</span>
+                </div>
               </div>
             </div>
 
@@ -2430,6 +2435,6 @@
     <button type="button" id="mnav-settings" class="mnav-item" aria-label="Settings" onclick="window.openSettingsModal && window.openSettingsModal()"></button>
   </div>
 
-  <script src="/static/app.js?v=64"></script>
+  <script src="/static/app.js?v=65"></script>
 </body>
 </html>

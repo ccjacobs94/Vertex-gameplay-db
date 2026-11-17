@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "vertex-pwa-v64";
+const CACHE_NAME = "vertex-pwa-v65";
 const STATIC_ASSETS = [
   "/manifest.webmanifest",
   "/static/vertex_logo.svg",

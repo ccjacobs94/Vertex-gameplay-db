@@ -422,6 +422,10 @@ function switchMainTab(tabName, shouldScroll = false) {
   if (isSessions) {
     fetchPlaySessions();
   } else if (isHabits) {
+    const heatmapEl = document.getElementById("contribution-heatmap-container");
+    if (heatmapEl && heatmapEl.dataset.needsLatestAlign === "1") {
+      requestAnimationFrame(() => alignHeatmapViewport(heatmapEl));
+    }
     fetchHabitsAnalytics();
   } else if (isWishlist) {
     fetchWishlistAndDeals();
@@ -1511,6 +1515,65 @@ function renderSessionTelemetry(st) {
   }
 }
 
+function updateHeatmapScrollAffordance(container) {
+  if (!container) return;
+  const maxScroll = Math.max(0, container.scrollWidth - container.clientWidth);
+  const isScrollable = maxScroll > 4;
+  const canLeft = isScrollable && container.scrollLeft > 4;
+  const canRight = isScrollable && container.scrollLeft < maxScroll - 4;
+
+  const sideCol = container.closest(".heatmap-side-col") || document.getElementById("heatmap-side-col");
+  const viewport = container.closest(".heatmap-scroll-viewport") || document.getElementById("heatmap-scroll-viewport");
+  const hint = document.getElementById("heatmap-scroll-hint");
+
+  if (sideCol) sideCol.classList.toggle("is-scrollable", isScrollable);
+  if (viewport) {
+    viewport.classList.toggle("can-scroll-left", canLeft);
+    viewport.classList.toggle("can-scroll-right", canRight);
+  }
+  if (hint && isScrollable) {
+    if (canLeft && canRight) {
+      hint.textContent = "← Scroll to explore 365 days →";
+    } else if (canLeft) {
+      hint.textContent = "← Scroll for earlier months";
+    } else {
+      hint.textContent = "Scroll for recent months →";
+    }
+  }
+}
+
+function alignHeatmapViewport(container, { forceSnap = false } = {}) {
+  if (!container) return;
+  if (!container.dataset.scrollBound) {
+    container.dataset.scrollBound = "1";
+    container.addEventListener(
+      "scroll",
+      () => {
+        delete container.dataset.needsLatestAlign;
+        updateHeatmapScrollAffordance(container);
+      },
+      { passive: true },
+    );
+  }
+  if (typeof ResizeObserver !== "undefined" && !container._heatmapResizeObserver) {
+    const ro = new ResizeObserver(() => alignHeatmapViewport(container));
+    ro.observe(container);
+    container._heatmapResizeObserver = ro;
+  }
+
+  if (container.clientWidth <= 0 || container.scrollWidth <= 0) {
+    updateHeatmapScrollAffordance(container);
+    return;
+  }
+
+  const maxScroll = Math.max(0, container.scrollWidth - container.clientWidth);
+  if ((forceSnap || container.dataset.needsLatestAlign === "1") && maxScroll > 4) {
+    container.scrollLeft = maxScroll;
+  }
+  delete container.dataset.needsLatestAlign;
+  updateHeatmapScrollAffordance(container);
+}
+
 function renderContributionHeatmap(heatmapDays) {
   const container = document.getElementById("contribution-heatmap-container");
   if (!container || !Array.isArray(heatmapDays) || heatmapDays.length === 0) return;
@@ -1558,10 +1621,15 @@ function renderContributionHeatmap(heatmapDays) {
     weeks.push(currentWeek);
   }
 
+  const visibleMonthPositions = monthPositions.filter((mp, idx) => {
+    const next = monthPositions[idx + 1];
+    return !(idx === 0 && next && next.weekIndex - mp.weekIndex < 2);
+  });
+
   let monthsHtml = '<div class="heatmap-months-row">';
-  monthPositions.forEach((mp) => {
-    const leftPx = 28 + mp.weekIndex * 16;
-    monthsHtml += `<span class="heatmap-month-label" style="left: ${leftPx}px;">${mp.monthName}</span>`;
+  visibleMonthPositions.forEach((mp) => {
+    const offsetExpr = `calc(var(--heatmap-days-width, 25px) + var(--heatmap-cell-gap, 3px) + ${mp.weekIndex} * (var(--heatmap-cell-size, 13px) + var(--heatmap-cell-gap, 3px)))`;
+    monthsHtml += `<span class="heatmap-month-label" style="inset-inline-start: ${offsetExpr};">${mp.monthName}</span>`;
   });
   monthsHtml += '</div>';
 
@@ -1595,6 +1663,8 @@ function renderContributionHeatmap(heatmapDays) {
   bodyHtml += '</div></div>';
 
   container.innerHTML = `<div class="heatmap-grid-wrapper" style="position: relative;">${monthsHtml}${bodyHtml}</div>`;
+  container.dataset.needsLatestAlign = "1";
+  requestAnimationFrame(() => alignHeatmapViewport(container, { forceSnap: true }));
 }
 
 function renderCircadianBars(circadian) {

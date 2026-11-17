@@ -515,8 +515,6 @@ textarea:focus {
   border-color: var(--accent-primary);
   background-color: rgba(59, 130, 246, 0.08);
 }
-  background-color: rgba(255, 255, 255, 0.04);
-}
 
 .btn-catalog-add {
   background-color: var(--accent-primary);
@@ -3885,9 +3883,6 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   max-inline-size: 100%;
   box-sizing: border-box;
   overflow: hidden;
-}
-  gap: 1.1rem;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
 }
 
 .panel-header {
@@ -7272,16 +7267,26 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   gap: 1.5rem;
   align-items: flex-start;
   margin-block-start: 1rem;
-}
-
-.heatmap-side-col {
-  flex: 1;
+  max-inline-size: 100%;
   min-inline-size: 0;
 }
 
+.heatmap-side-col {
+  flex: 1 1 0%;
+  inline-size: 100%;
+  max-inline-size: 100%;
+  min-inline-size: 0;
+  --heatmap-cell-size: 13px;
+  --heatmap-cell-gap: 3px;
+  --heatmap-days-width: 25px;
+}
+
 .circadian-side-col {
+  flex: 0 0 280px;
   inline-size: 280px;
   min-inline-size: 260px;
+  max-inline-size: 100%;
+  box-sizing: border-box;
   background: rgba(15, 23, 42, 0.6);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-md);
@@ -7297,11 +7302,50 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   margin: 0 0 0.75rem 0;
 }
 
+.heatmap-scroll-viewport {
+  position: relative;
+  inline-size: 100%;
+  max-inline-size: 100%;
+}
+
+.heatmap-scroll-viewport::before,
+.heatmap-scroll-viewport::after {
+  content: "";
+  position: absolute;
+  inset-block-start: 0;
+  inset-block-end: 8px;
+  inline-size: 18px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 3;
+}
+
+.heatmap-scroll-viewport::before {
+  inset-inline-start: calc(var(--heatmap-days-width, 25px) + var(--heatmap-cell-gap, 3px));
+  background: linear-gradient(90deg, #0f172a 0%, rgba(15, 23, 42, 0) 100%);
+}
+
+.heatmap-scroll-viewport::after {
+  inset-inline-end: 0;
+  background: linear-gradient(270deg, #0f172a 0%, rgba(15, 23, 42, 0) 100%);
+}
+
+.heatmap-scroll-viewport.can-scroll-left::before,
+.heatmap-scroll-viewport.can-scroll-right::after {
+  opacity: 1;
+}
+
 .heatmap-scroll-container {
+  inline-size: 100%;
+  max-inline-size: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
   padding-block-end: 0.5rem;
   scrollbar-width: thin;
-  scrollbar-color: rgba(56, 189, 248, 0.3) transparent;
+  scrollbar-color: rgba(56, 189, 248, 0.45) rgba(255, 255, 255, 0.06);
 }
 
 .heatmap-scroll-container::-webkit-scrollbar {
@@ -7309,7 +7353,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 }
 
 .heatmap-scroll-container::-webkit-scrollbar-thumb {
-  background: rgba(56, 189, 248, 0.3);
+  background: rgba(56, 189, 248, 0.4);
   border-radius: 3px;
 }
 
@@ -7317,31 +7361,40 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   display: inline-flex;
   flex-direction: column;
   gap: 4px;
+  padding-inline-end: 20px;
   user-select: none;
 }
 
 .heatmap-months-row {
+  position: relative;
   display: flex;
   font-size: 0.72rem;
   color: #94a3b8;
-  height: 16px;
-  padding-inline-start: 28px;
+  block-size: 16px;
+  padding-inline-start: calc(var(--heatmap-days-width, 25px) + var(--heatmap-cell-gap, 3px));
 }
 
 .heatmap-month-label {
   position: absolute;
+  white-space: nowrap;
 }
 
 .heatmap-body-row {
   display: flex;
-  gap: 3px;
+  gap: var(--heatmap-cell-gap, 3px);
 }
 
 .heatmap-days-col {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 4;
+  background: linear-gradient(90deg, #0f172a 85%, rgba(15, 23, 42, 0.92) 100%);
   display: flex;
   flex-direction: column;
   justify-content: space-between;
-  inline-size: 25px;
+  inline-size: var(--heatmap-days-width, 25px);
+  flex: 0 0 var(--heatmap-days-width, 25px);
+  box-sizing: border-box;
   font-size: 0.68rem;
   color: #64748b;
   padding-block: 2px;
@@ -7349,18 +7402,18 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 
 .heatmap-weeks-container {
   display: flex;
-  gap: 3px;
+  gap: var(--heatmap-cell-gap, 3px);
 }
 
 .heatmap-week-col {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: var(--heatmap-cell-gap, 3px);
 }
 
 .heatmap-day-cell {
-  inline-size: 13px;
-  block-size: 13px;
+  inline-size: var(--heatmap-cell-size, 13px);
+  block-size: var(--heatmap-cell-size, 13px);
   border-radius: 2px;
   background-color: #1e293b;
   cursor: pointer;
@@ -7397,14 +7450,33 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
   box-shadow: 0 0 7px rgba(165, 243, 252, 0.6);
 }
 
+.heatmap-footer-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem 0.75rem;
+  margin-block-start: 0.65rem;
+}
+
+.heatmap-scroll-hint {
+  display: none;
+  align-items: center;
+  font-size: 0.72rem;
+  color: #94a3b8;
+}
+
+.heatmap-side-col.is-scrollable .heatmap-scroll-hint {
+  display: inline-flex;
+}
+
 .heatmap-legend-strip {
   display: flex;
   align-items: center;
   gap: 5px;
   font-size: 0.72rem;
   color: #94a3b8;
-  margin-block-start: 0.75rem;
-  justify-content: flex-end;
+  margin-inline-start: auto;
 }
 
 .heatmap-legend-box {
@@ -7433,7 +7505,9 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 }
 
 .circadian-bar-hour-label {
-  inline-size: 45px;
+  min-inline-size: 76px;
+  flex-shrink: 0;
+  white-space: nowrap;
   color: #94a3b8;
   font-weight: 600;
   text-align: end;
@@ -7441,6 +7515,7 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 
 .circadian-bar-track {
   flex: 1;
+  min-inline-size: 40px;
   block-size: 8px;
   background: rgba(255, 255, 255, 0.06);
   border-radius: 4px;
@@ -7454,7 +7529,9 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 }
 
 .circadian-bar-count-label {
-  inline-size: 28px;
+  min-inline-size: 32px;
+  flex-shrink: 0;
+  white-space: nowrap;
   font-weight: 700;
   color: #f1f5f9;
   text-align: end;
@@ -7498,7 +7575,11 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 }
 
 .gantt-scroll-container {
+  inline-size: 100%;
+  max-inline-size: 100%;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
   padding-block: 0.5rem;
   scrollbar-width: thin;
   scrollbar-color: rgba(56, 189, 248, 0.3) transparent;
@@ -7631,15 +7712,30 @@ html:active-view-transition-type(backward)::view-transition-new(reconcile-card) 
 @media (max-width: 900px) {
   .heatmap-circadian-layout {
     flex-direction: column;
+    align-items: stretch;
+  }
+
+  .heatmap-side-col {
+    flex: 0 0 auto;
+    inline-size: 100%;
+    max-inline-size: 100%;
   }
 
   .circadian-side-col {
+    flex: 0 0 auto;
     inline-size: 100%;
     min-inline-size: 0;
+    max-inline-size: 100%;
   }
 }
 
 @media (max-width: 640px) {
+  .heatmap-side-col {
+    --heatmap-cell-size: 11px;
+    --heatmap-cell-gap: 2px;
+    --heatmap-days-width: 24px;
+  }
+
   .session-kpis-grid {
     grid-template-columns: 1fr;
     gap: 0.75rem;
