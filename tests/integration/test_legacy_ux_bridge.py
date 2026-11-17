@@ -43,14 +43,16 @@ class TestLegacyUxBridge(unittest.TestCase):
                 self.assertIn("Vertex", r_index.text)
                 self.assertIn("setting-gog-username", r_index.text)
                 self.assertIn('data-platform="GOG"', r_index.text)
+                self.assertIn("/static/app.js?v=64", r_index.text)
 
-                r_app_js = client.get("/static/app.js")
+                r_app_js = client.get("/static/app.js?v=64")
                 self.assertEqual(r_app_js.status_code, 200)
                 self.assertIn("X-Vertex-UI", r_app_js.text)
+                self.assertIn("no-cache", r_app_js.headers.get("cache-control", ""))
 
                 r_sw = client.get("/sw.js")
                 self.assertEqual(r_sw.status_code, 200)
-                self.assertIn("vertex-pwa-v63", r_sw.text)
+                self.assertIn("vertex-pwa-v64", r_sw.text)
 
                 r_manifest = client.get("/manifest.webmanifest")
                 self.assertEqual(r_manifest.status_code, 200)
