@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -43,16 +44,17 @@ class TestLegacyUxBridge(unittest.TestCase):
                 self.assertIn("Vertex", r_index.text)
                 self.assertIn("setting-gog-username", r_index.text)
                 self.assertIn('data-platform="GOG"', r_index.text)
-                self.assertIn("/static/app.js?v=64", r_index.text)
+                self.assertIn("/static/styles.css?v=65", r_index.text)
+                self.assertIn("/static/app.js?v=65", r_index.text)
 
-                r_app_js = client.get("/static/app.js?v=64")
+                r_app_js = client.get("/static/app.js?v=65")
                 self.assertEqual(r_app_js.status_code, 200)
                 self.assertIn("X-Vertex-UI", r_app_js.text)
                 self.assertIn("no-cache", r_app_js.headers.get("cache-control", ""))
 
                 r_sw = client.get("/sw.js")
                 self.assertEqual(r_sw.status_code, 200)
-                self.assertIn("vertex-pwa-v64", r_sw.text)
+                self.assertIn("vertex-pwa-v65", r_sw.text)
 
                 r_manifest = client.get("/manifest.webmanifest")
                 self.assertEqual(r_manifest.status_code, 200)
@@ -337,3 +339,58 @@ class TestLegacyUxBridge(unittest.TestCase):
                     self.assertIsNotNone(gs_row)
                     self.assertEqual(int(gs_row[1]), 75)
                     self.assertEqual(int(gs_row[2]), 1)
+
+    def test_mobile_contribution_heatmap_layout_and_scroll_behavior(self) -> None:
+        # Regression guard for 2026-11-16 mobile heatmap cutoff & wrapped circadian labels.
+        css_text = (REPO_ROOT / "static" / "styles.css").read_text(encoding="utf-8")
+        html_text = (REPO_ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        js_text = (REPO_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        sw_text = (REPO_ROOT / "static" / "sw.js").read_text(encoding="utf-8")
+
+        # 1. CSS braces must stay balanced (catches orphaned blocks like old .habits-panel tail).
+        self.assertEqual(css_text.count("{"), css_text.count("}"), "static/styles.css has unbalanced braces")
+
+        # 2. Mobile stacked heatmap column must stretch full width and enable contained horizontal scroll.
+        mobile_900_match = re.search(
+            r"@media\s*\(max-width:\s*900px\)\s*\{.*?\.heatmap-circadian-layout\s*\{(.*?)\}",
+            css_text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(mobile_900_match)
+        self.assertIn("flex-direction: column;", mobile_900_match.group(1))
+        self.assertIn("align-items: stretch;", mobile_900_match.group(1))
+
+        side_col_match = re.search(r"\.heatmap-side-col\s*\{(.*?)\}", css_text, re.DOTALL)
+        self.assertIsNotNone(side_col_match)
+        self.assertIn("inline-size: 100%;", side_col_match.group(1))
+        self.assertIn("max-inline-size: 100%;", side_col_match.group(1))
+
+        scroll_box_match = re.search(r"\.heatmap-scroll-container\s*\{(.*?)\}", css_text, re.DOTALL)
+        self.assertIsNotNone(scroll_box_match)
+        self.assertIn("inline-size: 100%;", scroll_box_match.group(1))
+        self.assertIn("max-inline-size: 100%;", scroll_box_match.group(1))
+        self.assertIn("overflow-x: auto;", scroll_box_match.group(1))
+        self.assertIn("overscroll-behavior-x: contain;", scroll_box_match.group(1))
+
+        days_col_match = re.search(r"\.heatmap-days-col\s*\{(.*?)\}", css_text, re.DOTALL)
+        self.assertIsNotNone(days_col_match)
+        self.assertIn("position: sticky;", days_col_match.group(1))
+        self.assertIn("inset-inline-start: 0;", days_col_match.group(1))
+
+        # 3. Circadian window labels must stay on a single line without wrapping inside 45px.
+        hour_lbl_match = re.search(r"\.circadian-bar-hour-label\s*\{(.*?)\}", css_text, re.DOTALL)
+        self.assertIsNotNone(hour_lbl_match)
+        self.assertIn("white-space: nowrap;", hour_lbl_match.group(1))
+        self.assertNotIn("inline-size: 45px;", hour_lbl_match.group(1))
+
+        # 4. Month label positioning must scale with CSS variables and auto-align to latest weeks.
+        self.assertIn('id="heatmap-scroll-hint"', html_text)
+        self.assertIn("--heatmap-cell-size", css_text)
+        self.assertIn("--heatmap-cell-size", js_text)
+        self.assertNotIn("const leftPx = 28 + mp.weekIndex * 16;", js_text)
+        self.assertIn("alignHeatmapViewport", js_text)
+
+        # 5. Bumped cache-busting assets in HTML and service worker.
+        self.assertIn('/static/styles.css?v=65"', html_text)
+        self.assertIn('/static/app.js?v=65"', html_text)
+        self.assertIn('const CACHE_NAME = "vertex-pwa-v65";', sw_text)
