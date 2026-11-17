@@ -54,6 +54,7 @@ from vertex.interfaces.http import (
     health,
     homeassistant,
     jobs,
+    legacy_ui,
     library,
     portability,
     push as push_http,
@@ -300,6 +301,15 @@ def create_app(
     )
     app.state.services = services
 
+    _DIRECT_LEGACY_PREFIXES = (
+        "/api/ui/",
+        "/api/user/",
+        "/api/search-external",
+        "/api/enrich-metadata",
+        "/api/auth/steam/",
+        "/api/auth/xbox/",
+    )
+
     @app.middleware("http")
     async def security_and_cache_middleware(request: Request, call_next: Any):
         is_mcp_path = request.url.path == "/mcp" or request.url.path.startswith("/mcp/")
@@ -308,6 +318,14 @@ def create_app(
                 validate_request_host_and_csrf(request, cfg)
             except HTTPException as exc:
                 return JSONResponse(status_code=exc.status_code, content={"code": "security_blocked", "detail": exc.detail})
+
+        path = request.scope.get("path", "")
+        if (
+            request.headers.get("x-vertex-ui") == "1"
+            and path.startswith("/api/")
+            and not path.startswith(_DIRECT_LEGACY_PREFIXES)
+        ):
+            request.scope["path"] = "/api/ui/" + path[len("/api/") :]
 
         response = await call_next(request)
         if request.url.path.startswith("/api/") or is_mcp_path:
@@ -375,6 +393,7 @@ def create_app(
     app.include_router(wishlist_http.router)
     app.include_router(push_http.router)
     app.include_router(portability.router)
+    app.include_router(legacy_ui.router)
 
     if mcp_server is not None:
         secured_mcp_app = build_mcp_streamable_app(mcp_server, services)
@@ -382,8 +401,52 @@ def create_app(
         app.router.routes.append(Route("/mcp", endpoint=secured_mcp_app, methods=mcp_methods))
         app.router.routes.append(Route("/mcp/", endpoint=secured_mcp_app, methods=mcp_methods))
 
+    repo_root = Path(__file__).resolve().parents[2]
+    static_dir = repo_root / "static"
+    if static_dir.exists() and static_dir.is_dir():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="legacy-static")
+
     dist_dir = Path(cfg.frontend_dist_dir)
-    if dist_dir.exists() and (dist_dir / "index.html").exists():
+    default_dist_dir = (repo_root / "frontend" / "dist").resolve()
+    use_legacy_static = (
+        static_dir.exists()
+        and (static_dir / "index.html").exists()
+        and dist_dir.resolve() == default_dist_dir
+    )
+
+    if use_legacy_static:
+        assets_dir = dist_dir / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend-assets")
+
+        @app.get("/", include_in_schema=False)
+        def serve_index() -> FileResponse:
+            return FileResponse(
+                static_dir / "index.html",
+                headers={"Cache-Control": "no-cache, private"},
+            )
+
+        @app.get("/manifest.webmanifest", include_in_schema=False)
+        def serve_manifest() -> FileResponse:
+            manifest_path = static_dir / "manifest.webmanifest"
+            if not manifest_path.exists():
+                manifest_path = dist_dir / "manifest.webmanifest"
+            return FileResponse(
+                manifest_path,
+                media_type="application/manifest+json",
+            )
+
+        @app.get("/sw.js", include_in_schema=False)
+        def serve_sw() -> FileResponse:
+            sw_path = static_dir / "sw.js"
+            if not sw_path.exists():
+                sw_path = dist_dir / "sw.js"
+            return FileResponse(
+                sw_path,
+                media_type="application/javascript",
+                headers={"Cache-Control": "no-cache"},
+            )
+    elif dist_dir.exists() and (dist_dir / "index.html").exists():
         assets_dir = dist_dir / "assets"
         if assets_dir.exists():
             app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="frontend-assets")

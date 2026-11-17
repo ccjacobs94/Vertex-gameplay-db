@@ -1,5 +1,28 @@
 "use strict";
 
+(function installVertexUiFetchHeader() {
+  const origFetch = window.fetch.bind(window);
+  window.fetch = function vertexFetch(input, init) {
+    const url = typeof input === "string" ? input : (input && input.url) || "";
+    const isSameOriginApi =
+      url.startsWith("/api/") ||
+      url.startsWith(window.location.origin + "/api/");
+    if (!isSameOriginApi) {
+      return origFetch(input, init);
+    }
+    const headers = new Headers(
+      (init && init.headers) ||
+      (typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined) ||
+      {}
+    );
+    if (!headers.has("X-Vertex-UI")) {
+      headers.set("X-Vertex-UI", "1");
+    }
+    const nextInit = Object.assign({}, init || {}, { headers });
+    return origFetch(input, nextInit);
+  };
+})();
+
 const STATUS_OPTIONS = [
   "Playing",
   "Plan to Play",
@@ -138,6 +161,7 @@ const BRAND_ICONS = {
   xbox: `<svg class="brand-icon brand-icon-xbox" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4.102 21.033C6.211 22.881 8.977 24 12 24c3.026 0 5.789-1.119 7.902-2.967 1.877-1.912-4.316-8.709-7.902-11.417-3.582 2.708-9.779 9.505-7.898 11.417zm11.16-14.406c2.5 2.961 7.484 10.313 6.076 12.912C23.002 17.48 24 14.861 24 12.004c0-3.34-1.365-6.362-3.57-8.536 0 0-.027-.022-.082-.042-.063-.022-.152-.045-.281-.045-.592 0-1.985.434-4.805 3.246zM3.654 3.426c-.057.02-.082.041-.086.042C1.365 5.642 0 8.664 0 12.004c0 2.854.998 5.473 2.661 7.533-1.401-2.605 3.579-9.951 6.08-12.91-2.82-2.813-4.216-3.245-4.806-3.245-.131 0-.223.021-.281.046v-.002zM12 3.551S9.055 1.828 6.755 1.746c-.903-.033-1.454.295-1.521.339C7.379.646 9.659 0 11.984 0H12c2.334 0 4.605.646 6.766 2.085-.068-.046-.615-.372-1.52-.339C14.946 1.828 12 3.545 12 3.545v.006z"/></svg>`,
   playstation: `<svg class="brand-icon brand-icon-playstation" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.984 2.596v17.547l3.915 1.261V6.688c0-.69.304-1.151.794-.991.636.18.76.814.76 1.505v5.875c2.441 1.193 4.362-.002 4.362-3.152 0-3.237-1.126-4.675-4.438-5.827-1.307-.448-3.728-1.186-5.39-1.502zm4.656 16.241l6.296-2.275c.715-.258.826-.625.246-.818-.586-.192-1.637-.139-2.357.123l-4.205 1.5V14.98l.24-.085s1.201-.42 2.913-.615c1.696-.18 3.785.03 5.437.661 1.848.601 2.04 1.472 1.576 2.072-.465.6-1.622 1.036-1.622 1.036l-8.544 3.107V18.86zM1.807 18.6c-1.9-.545-2.214-1.668-1.352-2.32.801-.586 2.16-1.052 2.16-1.052l5.615-2.013v2.313L4.205 17c-.705.271-.825.632-.239.826.586.195 1.637.15 2.343-.12L8.247 17v2.074c-.12.03-.256.044-.39.073-1.939.331-3.996.196-6.038-.479z"/></svg>`,
   switch: `<svg class="brand-icon brand-icon-switch" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M14.176 24h3.674c3.376 0 6.15-2.774 6.15-6.15V6.15C24 2.775 21.226 0 17.85 0H14.1c-.074 0-.15.074-.15.15v23.7c-.001.076.075.15.226.15zm4.574-13.199c1.351 0 2.399 1.125 2.399 2.398 0 1.352-1.125 2.4-2.399 2.4-1.35 0-2.4-1.049-2.4-2.4-.075-1.349 1.05-2.398 2.4-2.398zM11.4 0H6.15C2.775 0 0 2.775 0 6.15v11.7C0 21.226 2.775 24 6.15 24h5.25c.074 0 .15-.074.15-.149V.15c.001-.076-.075-.15-.15-.15zM9.676 22.051H6.15c-2.326 0-4.201-1.875-4.201-4.201V6.15c0-2.326 1.875-4.201 4.201-4.201H9.6l.076 20.102zM3.75 7.199c0 1.275.975 2.25 2.25 2.25s2.25-.975 2.25-2.25c0-1.273-.975-2.25-2.25-2.25s-2.25.977-2.25 2.25z"/></svg>`,
+  gog: `<svg class="brand-icon brand-icon-gog" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm-3.2 8.2a2.2 2.2 0 0 1 1.6.7V9.7h1.4v4.6c0 1.4-.9 2.3-2.5 2.3-1.2 0-2-.5-2.3-1.3l1.2-.5c.2.4.6.7 1.1.7.7 0 1.1-.4 1.1-1.1v-.5a2.1 2.1 0 0 1-1.6.6c-1.4 0-2.4-1-2.4-2.4 0-1.4 1-2.4 2.4-2.4zm0 1.2c-.6 0-1 .5-1 1.2s.4 1.2 1 1.2 1-.5 1-1.2-.4-1.2-1-1.2zm6.4-1.2c1.4 0 2.4 1 2.4 2.4s-1 2.4-2.4 2.4-2.4-1-2.4-2.4 1-2.4 2.4-2.4zm0 1.2c-.6 0-1 .5-1 1.2s.4 1.2 1 1.2 1-.5 1-1.2-.4-1.2-1-1.2z"/></svg>`,
   gamepass: `<svg class="brand-icon brand-icon-gp" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4.102 21.033C6.211 22.881 8.977 24 12 24c3.026 0 5.789-1.119 7.902-2.967 1.877-1.912-4.316-8.709-7.902-11.417-3.582 2.708-9.779 9.505-7.898 11.417zm11.16-14.406c2.5 2.961 7.484 10.313 6.076 12.912C23.002 17.48 24 14.861 24 12.004c0-3.34-1.365-6.362-3.57-8.536 0 0-.027-.022-.082-.042-.063-.022-.152-.045-.281-.045-.592 0-1.985.434-4.805 3.246zM3.654 3.426c-.057.02-.082.041-.086.042C1.365 5.642 0 8.664 0 12.004c0 2.854.998 5.473 2.661 7.533-1.401-2.605 3.579-9.951 6.08-12.91-2.82-2.813-4.216-3.245-4.806-3.245-.131 0-.223.021-.281.046v-.002zM12 3.551S9.055 1.828 6.755 1.746c-.903-.033-1.454.295-1.521.339C7.379.646 9.659 0 11.984 0H12c2.334 0 4.605.646 6.766 2.085-.068-.046-.615-.372-1.52-.339C14.946 1.828 12 3.545 12 3.545v.006z"/></svg>`,
   playanywhere: `<svg class="brand-icon brand-icon-xpa" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="10" x="2" y="3" rx="2"/><rect width="6" height="10" x="16" y="11" rx="1"/><path d="M10 21H6a2 2 0 0 1-2-2v-2"/></svg>`,
   gamepass_logo: `<svg class="brand-logo-gp" viewBox="0 0 261.629 44.604" height="12" aria-hidden="true" focusable="false"><path fill="currentColor" d="M238.473,234.386a.135.135,0,0,1,.073.036c6.669,5.073,18.09,17.622,14.608,21.167a22.3,22.3,0,0,1-29.361,0c-3.482-3.545,7.937-16.094,14.606-21.167A.14.14,0,0,1,238.473,234.386Zm11.618-14.623a22.312,22.312,0,0,0-23.235,0,.085.085,0,0,0-.037.111.088.088,0,0,0,.108.039c4.318-.933,10.878,2.8,11.5,3.171a.073.073,0,0,0,.094,0c.622-.374,7.181-4.1,11.5-3.171a.088.088,0,0,0,.108-.039A.085.085,0,0,0,250.091,219.763ZM222.863,222.9a.411.411,0,0,0-.1.075,22.3,22.3,0,0,0-2.032,29.338.1.1,0,0,0,.119.036.092.092,0,0,0,.026-.115c-1.7-5.256,6.992-18,11.481-23.342a.1.1,0,0,0,.03-.064.1.1,0,0,0-.039-.074C225.547,221.987,223.237,222.706,222.863,222.9Zm21.734,5.855a.1.1,0,0,0-.038.074.1.1,0,0,0,.03.064c4.489,5.343,13.181,18.086,11.481,23.342a.092.092,0,0,0,.026.115.1.1,0,0,0,.119-.036,22.3,22.3,0,0,0-2.032-29.338.409.409,0,0,0-.1-.075C253.709,222.706,251.4,221.987,244.6,228.754Zm69.8-3.023h-4.633L299.3,252.54h4.252l2.59-6.945h11.882l2.59,6.945h4.252Zm-6.951,16.293,4.635-12.273,4.635,12.273Zm-10.292-3.6v14.119H293.3V249.03a9.674,9.674,0,0,1-3.641,3.065,11.618,11.618,0,0,1-5.047,1.046,13.375,13.375,0,0,1-5.205-.97,11.059,11.059,0,0,1-4.022-2.91,12.738,12.738,0,0,1-2.626-4.452,18.88,18.88,0,0,1,.009-11.392,12.507,12.507,0,0,1,2.655-4.444,11.305,11.305,0,0,1,4.106-2.882,14.008,14.008,0,0,1,5.308-.96,12.823,12.823,0,0,1,8.171,2.561,10.6,10.6,0,0,1,3.844,6.9l.007.045h-4.207l-.006-.031a6.883,6.883,0,0,0-2.669-4.256,8.345,8.345,0,0,0-5.1-1.569,7.9,7.9,0,0,0-6.352,2.8,13.13,13.13,0,0,0,0,15.116,8.121,8.121,0,0,0,6.427,2.8,8.455,8.455,0,0,0,5.867-2.167,7.351,7.351,0,0,0,2.5-5.413h-7.882V238.42Zm65.565-9.007v7.768h13.317v3.42H362.719v8.256h15.054v3.683h-19.15V225.731h19.15v3.683Zm-8.191-3.683V252.54h-3.945V231.266c-.507,1.493-1.187,3.344-2.026,5.518L342.5,252.54H339.07l-.01-.025-6.119-15.73c-.728-1.942-1.4-3.767-1.989-5.442v21.2h-3.945V225.731h5.622l5.491,14.253c1.1,2.887,2.01,5.388,2.7,7.437.813-2.435,1.735-5.062,2.741-7.811l5.3-13.879Zm51.668,2.282a9.53,9.53,0,0,0-6.784-2.282H388V252.54h4.1v-9.874h7.319a9.53,9.53,0,0,0,6.784-2.282,9.129,9.129,0,0,0,0-12.371Zm-14.1,1.325h7.244a5.266,5.266,0,0,1,3.8,1.265,4.828,4.828,0,0,1,1.3,3.613,4.764,4.764,0,0,1-1.3,3.594,5.315,5.315,0,0,1-3.8,1.247h-7.244ZM453.955,245.1a7.076,7.076,0,0,1-2.774,5.888c-1.838,1.425-4.416,2.148-7.664,2.148-3.522,0-6.3-.811-8.265-2.412a8.7,8.7,0,0,1-3-7.05v-.04h4.1v.039a5.635,5.635,0,0,0,1.863,4.475,8.338,8.338,0,0,0,5.381,1.493,7.746,7.746,0,0,0,4.538-1.138,3.814,3.814,0,0,0,1.579-3.291,3.143,3.143,0,0,0-1.3-2.69,13.578,13.578,0,0,0-4.715-1.7l-2.29-.488a13.2,13.2,0,0,1-6.25-2.712,6.655,6.655,0,0,1-2.115-5.21,6.388,6.388,0,0,1,2.568-5.306,11.111,11.111,0,0,1,6.932-1.979c3.5,0,6.164.761,7.928,2.262a7.985,7.985,0,0,1,2.735,6.224v.04h-4.056l0-.036a5.082,5.082,0,0,0-1.693-3.783c-1-.8-2.642-1.212-4.874-1.212a6.945,6.945,0,0,0-3.994.969,3.169,3.169,0,0,0-1.372,2.746,3.244,3.244,0,0,0,1.223,2.747,11.45,11.45,0,0,0,4.565,1.72l2.327.488c3.046.649,5.269,1.6,6.607,2.825A6.456,6.456,0,0,1,453.955,245.1Zm23.846,0a7.076,7.076,0,0,1-2.774,5.888c-1.838,1.425-4.416,2.148-7.664,2.148-3.522,0-6.3-.811-8.265-2.412a8.7,8.7,0,0,1-3-7.05v-.04h4.1v.039a5.634,5.634,0,0,0,1.863,4.475,8.338,8.338,0,0,0,5.381,1.493,7.745,7.745,0,0,0,4.538-1.138,3.814,3.814,0,0,0,1.579-3.291,3.142,3.142,0,0,0-1.3-2.69,13.577,13.577,0,0,0-4.715-1.7l-2.29-.488a13.2,13.2,0,0,1-6.25-2.712,6.654,6.654,0,0,1-2.115-5.21,6.388,6.388,0,0,1,2.568-5.306,11.111,11.111,0,0,1,6.932-1.979c3.5,0,6.164.761,7.928,2.262a7.985,7.985,0,0,1,2.736,6.224v.04h-4.056l0-.036a5.083,5.083,0,0,0-1.694-3.783c-1-.8-2.642-1.212-4.875-1.212a6.944,6.944,0,0,0-3.994.969,3.169,3.169,0,0,0-1.372,2.746,3.244,3.244,0,0,0,1.223,2.747,11.449,11.449,0,0,0,4.565,1.72l2.327.488c3.046.649,5.269,1.6,6.607,2.825A6.456,6.456,0,0,1,477.8,245.1Zm-56.944-19.373h-4.632L405.757,252.54h4.252l2.59-6.945h11.882l2.59,6.945h4.252Zm-6.951,16.293,4.635-12.273,4.635,12.273Z" transform="translate(-216.172 -216.5)"/></svg>`,
@@ -148,6 +172,7 @@ function getPlatformBrands(platformStr) {
   const s = String(platformStr).toLowerCase();
   const brands = [];
   if (s.includes("steam")) brands.push("steam");
+  if (s.includes("gog")) brands.push("gog");
   if (s.includes("xbox")) brands.push("xbox");
   if (s.includes("playstation") || s.includes("ps4") || s.includes("ps5")) brands.push("playstation");
   if (s.includes("switch") || s.includes("nintendo")) brands.push("switch");
@@ -3753,6 +3778,16 @@ async function loadSettingsConnections() {
         : "Enter 64-char token (leave blank to keep current)";
     }
 
+    const gogUserInput = document.getElementById("setting-gog-username");
+    const gogTokenInput = document.getElementById("setting-gog-token");
+    if (gogUserInput) gogUserInput.value = data.gog_username || data.gog_user_id || "";
+    if (gogTokenInput) {
+      gogTokenInput.value = "";
+      gogTokenInput.placeholder = data.has_gog_token
+        ? (data.gog_token_masked || "Configured (enter new to change)")
+        : "Optional GOG Galaxy access token (leave blank to keep current)";
+    }
+
     const haUrlInput = document.getElementById("setting-ha-url");
     const haEntityInput = document.getElementById("setting-ha-entity");
     const haTokenInput = document.getElementById("setting-ha-token");
@@ -3784,6 +3819,13 @@ async function saveSettingsConnections() {
   }
   if (psnInput && psnInput.value.trim()) {
     payload.psn_npsso = psnInput.value.trim();
+  }
+
+  const gogUserInput = document.getElementById("setting-gog-username");
+  const gogTokenInput = document.getElementById("setting-gog-token");
+  if (gogUserInput) payload.gog_username = gogUserInput.value.trim();
+  if (gogTokenInput && gogTokenInput.value.trim()) {
+    payload.gog_access_token = gogTokenInput.value.trim();
   }
 
   const haUrlInput = document.getElementById("setting-ha-url");
@@ -4993,10 +5035,12 @@ async function updateWizardSummary() {
     const steamVal = document.getElementById("wizard-steam-id")?.value.trim() || data.steam_id;
     const xblVal = document.getElementById("wizard-xbl-key")?.value.trim() || data.xbox_gamertag;
     const psnVal = document.getElementById("wizard-psn-token")?.value.trim() || data.has_psn_npsso;
+    const gogVal = data.gog_username || data.gog_user_id || data.has_gog_token;
 
     list.innerHTML = "";
     const platforms = [
       { name: "Steam (PC)", active: Boolean(steamVal), icon: BRAND_ICONS.steam },
+      { name: "GOG Galaxy (PC)", active: Boolean(gogVal), icon: BRAND_ICONS.gog },
       { name: "Xbox / PC Game Pass", active: Boolean(xblVal), icon: BRAND_ICONS.xbox },
       { name: "PlayStation (PS4 / PS5)", active: Boolean(psnVal), icon: BRAND_ICONS.playstation },
     ];
@@ -7485,6 +7529,17 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  const btnToggleGog = document.getElementById("btn-toggle-gog");
+  if (btnToggleGog) {
+    btnToggleGog.addEventListener("click", () => {
+      const inp = document.getElementById("setting-gog-token");
+      if (!inp) return;
+      const isPw = inp.type === "password";
+      inp.type = isPw ? "text" : "password";
+      btnToggleGog.textContent = isPw ? "Hide" : "Show";
+    });
+  }
+
   const btnSaveConn = document.getElementById("btn-save-connections");
   if (btnSaveConn) {
     btnSaveConn.addEventListener("click", saveSettingsConnections);
@@ -7729,6 +7784,15 @@ document.addEventListener("DOMContentLoaded", () => {
     btnTestSetPsn.addEventListener("click", () => {
       const val = document.getElementById("setting-psn-npsso")?.value || "";
       testPlatformConnection("psn", val, "settings-psn-status");
+    });
+  }
+
+  const btnTestSetGog = document.getElementById("btn-test-settings-gog");
+  if (btnTestSetGog) {
+    btnTestSetGog.addEventListener("click", () => {
+      const tokenVal = document.getElementById("setting-gog-token")?.value?.trim() || "";
+      const userVal = document.getElementById("setting-gog-username")?.value?.trim() || "";
+      testPlatformConnection("gog", tokenVal || userVal, "settings-gog-status");
     });
   }
 
