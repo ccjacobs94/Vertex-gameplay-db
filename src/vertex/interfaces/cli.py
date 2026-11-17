@@ -89,7 +89,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             sys_applied = db_manager.ensure_system_ready()
             user_applied: dict[str, list[str]] = {}
             with db_manager.system_connection() as conn:
-                rows = conn.execute("SELECT id, username, role, status FROM users").fetchall()
+                rows = conn.execute("SELECT id, username, role, status, timezone, timezone_eras_json FROM users").fetchall()
+            from vertex.activity.service import rebuild_daily_ledger_for_conn
+
             for r in rows:
                 lib_path = db_manager.users_dir / r["id"] / "library.db"
                 if lib_path.exists():
@@ -97,7 +99,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
                     uconn = configure_sqlite_connection(sqlite3.connect(str(lib_path)))
                     try:
-                        user_applied[r["id"]] = apply_migrations(uconn, settings.migrations_dir / "library")
+                        applied_migs = apply_migrations(uconn, settings.migrations_dir / "library")
+                        user_applied[r["id"]] = applied_migs
+                        if "0004_legacy_sessions_ledger_fix" in applied_migs:
+                            rebuild_daily_ledger_for_conn(
+                                uconn,
+                                tz_name=r["timezone"] or "UTC",
+                                timezone_eras=json.loads(r["timezone_eras_json"] or "[]"),
+                            )
+                            uconn.commit()
                     finally:
                         uconn.close()
             print(json.dumps({"system_applied": sys_applied, "users_applied": user_applied}, indent=2))

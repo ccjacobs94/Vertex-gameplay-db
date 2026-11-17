@@ -1013,7 +1013,13 @@ def _migrate_user_library(
                         gsd["started_at"],
                         gsd.get("ended_at") or gsd["last_seen_at"],
                         max(0, mins),
-                        json.dumps({"detection_method": gsd.get("detection_method"), "status": gsd.get("status")}),
+                        json.dumps(
+                            {
+                                "detection_method": gsd.get("detection_method"),
+                                "status": gsd.get("status"),
+                                "achievements_earned": int(gsd.get("achievements_earned") or 0),
+                            }
+                        ),
                         now_iso,
                     ),
                 )
