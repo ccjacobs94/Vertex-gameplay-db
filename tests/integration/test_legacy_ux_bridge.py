@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
 import tempfile
@@ -254,3 +255,83 @@ class TestLegacyUxBridge(unittest.TestCase):
                 r_exp = client.get("/api/user/library/export")
                 self.assertEqual(r_exp.status_code, 200)
                 self.assertTrue(r_exp.content.startswith(b"SQLite format 3\x00"))
+
+    def test_historical_legacy_gs_observations_restore_analytics_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            app = self._make_app(tmp_path)
+            now_dt = datetime.now(timezone.utc).replace(microsecond=0)
+            hist_end = now_dt - timedelta(days=2)
+            hist_start = hist_end - timedelta(minutes=75)
+            ach_time = (hist_start + timedelta(minutes=25)).isoformat()
+
+            with TestClient(app) as client:
+                r_boot = client.post(
+                    "/api/auth/bootstrap",
+                    json={"username": "historian1", "password": "StrongPassword!99"},
+                )
+                self.assertEqual(r_boot.status_code, 201)
+
+                r_game = client.post(
+                    "/api/games",
+                    json={
+                        "title": "Halo Infinite",
+                        "platform": "Xbox",
+                        "completion_status": "Playing",
+                        "playtime_hours": 5.0,
+                    },
+                )
+                self.assertEqual(r_game.status_code, 201)
+                gid = r_game.json()["id"]
+
+                # Simulate pre-0004 migrated DB: legacy_gs interval without achievements_earned
+                # and without daily_playtime_ledger populated yet.
+                lib_db = tmp_path / "users" / "historian1" / "library.db"
+                with sqlite3.connect(lib_db) as raw_conn:
+                    raw_conn.execute(
+                        """
+                        INSERT INTO game_achievements (
+                            game_id, external_ach_id, source, platform, name, description,
+                            unlocked, unlock_time, is_hidden, updated_at
+                        ) VALUES (?, 'ach-1', 'Xbox', 'Xbox', 'Spartan', 'Desc', 1, ?, 0, ?)
+                        """,
+                        (gid, ach_time, now_dt.isoformat()),
+                    )
+                    raw_conn.execute(
+                        """
+                        INSERT INTO play_observations (
+                            idempotency_key, game_id, source, platform, observation_kind,
+                            observed_at, interval_started_at, interval_ended_at, interval_minutes,
+                            precision_level, payload_json, created_at
+                        ) VALUES (
+                            'legacy_gs:42', ?, 'Xbox', 'Xbox', 'interval',
+                            ?, ?, ?, 75,
+                            'exact', '{"detection_method": "achievement_backfill", "status": "reconciled"}', ?
+                        )
+                        """,
+                        (gid, hist_end.isoformat(), hist_start.isoformat(), hist_end.isoformat(), now_dt.isoformat()),
+                    )
+                    # Roll back migration 0004 marker & game_sessions to exercise real 0004 upgrade
+                    raw_conn.execute("DELETE FROM schema_migrations WHERE version = '0004_legacy_sessions_ledger_fix'")
+                    raw_conn.execute("DELETE FROM daily_playtime_ledger")
+                    raw_conn.commit()
+
+                # First legacy-UI analytics call applies 0004 backfill, unified view, and ledger rebuild
+                r_analytics = client.get("/api/analytics", headers=UI_HDR)
+                self.assertEqual(r_analytics.status_code, 200)
+                telemetry = r_analytics.json()["session_telemetry"]
+                self.assertGreaterEqual(telemetry["total_sessions"], 1)
+                self.assertGreaterEqual(telemetry["snack_vs_binge"]["standard_runs"]["count"], 1)
+                active_heatmap_days = [
+                    d for d in telemetry["heatmap_365"] if (d.get("active_minutes") or 0) >= 75
+                ]
+                self.assertGreaterEqual(len(active_heatmap_days), 1)
+                self.assertEqual(active_heatmap_days[0]["achievements_unlocked"], 1)
+
+                with sqlite3.connect(lib_db) as raw_conn:
+                    gs_row = raw_conn.execute(
+                        "SELECT id, active_minutes, achievements_earned FROM game_sessions WHERE id = 42"
+                    ).fetchone()
+                    self.assertIsNotNone(gs_row)
+                    self.assertEqual(int(gs_row[1]), 75)
+                    self.assertEqual(int(gs_row[2]), 1)

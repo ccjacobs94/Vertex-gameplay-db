@@ -157,9 +157,38 @@ def rebuild_daily_ledger_for_conn(
     conn.execute("DELETE FROM daily_playtime_ledger")
     rows = conn.execute(
         """
-        SELECT ps.game_id, ps.platform, ps.started_at, ps.ended_at, ps.duration_minutes, ps.achievements_unlocked
-        FROM play_sessions ps
-        ORDER BY ps.started_at ASC, ps.id ASC
+        SELECT game_id, platform, started_at, ended_at, duration_minutes, achievements_unlocked
+        FROM (
+            SELECT
+                ps.game_id AS game_id,
+                ps.platform AS platform,
+                ps.started_at AS started_at,
+                ps.ended_at AS ended_at,
+                ps.duration_minutes AS duration_minutes,
+                ps.achievements_unlocked AS achievements_unlocked,
+                ps.id AS sort_id
+            FROM play_sessions ps
+            UNION ALL
+            SELECT
+                po.game_id AS game_id,
+                po.platform AS platform,
+                po.interval_started_at AS started_at,
+                COALESCE(po.interval_ended_at, po.observed_at) AS ended_at,
+                COALESCE(po.interval_minutes, 0) AS duration_minutes,
+                COALESCE(CAST(json_extract(po.payload_json, '$.achievements_earned') AS INTEGER), 0) AS achievements_unlocked,
+                1000000 + po.id AS sort_id
+            FROM play_observations po
+            WHERE po.observation_kind = 'interval'
+              AND po.idempotency_key LIKE 'legacy_gs:%'
+              AND COALESCE(po.interval_minutes, 0) > 0
+              AND po.interval_started_at IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM play_sessions ps2
+                  WHERE ps2.game_id = po.game_id
+                    AND substr(ps2.started_at, 1, 19) = substr(po.interval_started_at, 1, 19)
+              )
+        )
+        ORDER BY started_at ASC, sort_id ASC
         """
     ).fetchall()
 

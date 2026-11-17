@@ -39,11 +39,36 @@ from vertex.interfaces.http.wishlist import _dump_targets, _serialize_item
 router = APIRouter(include_in_schema=False)
 
 _VALID_REGISTRATION_POLICIES = frozenset({"disabled", "invite"})
+_LEDGER_VERIFIED_PATHS: set[str] = set()
 
 
 def _ensure_user_lib_path(scope: UserScope, services: AppServices) -> str:
-    services.db_manager.ensure_user_library(scope)
-    return str(services.db_manager.user_db_path(scope))
+    applied = services.db_manager.ensure_user_library(scope)
+    lib_path = str(services.db_manager.user_db_path(scope))
+    if "0004_legacy_sessions_ledger_fix" in applied:
+        services.activity.rebuild_daily_ledger(scope)
+        _LEDGER_VERIFIED_PATHS.add(lib_path)
+    elif lib_path not in _LEDGER_VERIFIED_PATHS:
+        with services.db_manager.library_connection(scope) as conn:
+            needs_rebuild = conn.execute(
+                """
+                SELECT 1
+                FROM play_observations po
+                WHERE po.observation_kind = 'interval'
+                  AND po.idempotency_key LIKE 'legacy_gs:%'
+                  AND COALESCE(po.interval_minutes, 0) > 0
+                  AND po.interval_started_at IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM daily_playtime_ledger d
+                      WHERE d.game_id = po.game_id
+                  )
+                LIMIT 1
+                """
+            ).fetchone()
+        if needs_rebuild is not None:
+            services.activity.rebuild_daily_ledger(scope)
+        _LEDGER_VERIFIED_PATHS.add(lib_path)
+    return lib_path
 
 
 def _sanitize_next_url(next_url: str) -> str:
