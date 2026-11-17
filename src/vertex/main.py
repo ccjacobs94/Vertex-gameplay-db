@@ -331,6 +331,8 @@ def create_app(
         if request.url.path.startswith("/api/") or is_mcp_path:
             response.headers["Cache-Control"] = "no-store, private"
             response.headers["Pragma"] = "no-cache"
+        elif request.url.path.startswith("/static/"):
+            response.headers.setdefault("Cache-Control", "no-cache")
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "same-origin")
         return response
