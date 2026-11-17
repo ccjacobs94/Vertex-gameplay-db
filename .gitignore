@@ -3,6 +3,8 @@
 !.env.example
 data/
 data-qa/
+data-v2/
+data-v2-qa/
 *.db
 *.db-shm
 *.db-wal
@@ -12,3 +14,4 @@ __pycache__/
 venv/
 .DS_Store
 .agents/plugins/*/mcp_config.json
+frontend/dist/

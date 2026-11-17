@@ -161,6 +161,10 @@
             <svg class="brand-icon brand-icon-steam" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M11.979 0C5.678 0 .511 4.86.022 11.037l6.432 2.658c.545-.371 1.203-.59 1.912-.59.063 0 .125.004.188.006l2.861-4.142V8.91c0-2.495 2.028-4.524 4.524-4.524 2.494 0 4.524 2.031 4.524 4.527s-2.03 4.525-4.524 4.525h-.105l-4.076 2.911c0 .052.004.105.004.159 0 1.875-1.515 3.396-3.39 3.396-1.635 0-3.016-1.173-3.331-2.727L.436 15.27C1.862 20.307 6.486 24 11.979 24c6.627 0 11.999-5.373 11.999-12S18.605 0 11.979 0zM7.54 18.21l-1.473-.61c.262.543.714.999 1.314 1.25 1.297.539 2.793-.076 3.332-1.375.263-.63.264-1.319.005-1.949s-.75-1.121-1.377-1.383c-.624-.26-1.29-.249-1.878-.03l1.523.63c.956.4 1.409 1.5 1.009 2.455-.397.957-1.497 1.41-2.454 1.012H7.54zm11.415-9.303c0-1.662-1.353-3.015-3.015-3.015-1.665 0-3.015 1.353-3.015 3.015 0 1.665 1.35 3.015 3.015 3.015 1.663 0 3.015-1.35 3.015-3.015zm-5.273-.005c0-1.252 1.013-2.266 2.265-2.266 1.249 0 2.266 1.014 2.266 2.266 0 1.251-1.017 2.265-2.266 2.265-1.253 0-2.265-1.014-2.265-2.265z"/></svg>
             <span>PC (Steam)</span>
           </button>
+          <button type="button" class="pill" data-platform="GOG">
+            <svg class="brand-icon brand-icon-gog" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm-3.2 8.2a2.2 2.2 0 0 1 1.6.7V9.7h1.4v4.6c0 1.4-.9 2.3-2.5 2.3-1.2 0-2-.5-2.3-1.3l1.2-.5c.2.4.6.7 1.1.7.7 0 1.1-.4 1.1-1.1v-.5a2.1 2.1 0 0 1-1.6.6c-1.4 0-2.4-1-2.4-2.4 0-1.4 1-2.4 2.4-2.4zm0 1.2c-.6 0-1 .5-1 1.2s.4 1.2 1 1.2 1-.5 1-1.2-.4-1.2-1-1.2zm6.4-1.2c1.4 0 2.4 1 2.4 2.4s-1 2.4-2.4 2.4-2.4-1-2.4-2.4 1-2.4 2.4-2.4zm0 1.2c-.6 0-1 .5-1 1.2s.4 1.2 1 1.2 1-.5 1-1.2-.4-1.2-1-1.2z"/></svg>
+            <span>PC (GOG)</span>
+          </button>
           <button type="button" class="pill" data-platform="Xbox">
             <svg class="brand-icon brand-icon-xbox" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M4.102 21.033C6.211 22.881 8.977 24 12 24c3.026 0 5.789-1.119 7.902-2.967 1.877-1.912-4.316-8.709-7.902-11.417-3.582 2.708-9.779 9.505-7.898 11.417zm11.16-14.406c2.5 2.961 7.484 10.313 6.076 12.912C23.002 17.48 24 14.861 24 12.004c0-3.34-1.365-6.362-3.57-8.536 0 0-.027-.022-.082-.042-.063-.022-.152-.045-.281-.045-.592 0-1.985.434-4.805 3.246zM3.654 3.426c-.057.02-.082.041-.086.042C1.365 5.642 0 8.664 0 12.004c0 2.854.998 5.473 2.661 7.533-1.401-2.605 3.579-9.951 6.08-12.91-2.82-2.813-4.216-3.245-4.806-3.245-.131 0-.223.021-.281.046v-.002zM12 3.551S9.055 1.828 6.755 1.746c-.903-.033-1.454.295-1.521.339C7.379.646 9.659 0 11.984 0H12c2.334 0 4.605.646 6.766 2.085-.068-.046-.615-.372-1.52-.339C14.946 1.828 12 3.545 12 3.545v.006z"/></svg>
             <span>Xbox / Game Pass</span>
@@ -917,6 +921,7 @@
               <option value="Xbox">Xbox</option>
               <option value="Xbox / PC">Xbox / PC</option>
               <option value="PC (Steam)">PC (Steam)</option>
+              <option value="PC (GOG)">PC (GOG)</option>
               <option value="PC (Other)">PC (Other)</option>
             </select>
           </div>
@@ -1609,6 +1614,22 @@
             </div>
             <span class="form-hint">64-character PlayStation NPSSO token from Sony login or your public PSN Online ID.</span>
             <div id="settings-psn-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
+          </div>
+
+          <div class="form-group">
+            <label for="setting-gog-username">GOG Galaxy Username / Profile</label>
+            <input type="text" id="setting-gog-username" placeholder="Your GOG username or numeric user ID" autocomplete="off" />
+            <span class="form-hint">Public GOG profile username (plus optional GOG Galaxy token below for full owned library, playtime, and achievements).</span>
+          </div>
+
+          <div class="form-group">
+            <label for="setting-gog-token">GOG Galaxy Access Token (Optional)</label>
+            <div class="input-with-button">
+              <input type="password" id="setting-gog-token" placeholder="Optional GOG Galaxy access token (leave blank to keep current)" autocomplete="off" />
+              <button type="button" id="btn-toggle-gog" class="btn btn-sm btn-secondary" aria-label="Toggle GOG token visibility">Show</button>
+              <button type="button" id="btn-test-settings-gog" class="btn btn-sm btn-secondary">Test &amp; Verify</button>
+            </div>
+            <div id="settings-gog-status" class="verification-badge-card" hidden style="margin-top: 0.5rem;"></div>
           </div>
 
           <div class="form-group" style="border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 1.25rem; margin-top: 1.25rem;">

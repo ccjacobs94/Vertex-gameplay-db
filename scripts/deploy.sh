@@ -55,6 +55,8 @@ fi
 
 DATA_DIR="${GAMEHUB_DATA_PATH:-$REPO_ROOT/data}"
 QA_DATA_DIR="${GAMEHUB_QA_DATA_PATH:-$REPO_ROOT/data-qa}"
+V2_DATA_DIR="${VERTEX_DATA_PATH:-$DATA_DIR}"
+V2_QA_DATA_DIR="${VERTEX_QA_DATA_PATH:-$QA_DATA_DIR}"
 BACKUP_DIR="${GAMEHUB_BACKUP_PATH:-/mnt/storage-pool/game-hub/backups}"
 BACKUP_KEEP="${GAMEHUB_BACKUP_KEEP:-15}"
 
@@ -137,14 +139,43 @@ if [[ "$TARGET" == "main" ]]; then
       fi
     done
   fi
+  if [[ "$V2_DATA_DIR" != "$DATA_DIR" ]] && [[ -d "$V2_DATA_DIR" ]]; then
+    if [[ -f "$V2_DATA_DIR/system.db" ]]; then
+      V2_SYS_BACKUP="$BACKUP_DIR/v2/system.db.bak-$(date +%Y%m%d-%H%M%S)"
+      echo "📦 Backing up v2 system database to $V2_SYS_BACKUP"
+      backup_sqlite "$V2_DATA_DIR/system.db" "$V2_SYS_BACKUP"
+      prune_backups "$BACKUP_DIR/v2" "$BACKUP_KEEP"
+    fi
+    if [[ -d "$V2_DATA_DIR/users" ]]; then
+      for udir in "$V2_DATA_DIR/users"/*; do
+        if [[ -d "$udir" ]] && [[ -f "$udir/library.db" ]]; then
+          uname="$(basename "$udir")"
+          ubackup="$BACKUP_DIR/v2/users/$uname/library.db.bak-$(date +%Y%m%d-%H%M%S)"
+          echo "📦 Backing up v2 user library for '$uname' to $ubackup"
+          backup_sqlite "$udir/library.db" "$ubackup"
+          prune_backups "$BACKUP_DIR/v2/users/$uname" "$BACKUP_KEEP"
+        fi
+      done
+    fi
+  elif [[ -d "$DATA_DIR/users" ]]; then
+    for udir in "$DATA_DIR/users"/*; do
+      if [[ -d "$udir" ]] && [[ -f "$udir/library.db" ]]; then
+        uname="$(basename "$udir")"
+        ubackup="$BACKUP_DIR/users/$uname/library.db.bak-$(date +%Y%m%d-%H%M%S)"
+        echo "📦 Backing up user library for '$uname' to $ubackup"
+        backup_sqlite "$udir/library.db" "$ubackup"
+        prune_backups "$BACKUP_DIR/users/$uname" "$BACKUP_KEEP"
+      fi
+    done
+  fi
   prune_backups "$BACKUP_DIR" "$BACKUP_KEEP"
 
   # 2. Build and restart primary production container
   echo "🔨 Building and launching 'game-hub'..."
   docker compose up -d --build game-hub
 
-  # 3. Verify healthcheck on port 8095
-  wait_for_health "http://localhost:8095/healthz" "Primary Game Hub (Port 8095)" || true
+  # 3. Verify readiness on port 8095
+  wait_for_health "http://localhost:8095/readyz" "Primary Game Hub (Port 8095)"
 
   echo ""
   echo "=================================================================="
@@ -160,19 +191,25 @@ if [[ "$TARGET" == "main" ]]; then
 elif [[ "$TARGET" == "develop" ]]; then
   echo "🧪 Deploying QA VALIDATION container ('game-hub-qa') from 'develop'..."
 
-  # 1. Ensure isolated data-qa directory exists
-  mkdir -p "$QA_DATA_DIR"
+  # 1. Ensure isolated QA data directories exist
+  mkdir -p "$QA_DATA_DIR" "$V2_QA_DATA_DIR"
 
-  # 2. Seed data-qa from data if empty, ensuring QA has realistic state without touching production
-  if [[ ! -f "$QA_DATA_DIR/games.db" ]] && [[ -f "$DATA_DIR/games.db" ]]; then
-    echo "📋 Seeding isolated $QA_DATA_DIR/games.db from current database snapshot..."
-    cp "$DATA_DIR/games.db" "$QA_DATA_DIR/games.db"
-    if [[ -f "$DATA_DIR/system.db" ]]; then
-      cp "$DATA_DIR/system.db" "$QA_DATA_DIR/system.db"
+  # 2. Seed v2 QA directory via import-legacy if empty without touching production
+  if [[ ! -f "$V2_QA_DATA_DIR/system.db" ]]; then
+    LEGACY_QA_SRC=""
+    if [[ -f "$QA_DATA_DIR/system.db" ]]; then
+      LEGACY_QA_SRC="$QA_DATA_DIR"
+    elif [[ -f "$DATA_DIR/system.db" ]]; then
+      LEGACY_QA_SRC="$DATA_DIR"
     fi
-    if [[ -d "$DATA_DIR/users" ]] && [[ ! -d "$QA_DATA_DIR/users" ]]; then
-      echo "📋 Seeding isolated user databases into $QA_DATA_DIR/users..."
-      cp -r "$DATA_DIR/users" "$QA_DATA_DIR/users"
+    if [[ -n "$LEGACY_QA_SRC" ]]; then
+      echo "📋 Seeding isolated $V2_QA_DATA_DIR from $LEGACY_QA_SRC via import-legacy..."
+      docker compose --profile qa build game-hub-qa
+      docker compose --profile qa run --rm --no-deps \
+        -v "$LEGACY_QA_SRC:/legacy-src:ro" \
+        --entrypoint python game-hub-qa -m vertex import-legacy \
+        --source-dir /legacy-src --dest-dir /app/data \
+        --legacy-key "${GAMEHUB_SECRET_KEY:-}" --allow-legacy-fallback-key
     fi
   fi
 
@@ -180,8 +217,8 @@ elif [[ "$TARGET" == "develop" ]]; then
   echo "🔨 Building and launching 'game-hub-qa' on ports 8098/8099..."
   docker compose --profile qa up -d --build game-hub-qa
 
-  # 4. Verify healthcheck on port 8098
-  wait_for_health "http://localhost:8098/healthz" "QA Game Hub (Port 8098)" || true
+  # 4. Verify readiness on port 8098
+  wait_for_health "http://localhost:8098/readyz" "QA Game Hub (Port 8098)"
 
   echo ""
   echo "=================================================================="
