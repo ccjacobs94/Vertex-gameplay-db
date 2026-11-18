@@ -45,16 +45,16 @@ class TestLegacyUxBridge(unittest.TestCase):
                 self.assertIn("setting-gog-username", r_index.text)
                 self.assertIn('data-platform="GOG"', r_index.text)
                 self.assertIn("/static/styles.css?v=65", r_index.text)
-                self.assertIn("/static/app.js?v=65", r_index.text)
+                self.assertIn("/static/app.js?v=66", r_index.text)
 
-                r_app_js = client.get("/static/app.js?v=65")
+                r_app_js = client.get("/static/app.js?v=66")
                 self.assertEqual(r_app_js.status_code, 200)
                 self.assertIn("X-Vertex-UI", r_app_js.text)
                 self.assertIn("no-cache", r_app_js.headers.get("cache-control", ""))
 
                 r_sw = client.get("/sw.js")
                 self.assertEqual(r_sw.status_code, 200)
-                self.assertIn("vertex-pwa-v65", r_sw.text)
+                self.assertIn("vertex-pwa-v66", r_sw.text)
 
                 r_manifest = client.get("/manifest.webmanifest")
                 self.assertEqual(r_manifest.status_code, 200)
@@ -391,6 +391,76 @@ class TestLegacyUxBridge(unittest.TestCase):
         self.assertIn("alignHeatmapViewport", js_text)
 
         # 5. Bumped cache-busting assets in HTML and service worker.
-        self.assertIn('/static/styles.css?v=65"', html_text)
-        self.assertIn('/static/app.js?v=65"', html_text)
-        self.assertIn('const CACHE_NAME = "vertex-pwa-v65";', sw_text)
+        self.assertRegex(html_text, r'/static/styles\.css\?v=(6[5-9]|[7-9]\d+)"')
+        self.assertRegex(html_text, r'/static/app\.js\?v=(6[5-9]|[7-9]\d+)"')
+        self.assertRegex(sw_text, r'const CACHE_NAME = "vertex-pwa-v(6[5-9]|[7-9]\d+)";')
+
+    def test_library_sort_order_persists_independently_of_filters(self) -> None:
+        # Library sort order must carry over across sessions via localStorage without
+        # triggering filter badges or being cleared by Reset Filters.
+        html_text = (REPO_ROOT / "static" / "index.html").read_text(encoding="utf-8")
+        js_text = (REPO_ROOT / "static" / "app.js").read_text(encoding="utf-8")
+
+        sort_select_match = re.search(r'<select id="sort-select"[^>]*>(.*?)</select>', html_text, re.DOTALL)
+        self.assertIsNotNone(sort_select_match)
+        html_sort_values = re.findall(r'<option value="([^"]+)"', sort_select_match.group(1))
+        self.assertEqual(
+            html_sort_values,
+            [
+                "playtime_desc",
+                "achievements_desc",
+                "last_played_desc",
+                "rating_desc",
+                "title_asc",
+                "recent_added",
+            ],
+        )
+
+        # Storage helpers and state initialization
+        self.assertIn('const DEFAULT_SORT_BY = "playtime_desc";', js_text)
+        self.assertIn('const SORT_STORAGE_KEY = "vertex_sort_by";', js_text)
+        self.assertIn("function getSavedSortBy(", js_text)
+        self.assertIn("function applySortBy(", js_text)
+        self.assertIn("sortBy: getSavedSortBy(),", js_text)
+
+        for sort_val in html_sort_values:
+            self.assertIn(f'"{sort_val}"', js_text)
+
+        # Startup syncs saved sort before switchMainTab triggers fetchGames()
+        dom_ready_match = re.search(
+            r'document\.addEventListener\("DOMContentLoaded",\s*\(\)\s*=>\s*\{(.*?)switchMainTab\(state\.activeTab',
+            js_text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(dom_ready_match)
+        self.assertIn("applySortBy(state.sortBy);", dom_ready_match.group(1))
+
+        # Sort selector persists changes through applySortBy
+        sort_change_match = re.search(
+            r'sortSelectEl\.addEventListener\("change",\s*\(e\)\s*=>\s*\{(.*?)\}\);',
+            js_text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(sort_change_match)
+        self.assertIn("applySortBy(e.target.value);", sort_change_match.group(1))
+
+        # syncFilterInputs keeps #sort-select synced with state.sortBy
+        sync_inputs_match = re.search(r"function syncFilterInputs\(\)\s*\{(.*?)\n\}", js_text, re.DOTALL)
+        self.assertIsNotNone(sync_inputs_match)
+        self.assertIn('document.getElementById("sort-select")', sync_inputs_match.group(1))
+        self.assertIn("sortSelect.value = state.sortBy;", sync_inputs_match.group(1))
+
+        # updateActiveFiltersUI must NOT count sortBy in filter badge or Reset Filters visibility
+        active_ui_match = re.search(r"function updateActiveFiltersUI\(\)\s*\{(.*?)\n\}", js_text, re.DOTALL)
+        self.assertIsNotNone(active_ui_match)
+        self.assertNotIn("state.sortBy", active_ui_match.group(1))
+
+        # Reset Filters button must NOT reset sortBy or #sort-select
+        reset_match = re.search(
+            r'resetFiltersBtn\.addEventListener\("click",\s*\(\)\s*=>\s*\{(.*?)\}\);\s*\n\s*\}',
+            js_text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(reset_match)
+        self.assertNotIn("sortBy", reset_match.group(1))
+        self.assertNotIn("sort-select", reset_match.group(1))
