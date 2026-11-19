@@ -93,6 +93,52 @@ const COMMON_TAGS = [
   "Turn-Based",
 ];
 
+const DEFAULT_SORT_BY = "playtime_desc";
+const SORT_STORAGE_KEY = "vertex_sort_by";
+const VALID_SORT_OPTIONS = new Set([
+  "playtime_desc",
+  "achievements_desc",
+  "last_played_desc",
+  "rating_desc",
+  "title_asc",
+  "recent_added",
+]);
+
+function normalizeSortBy(sortBy) {
+  return sortBy && VALID_SORT_OPTIONS.has(sortBy) ? sortBy : DEFAULT_SORT_BY;
+}
+
+function getSavedSortBy() {
+  try {
+    return normalizeSortBy(localStorage.getItem(SORT_STORAGE_KEY));
+  } catch (_) {
+    return DEFAULT_SORT_BY;
+  }
+}
+
+function applySortBy(sortBy) {
+  const sortSelect = document.getElementById("sort-select");
+  let nextSort = normalizeSortBy(sortBy);
+  if (
+    sortSelect &&
+    sortSelect.options &&
+    sortSelect.options.length > 0 &&
+    !Array.from(sortSelect.options).some((opt) => opt.value === nextSort)
+  ) {
+    nextSort = DEFAULT_SORT_BY;
+  }
+  state.sortBy = nextSort;
+  try {
+    localStorage.setItem(SORT_STORAGE_KEY, nextSort);
+  } catch (_) {
+    // Ignore storage errors in restricted browsing contexts
+  }
+  if (sortSelect) {
+    sortSelect.value = nextSort;
+  }
+  return nextSort;
+}
+
 const state = {
   games: [],
   allGenres: [...COMMON_GENRES],
@@ -105,7 +151,7 @@ const state = {
   genre: "",
   tag: "",
   search: "",
-  sortBy: "playtime_desc",
+  sortBy: getSavedSortBy(),
   favoriteOnly: false,
   viewMode: localStorage.getItem("vertex_view_mode") || "grid",
   activeTab: localStorage.getItem("vertex_active_tab") || "library",
@@ -291,8 +337,7 @@ function updateActiveFiltersUI() {
     (state.ownership ? 1 : 0) +
     (state.gamePassOnly ? 1 : 0) +
     (state.playAnywhereOnly ? 1 : 0) +
-    (state.favoriteOnly ? 1 : 0) +
-    (state.sortBy !== "playtime_desc" ? 1 : 0);
+    (state.favoriteOnly ? 1 : 0);
 
   const badge = document.getElementById("active-filter-badge");
   if (badge) {
@@ -311,8 +356,7 @@ function updateActiveFiltersUI() {
       !state.playAnywhereOnly &&
       !state.favoriteOnly &&
       !state.platform &&
-      !state.search &&
-      state.sortBy === "playtime_desc";
+      !state.search;
   }
 
   for (const card of document.querySelectorAll(".metric-card.metric-interactive")) {
@@ -343,6 +387,8 @@ function syncFilterInputs() {
   if (gnSelect) gnSelect.value = state.genre;
   const tgSelect = document.getElementById("tag-filter");
   if (tgSelect) tgSelect.value = state.tag;
+  const sortSelect = document.getElementById("sort-select");
+  if (sortSelect) sortSelect.value = state.sortBy;
   const qInput = document.getElementById("search-input");
   if (qInput) qInput.value = state.search;
   const favBtn = document.getElementById("btn-fav-toggle");
@@ -6565,6 +6611,7 @@ window.onToggleWishlistPlatformDetails = onToggleWishlistPlatformDetails;
 
 document.addEventListener("DOMContentLoaded", () => {
   applyViewMode(state.viewMode);
+  applySortBy(state.sortBy);
   fetchStats();
   switchMainTab(state.activeTab, false);
 
@@ -6828,7 +6875,6 @@ document.addEventListener("DOMContentLoaded", () => {
       state.genre = "";
       state.tag = "";
       state.search = "";
-      state.sortBy = "playtime_desc";
       state.favoriteOnly = false;
 
       document.getElementById("search-input").value = "";
@@ -6838,7 +6884,6 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("genre-filter").value = "";
       const tf = document.getElementById("tag-filter");
       if (tf) tf.value = "";
-      document.getElementById("sort-select").value = "playtime_desc";
       document.getElementById("btn-fav-toggle").setAttribute("aria-pressed", "false");
       document.getElementById("btn-gamepass-toggle")?.setAttribute("aria-pressed", "false");
       document.getElementById("btn-play-anywhere-toggle")?.setAttribute("aria-pressed", "false");
@@ -6903,10 +6948,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  document.getElementById("sort-select").addEventListener("change", (e) => {
-    state.sortBy = e.target.value;
-    refreshActiveView();
-  });
+  const sortSelectEl = document.getElementById("sort-select");
+  if (sortSelectEl) {
+    sortSelectEl.addEventListener("change", (e) => {
+      applySortBy(e.target.value);
+      refreshActiveView();
+    });
+  }
 
   // Favorites toggle
   const favBtn = document.getElementById("btn-fav-toggle");
