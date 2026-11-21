@@ -40,38 +40,104 @@ SYSTEM_APPS: Set[str] = {
     "750323071",   # Xbox Home / Dashboard
     "328178078",   # Microsoft Edge
     "1683392974",  # Blu-ray Player
+    "704208617",   # Xbox Live generic "Online" presence / app shell
+    "1022622766",  # Xbox Live generic "Online" presence / app shell
+    "1626579248",  # Unnamed Xbox Live presence shell
+    "994947109",   # Xbox Assist
 }
 
-SYSTEM_APP_NAMES: Set[str] = {
-    "xbox home",
+SYSTEM_APP_EXACT_NAMES: Set[str] = {
+    "online",
+    "offline",
+    "away",
+    "busy",
+    "idle",
+    "unknown",
     "home",
     "dashboard",
-    "microsoft edge",
     "edge",
+    "settings",
+    "store",
+    "captures",
+    "xbox",
+    "xbox app",
+    "xbox live",
+    "party",
+    "parties",
+    "messages",
+    "messaging",
+    "friends",
+    "profile",
+    "guide",
+    "rewards",
+    "max",
+}
+
+SYSTEM_APP_PREFIX_NAMES: Set[str] = {
+    "xbox home",
+    "xbox assist",
+    "xbox accessories",
+    "xbox game bar",
+    "game bar",
+    "xbox console companion",
+    "xbox insider hub",
+    "xbox report a problem",
+    "xbox store",
+    "xbox settings",
+    "microsoft edge",
+    "microsoft store",
+    "microsoft rewards",
+    "my games & apps",
+    "my games and apps",
     "blu-ray player",
+    "media player",
+    "tv & movies",
+    "movies & tv",
+    "films & tv",
+    "file explorer",
     "netflix",
     "youtube",
     "spotify",
     "disney+",
     "hulu",
     "prime video",
+    "amazon prime video",
+    "apple tv",
     "twitch",
-    "settings",
-    "microsoft store",
-    "xbox accessories",
-    "captures",
-    "media player",
-    "tv & movies",
+    "discord",
+    "plex",
+    "crunchyroll",
+    "peacock",
+    "paramount+",
+    "hbo max",
+    "discovery+",
+    "espn",
+    "pandora",
+    "iheartradio",
+    "vlc",
+    "kodi",
 }
+
+SYSTEM_APP_NAMES: Set[str] = SYSTEM_APP_EXACT_NAMES | SYSTEM_APP_PREFIX_NAMES
 
 
 def is_system_app(title_id: Any, title_name: Optional[str] = None) -> bool:
     tid_str = str(title_id or "").strip()
     if tid_str in SYSTEM_APPS:
         return True
-    if title_name:
-        clean_name = title_name.strip().lower()
-        if clean_name in SYSTEM_APP_NAMES or any(clean_name.startswith(app) for app in SYSTEM_APP_NAMES):
+    if title_name is not None:
+        clean_name = re.sub(r"[®™]", "", str(title_name)).strip().lower()
+        if not clean_name:
+            return True
+        if clean_name in SYSTEM_APP_EXACT_NAMES:
+            return True
+        if re.fullmatch(r"xbox title \d+", clean_name):
+            return True
+        if any(
+            clean_name == app
+            or clean_name.startswith((f"{app} ", f"{app}:", f"{app}-", f"{app}("))
+            for app in SYSTEM_APP_PREFIX_NAMES
+        ):
             return True
     return False
 
@@ -112,6 +178,22 @@ class XboxSessionMonitor:
         if isinstance(presence_payload, dict) and "content" in presence_payload:
             presence_payload = presence_payload["content"]
 
+        def _candidate(title: Any, order_idx: int):
+            if not isinstance(title, dict):
+                return None
+            state = str(title.get("state") or title.get("activityState") or "").strip().lower()
+            if state != "active":
+                return None
+            placement = str(title.get("placement") or "").strip().lower()
+            if placement == "background":
+                return None
+            t_id = str(title.get("id") or title.get("titleId") or "").strip()
+            t_name = str(title.get("name") or title.get("titleName") or "").strip()
+            if not t_id or not t_name or is_system_app(t_id, t_name):
+                return None
+            placement_rank = 2 if placement == "full" else (1 if placement == "" else 0)
+            return (placement_rank, -order_idx, {"titleId": t_id, "name": t_name})
+
         records = presence_payload if isinstance(presence_payload, list) else [presence_payload]
 
         for entry in records:
@@ -123,39 +205,45 @@ class XboxSessionMonitor:
                 entry = entry["content"]
 
             # If user state is explicitly Offline, no active game title
-            if str(entry.get("state") or "").lower() == "offline":
+            if str(entry.get("state") or "").strip().lower() == "offline":
                 continue
 
+            candidates = []
+            order_idx = 0
+
             # Check devices[] format
-            devices = entry.get("devices") or []
-            for device in devices:
+            for device in entry.get("devices") or []:
                 if not isinstance(device, dict):
                     continue
                 for title in device.get("titles") or []:
-                    if not isinstance(title, dict):
-                        continue
-                    state = str(title.get("state") or title.get("activityState") or "").capitalize()
-                    t_id = str(title.get("id") or title.get("titleId") or "")
-                    t_name = str(title.get("name") or title.get("titleName") or "").strip()
-                    if state == "Active" and t_id and not is_system_app(t_id, t_name):
-                        return {"titleId": t_id, "name": t_name or f"Xbox Title {t_id}"}
+                    cand = _candidate(title, order_idx)
+                    if cand is not None:
+                        candidates.append(cand)
+                    order_idx += 1
 
             # Check direct titles[] format
             for title in entry.get("titles") or []:
-                if not isinstance(title, dict):
-                    continue
-                state = str(title.get("state") or title.get("activityState") or "").capitalize()
-                t_id = str(title.get("id") or title.get("titleId") or "")
-                t_name = str(title.get("name") or title.get("titleName") or "").strip()
-                if state == "Active" and t_id and not is_system_app(t_id, t_name):
-                    return {"titleId": t_id, "name": t_name or f"Xbox Title {t_id}"}
+                cand = _candidate(title, order_idx)
+                if cand is not None:
+                    candidates.append(cand)
+                order_idx += 1
+
+            if candidates:
+                return max(candidates, key=lambda c: (c[0], c[1]))[2]
 
             # Check player summary format
-            title_id = entry.get("titleId")
-            title_name = entry.get("titleName") or entry.get("name")
-            status = str(entry.get("state") or entry.get("userPresence") or "").lower()
-            if title_id and status in ("online", "active") and not is_system_app(title_id, title_name):
-                return {"titleId": str(title_id), "name": str(title_name or f"Xbox Title {title_id}")}
+            title_id = str(entry.get("titleId") or "").strip()
+            title_name = str(entry.get("titleName") or entry.get("name") or "").strip()
+            placement = str(entry.get("placement") or "").strip().lower()
+            status = str(entry.get("state") or entry.get("userPresence") or "").strip().lower()
+            if (
+                title_id
+                and title_name
+                and placement != "background"
+                and status in ("online", "active")
+                and not is_system_app(title_id, title_name)
+            ):
+                return {"titleId": title_id, "name": title_name}
 
         return None
 

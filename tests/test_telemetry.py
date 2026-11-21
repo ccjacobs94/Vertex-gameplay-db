@@ -278,6 +278,53 @@ class TestXboxSessionMonitor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(extracted_xbl["titleId"], "1679168855")
         self.assertEqual(extracted_xbl["name"], "A Quiet Place: The Road Ahead")
 
+    # Regression (2026-11-19): Xbox presence "Online" non-game ghost entries
+    def test_legacy_extract_active_game_title_filters_online_and_background(self):
+        monitor = telemetry_engine.XboxSessionMonitor(
+            api_key=self.api_key,
+            target_xuid=self.target_xuid,
+            db_path=self.db_path,
+        )
+        for tid, name in [
+            ("704208617", "Online"),
+            ("1022622766", "Online"),
+            ("1626579248", ""),
+            ("994947109", "Xbox Assist"),
+            ("999999", "Xbox Title 1626579248"),
+        ]:
+            self.assertTrue(telemetry_engine.is_system_app(tid, name))
+
+        for tid, name in [
+            ("1001", "Grand Theft Auto Online"),
+            ("1003", "Homefront"),
+            ("1005", "Edge of Eternity"),
+        ]:
+            self.assertFalse(telemetry_engine.is_system_app(tid, name))
+
+        for bad_payload in [
+            {"state": "Online", "devices": [{"titles": [{"id": "704208617", "name": "Online", "state": "Active"}]}]},
+            {"state": "Online", "devices": [{"titles": [{"id": "1022622766", "name": "Online", "state": "Active"}]}]},
+            {"state": "Online", "devices": [{"titles": [{"id": "1626579248", "name": "", "state": "Active"}]}]},
+            {"state": "Online", "devices": [{"titles": [{"id": "994947109", "name": "Xbox Assist", "state": "Active"}]}]},
+            {
+                "state": "Online",
+                "devices": [{"titles": [{"id": "1001", "name": "Halo Infinite", "state": "Active", "placement": "Background"}]}],
+            },
+        ]:
+            self.assertIsNone(monitor.extract_active_game_title(bad_payload))
+
+        prefer_full = {
+            "state": "Online",
+            "devices": [
+                {"titles": [{"id": "1003", "name": "Homefront", "state": "Active"}]},
+                {"titles": [{"id": "2082978535", "name": "Halo: Campaign Evolved", "state": "Active", "placement": "Full"}]},
+            ],
+        }
+        picked = monitor.extract_active_game_title(prefer_full)
+        self.assertIsNotNone(picked)
+        self.assertEqual(picked["titleId"], "2082978535")
+        self.assertEqual(picked["name"], "Halo: Campaign Evolved")
+
     async def test_session_state_machine_and_reconciliation(self):
         # Create game in DB
         db.upsert_synced_game(
