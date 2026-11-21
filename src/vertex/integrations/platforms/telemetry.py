@@ -64,55 +64,78 @@ def extract_active_xbox_title(presence_payload: Any) -> dict[str, str | None] | 
     if isinstance(payload, dict) and "content" in payload:
         payload = payload["content"]
 
+    def _candidate_from_title(
+        title: Any, order_idx: int
+    ) -> tuple[int, int, int, dict[str, str | None]] | None:
+        if not isinstance(title, dict):
+            return None
+        state = str(title.get("state") or title.get("activityState") or "").strip().lower()
+        if state != "active":
+            return None
+        placement = str(title.get("placement") or "").strip().lower()
+        if placement == "background":
+            return None
+        t_id = str(title.get("id") or title.get("titleId") or "").strip()
+        t_name = str(title.get("name") or title.get("titleName") or "").strip()
+        if not t_id or not t_name or is_system_app(t_id, t_name):
+            return None
+        act = title.get("activity") if isinstance(title.get("activity"), dict) else {}
+        rich = str(act.get("richPresence") or title.get("richPresence") or "").strip() or None
+        placement_rank = 2 if placement == "full" else (1 if placement == "" else 0)
+        return (
+            placement_rank,
+            1 if rich else 0,
+            -order_idx,
+            {
+                "title_id": t_id,
+                "title": t_name,
+                "rich_presence": rich,
+            },
+        )
+
     records = payload if isinstance(payload, list) else [payload]
     for entry in records:
         if not isinstance(entry, dict):
             continue
         if "content" in entry and isinstance(entry["content"], dict):
             entry = entry["content"]
-        if str(entry.get("state") or "").lower() == "offline":
+        if str(entry.get("state") or "").strip().lower() == "offline":
             continue
 
+        candidates: list[tuple[int, int, int, dict[str, str | None]]] = []
+        order_idx = 0
         for device in entry.get("devices") or []:
             if not isinstance(device, dict):
                 continue
             for title in device.get("titles") or []:
-                if not isinstance(title, dict):
-                    continue
-                state = str(title.get("state") or title.get("activityState") or "").capitalize()
-                t_id = str(title.get("id") or title.get("titleId") or "").strip()
-                t_name = str(title.get("name") or title.get("titleName") or "").strip()
-                if state == "Active" and t_id and not is_system_app(t_id, t_name):
-                    act = title.get("activity") if isinstance(title.get("activity"), dict) else {}
-                    rich = str(act.get("richPresence") or title.get("richPresence") or "").strip() or None
-                    return {
-                        "title_id": t_id,
-                        "title": t_name or f"Xbox Title {t_id}",
-                        "rich_presence": rich,
-                    }
+                cand = _candidate_from_title(title, order_idx)
+                if cand is not None:
+                    candidates.append(cand)
+                order_idx += 1
 
         for title in entry.get("titles") or []:
-            if not isinstance(title, dict):
-                continue
-            state = str(title.get("state") or title.get("activityState") or "").capitalize()
-            t_id = str(title.get("id") or title.get("titleId") or "").strip()
-            t_name = str(title.get("name") or title.get("titleName") or "").strip()
-            if state == "Active" and t_id and not is_system_app(t_id, t_name):
-                act = title.get("activity") if isinstance(title.get("activity"), dict) else {}
-                rich = str(act.get("richPresence") or title.get("richPresence") or "").strip() or None
-                return {
-                    "title_id": t_id,
-                    "title": t_name or f"Xbox Title {t_id}",
-                    "rich_presence": rich,
-                }
+            cand = _candidate_from_title(title, order_idx)
+            if cand is not None:
+                candidates.append(cand)
+            order_idx += 1
 
-        title_id = entry.get("titleId")
-        title_name = entry.get("titleName") or entry.get("name")
-        status = str(entry.get("state") or entry.get("userPresence") or "").lower()
-        if title_id and status in ("online", "active") and not is_system_app(title_id, title_name):
+        if candidates:
+            return max(candidates, key=lambda c: (c[0], c[1], c[2]))[3]
+
+        title_id = str(entry.get("titleId") or "").strip()
+        title_name = str(entry.get("titleName") or entry.get("name") or "").strip()
+        placement = str(entry.get("placement") or "").strip().lower()
+        status = str(entry.get("state") or entry.get("userPresence") or "").strip().lower()
+        if (
+            title_id
+            and title_name
+            and placement != "background"
+            and status in ("online", "active")
+            and not is_system_app(title_id, title_name)
+        ):
             return {
-                "title_id": str(title_id),
-                "title": str(title_name or f"Xbox Title {title_id}"),
+                "title_id": title_id,
+                "title": title_name,
                 "rich_presence": None,
             }
 
@@ -319,7 +342,10 @@ class TelemetryService:
                             now_iso=now_iso,
                             client=http,
                         )
-                        events.append({"provider": "xbox", "action": "started", "title": started.title, "game_id": started.game_id})
+                        if started is not None:
+                            events.append({"provider": "xbox", "action": "started", "title": started.title, "game_id": started.game_id})
+                        else:
+                            events.append({"provider": "xbox", "action": "ignored_non_game", "title": title, "title_id": tid})
                     elif active.external_title_id == tid:
                         self.activity_service.touch_active_telemetry_session(
                             scope,
@@ -350,7 +376,10 @@ class TelemetryService:
                             now_iso=now_iso,
                             client=http,
                         )
-                        events.append({"provider": "xbox", "action": "started", "title": started.title, "game_id": started.game_id})
+                        if started is not None:
+                            events.append({"provider": "xbox", "action": "started", "title": started.title, "game_id": started.game_id})
+                        else:
+                            events.append({"provider": "xbox", "action": "ignored_non_game", "title": title, "title_id": tid})
                 elif active is not None:
                     closed = await self._close_xbox_session(
                         scope,
@@ -381,12 +410,49 @@ class TelemetryService:
         detection_method: str,
         now_iso: str,
         client: httpx.AsyncClient,
-    ) -> ActiveTelemetrySession:
+    ) -> ActiveTelemetrySession | None:
+        if is_system_app(title_id, title):
+            return None
+
         ext_id = f"xbox:{title_id}"
         game = self.library_service.find_game_by_external_id(scope, ext_id)
         if game is None:
             game = self.library_service.find_game_by_external_id(scope, f"xbox_{title_id}")
+
+        stats_map: dict[str, float] = {}
+        if api_key and xuid:
+            try:
+                stats_map = await self.xbox_adapter.fetch_batch_minutes_played(
+                    api_key=api_key,
+                    xuid=xuid,
+                    title_ids=[title_id],
+                    client=client,
+                )
+            except Exception:
+                stats_map = {}
+
         if game is None:
+            verified_game = title_id in stats_map
+            if not verified_game and api_key:
+                try:
+                    achs = await self.xbox_adapter.fetch_achievements(
+                        api_key=api_key,
+                        title_id=title_id,
+                        xuid=xuid,
+                        client=client,
+                    )
+                    verified_game = bool(achs)
+                except Exception:
+                    verified_game = False
+            if not verified_game:
+                logger.info(
+                    "Ignoring unverified unseen Xbox presence title %r (titleId=%s) for user %s",
+                    title,
+                    title_id,
+                    scope.username,
+                )
+                return None
+
             game, _ = self.library_service.apply_platform_snapshot(
                 scope,
                 external_id=ext_id,
@@ -398,18 +464,8 @@ class TelemetryService:
             )
 
         baseline_mins = float(game.playtime_minutes)
-        if api_key and xuid:
-            try:
-                stats_map = await self.xbox_adapter.fetch_batch_minutes_played(
-                    api_key=api_key,
-                    xuid=xuid,
-                    title_ids=[title_id],
-                    client=client,
-                )
-                if title_id in stats_map:
-                    baseline_mins = max(baseline_mins, float(stats_map[title_id]))
-            except Exception:
-                pass
+        if title_id in stats_map:
+            baseline_mins = max(baseline_mins, float(stats_map[title_id]))
 
         baseline_int = int(round(baseline_mins))
         self.activity_service.seed_baseline_if_absent(

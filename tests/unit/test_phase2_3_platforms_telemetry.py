@@ -205,6 +205,121 @@ class TestXboxAdapterUnit(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(active["title"], "Halo Infinite")
         self.assertEqual(active["rich_presence"], "Campaign - Zeta Halo")
 
+    # Regression (2026-11-19): Xbox presence "Online" non-game ghost entries
+    async def test_is_system_app_extract_active_and_library_sync_filter_non_games(self):
+        for tid, name in [
+            ("704208617", "Online"),
+            ("1022622766", "Online"),
+            ("999999", "Online"),
+            ("999999", "Offline"),
+            ("999999", "Away"),
+            ("999999", "Busy"),
+            ("999999", ""),
+            ("999999", "   "),
+            ("1626579248", ""),
+            ("999999", "Xbox Title 1626579248"),
+            ("994947109", "Xbox Assist"),
+            ("999999", "YouTube™"),
+            ("999999", "Discord"),
+        ]:
+            with self.subTest(expected=True, tid=tid, name=name):
+                self.assertTrue(is_system_app(tid, name))
+
+        for tid, name in [
+            ("1001", None),
+            ("1001", "Grand Theft Auto Online"),
+            ("1002", "Online Soccer Manager"),
+            ("1003", "Homefront"),
+            ("1004", "Homeworld"),
+            ("1005", "Edge of Eternity"),
+            ("2082978535", "Halo: Campaign Evolved"),
+        ]:
+            with self.subTest(expected=False, tid=tid, name=name):
+                self.assertFalse(is_system_app(tid, name))
+
+        # Generic "Online", blank title, "Xbox Assist", and Background placement must return None
+        for bad_payload in [
+            {"state": "Online", "devices": [{"titles": [{"id": "704208617", "name": "Online", "state": "Active"}]}]},
+            {"state": "Online", "devices": [{"titles": [{"id": "1626579248", "name": "", "state": "Active"}]}]},
+            {"state": "Online", "devices": [{"titles": [{"id": "994947109", "name": "Xbox Assist", "state": "Active"}]}]},
+            {
+                "state": "Online",
+                "devices": [{"titles": [{"id": "1001", "name": "Halo Infinite", "state": "Active", "placement": "Background"}]}],
+            },
+            {"state": "Online", "titleId": "704208617", "titleName": "Online"},
+            {"state": "Online", "titleId": "1626579248", "titleName": ""},
+        ]:
+            self.assertIsNone(extract_active_xbox_title(bad_payload))
+
+        # Ignore "Online" / Background Home and pick real Full game
+        mixed_payload = {
+            "state": "Online",
+            "devices": [
+                {
+                    "type": "WindowsOneCore",
+                    "titles": [{"id": "704208617", "name": "Online", "state": "Active", "placement": "Full"}],
+                },
+                {
+                    "type": "Scarlett",
+                    "titles": [
+                        {"id": "750323071", "name": "Home", "state": "Active", "placement": "Background"},
+                        {"id": "2082978535", "name": "Halo: Campaign Evolved", "state": "Active", "placement": "Full"},
+                    ],
+                },
+            ],
+        }
+        picked = extract_active_xbox_title(mixed_payload)
+        self.assertIsNotNone(picked)
+        self.assertEqual(picked["title_id"], "2082978535")
+        self.assertEqual(picked["title"], "Halo: Campaign Evolved")
+
+        # Prefer placement == "Full" over unspecified placement
+        prefer_full_payload = {
+            "state": "Online",
+            "devices": [
+                {
+                    "type": "PC",
+                    "titles": [{"id": "1003", "name": "Homefront", "state": "Active"}],
+                },
+                {
+                    "type": "Scarlett",
+                    "titles": [{"id": "2082978535", "name": "Halo: Campaign Evolved", "state": "Active", "placement": "Full"}],
+                },
+            ],
+        }
+        picked_full = extract_active_xbox_title(prefer_full_payload)
+        self.assertIsNotNone(picked_full)
+        self.assertEqual(picked_full["title_id"], "2082978535")
+
+        # XboxAdapter.fetch_library_with_xuid skips non-game entries even when type is missing or "Game"
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if "/v2/achievements/player/2533274000001" in path:
+                return httpx.Response(
+                    200,
+                    json={
+                        "titles": [
+                            {"titleId": "704208617", "name": "Online", "type": "Game", "devices": ["XboxSeries"]},
+                            {"titleId": "994947109", "name": "Xbox Assist", "devices": ["XboxSeries"]},
+                            {"titleId": "2082978535", "name": "Halo: Campaign Evolved", "type": "Game", "devices": ["XboxSeries"]},
+                        ]
+                    },
+                )
+            if path.endswith("/v2/player/2533274000001/titles"):
+                return httpx.Response(200, json={"titles": []})
+            if path.endswith("/v2/player/stats"):
+                return httpx.Response(200, json={"statlistscollection": []})
+            return httpx.Response(404)
+
+        adapter = XboxAdapter()
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            snapshots, _ = await adapter.fetch_library_with_xuid(
+                api_key="xbl-secret-token",
+                xbox_xuid="2533274000001",
+                client=client,
+            )
+            self.assertEqual([s.external_id for s in snapshots], ["xbox:2082978535"])
+
 
 class TestPSNAdapterUnit(unittest.IsolatedAsyncioTestCase):
     async def test_psn_library_and_trophies(self):
@@ -729,3 +844,93 @@ class TestTelemetryBackfillAndHAUnit(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(res2.imported_count, 0)
             self.assertEqual(res2.skipped_count, 1)
+
+    # Regression (2026-11-19): Xbox presence "Online" non-game ghost entries
+    async def test_xbox_telemetry_ignores_online_and_unverified_non_game_apps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _, mgr, ident, scope, lib, act = self._make_services(Path(tmp))
+            ident.update_connections(
+                scope,
+                xbox_gamertag="Chief94",
+                xbox_xuid="2533274000001",
+                xbl_api_key="xbl-key-1",
+            )
+
+            scenario = {"title": {"id": "704208617", "name": "Online", "state": "Active"}}
+
+            def handler(request: httpx.Request) -> httpx.Response:
+                path = request.url.path
+                if "/v2/presence" in path:
+                    if scenario["title"] is None:
+                        return httpx.Response(200, json={"state": "Offline"})
+                    return httpx.Response(
+                        200,
+                        json={"state": "Online", "devices": [{"titles": [scenario["title"]]}]},
+                    )
+                if path.endswith("/v2/player/stats"):
+                    # Only real games with cloud stats appear here; neither 888777666 nor 555444333 is present
+                    return httpx.Response(200, json={"statlistscollection": [{"stats": []}]})
+                if "/v2/achievements/player/2533274000001/555444333" in path:
+                    return httpx.Response(
+                        200,
+                        json={
+                            "achievements": [
+                                {
+                                    "id": "ach_new_1",
+                                    "name": "First Step",
+                                    "description": "Start playing",
+                                    "progressState": "NotStarted",
+                                }
+                            ]
+                        },
+                    )
+                if "/v2/achievements/player/2533274000001/" in path:
+                    return httpx.Response(200, json={"achievements": []})
+                return httpx.Response(404)
+
+            telemetry = TelemetryService(
+                db_manager=mgr,
+                identity_service=ident,
+                library_service=lib,
+                activity_service=act,
+                client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+                flush_delay_seconds=0.0,
+            )
+
+            # 1. Generic "Online" presence creates 0 games, 0 active sessions, 0 play_sessions, 0 ledger rows
+            t0 = datetime(2026, 11, 18, 21, 0, tzinfo=timezone.utc)
+            res_online = await telemetry.poll_user(scope, now=t0, sleep_before_flush=False)
+            self.assertEqual(res_online["status"], "ok")
+            self.assertEqual(res_online["active_sessions"], [])
+            self.assertEqual(lib.list_games(scope), [])
+            self.assertEqual(act.list_sessions(scope), [])
+            self.assertEqual(act.get_daily_ledger(scope), [])
+
+            # 2. Unseen UWP/utility app with no MinutesPlayed stat and no achievements is ignored
+            scenario["title"] = {"id": "888777666", "name": "Dolby Access", "state": "Active", "placement": "Full"}
+            t1 = datetime(2026, 11, 18, 21, 15, tzinfo=timezone.utc)
+            res_app = await telemetry.poll_user(scope, now=t1, sleep_before_flush=False)
+            self.assertEqual(res_app["status"], "ok")
+            self.assertEqual(res_app["events"], [{"provider": "xbox", "action": "ignored_non_game", "title": "Dolby Access", "title_id": "888777666"}])
+            self.assertEqual(res_app["active_sessions"], [])
+            self.assertEqual(lib.list_games(scope), [])
+            self.assertEqual(act.list_sessions(scope), [])
+
+            # 3. Unseen brand-new real game verified via achievements creates the game & starts session
+            scenario["title"] = {"id": "555444333", "name": "Brand New Indie", "state": "Active", "placement": "Full"}
+            t2 = datetime(2026, 11, 18, 21, 30, tzinfo=timezone.utc)
+            res_real = await telemetry.poll_user(scope, now=t2, sleep_before_flush=False)
+            self.assertEqual(res_real["status"], "ok")
+            self.assertEqual(len(res_real["active_sessions"]), 1)
+            self.assertEqual([g.external_id for g in lib.list_games(scope)], ["xbox:555444333"])
+
+            # 4. Switching presence to "Online" closes the real game cleanly without creating "Online"
+            scenario["title"] = {"id": "704208617", "name": "Online", "state": "Active"}
+            t3 = datetime(2026, 11, 18, 22, 0, tzinfo=timezone.utc)
+            res_close = await telemetry.poll_user(scope, now=t3, sleep_before_flush=False)
+            self.assertEqual(res_close["status"], "ok")
+            self.assertEqual(res_close["active_sessions"], [])
+            self.assertEqual([g.external_id for g in lib.list_games(scope)], ["xbox:555444333"])
+            sessions = act.list_sessions(scope)
+            self.assertEqual(len(sessions), 1)
+            self.assertEqual(sessions[0].duration_minutes, 30)

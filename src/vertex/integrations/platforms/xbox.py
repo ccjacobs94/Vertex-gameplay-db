@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
+import re
 from typing import Any
 from urllib.parse import quote
 
@@ -21,39 +22,106 @@ SYSTEM_APPS: set[str] = {
     "750323071",   # Xbox Home / Dashboard
     "328178078",   # Microsoft Edge
     "1683392974",  # Blu-ray Player
+    "704208617",   # Xbox Live generic "Online" presence / app shell
+    "1022622766",  # Xbox Live generic "Online" presence / app shell
+    "1626579248",  # Unnamed Xbox Live presence shell
+    "994947109",   # Xbox Assist
 }
 
-SYSTEM_APP_NAMES: set[str] = {
-    "xbox home",
+# Exact-match-only shell/presence labels (never prefix-matched, so titles like
+# "Homefront", "Homeworld", "Edge of Eternity", or "Online Soccer Manager" stay valid).
+SYSTEM_APP_EXACT_NAMES: set[str] = {
+    "online",
+    "offline",
+    "away",
+    "busy",
+    "idle",
+    "unknown",
     "home",
     "dashboard",
-    "microsoft edge",
     "edge",
+    "settings",
+    "store",
+    "captures",
+    "xbox",
+    "xbox app",
+    "xbox live",
+    "party",
+    "parties",
+    "messages",
+    "messaging",
+    "friends",
+    "profile",
+    "guide",
+    "rewards",
+    "max",
+}
+
+# System & media app names matched either exactly or at a word/separator boundary.
+SYSTEM_APP_PREFIX_NAMES: set[str] = {
+    "xbox home",
+    "xbox assist",
+    "xbox accessories",
+    "xbox game bar",
+    "game bar",
+    "xbox console companion",
+    "xbox insider hub",
+    "xbox report a problem",
+    "xbox store",
+    "xbox settings",
+    "microsoft edge",
+    "microsoft store",
+    "microsoft rewards",
+    "my games & apps",
+    "my games and apps",
     "blu-ray player",
+    "media player",
+    "tv & movies",
+    "movies & tv",
+    "films & tv",
+    "file explorer",
     "netflix",
     "youtube",
     "spotify",
     "disney+",
     "hulu",
     "prime video",
+    "amazon prime video",
+    "apple tv",
     "twitch",
-    "settings",
-    "microsoft store",
-    "xbox accessories",
-    "captures",
-    "media player",
-    "tv & movies",
+    "discord",
+    "plex",
+    "crunchyroll",
+    "peacock",
+    "paramount+",
+    "hbo max",
+    "discovery+",
+    "espn",
+    "pandora",
+    "iheartradio",
+    "vlc",
+    "kodi",
 }
+
+SYSTEM_APP_NAMES: set[str] = SYSTEM_APP_EXACT_NAMES | SYSTEM_APP_PREFIX_NAMES
 
 
 def is_system_app(title_id: Any, title_name: str | None = None) -> bool:
     tid_str = str(title_id or "").strip()
     if tid_str in SYSTEM_APPS:
         return True
-    if title_name:
-        clean_name = title_name.strip().lower()
-        if clean_name in SYSTEM_APP_NAMES or any(
-            clean_name.startswith(app) for app in SYSTEM_APP_NAMES
+    if title_name is not None:
+        clean_name = re.sub(r"[®™]", "", str(title_name)).strip().lower()
+        if not clean_name:
+            return True
+        if clean_name in SYSTEM_APP_EXACT_NAMES:
+            return True
+        if re.fullmatch(r"xbox title \d+", clean_name):
+            return True
+        if any(
+            clean_name == app
+            or clean_name.startswith((f"{app} ", f"{app}:", f"{app}-", f"{app}("))
+            for app in SYSTEM_APP_PREFIX_NAMES
         ):
             return True
     return False
@@ -454,6 +522,8 @@ class XboxAdapter:
                 continue
             title_type = str(t.get("type") or "Game").lower()
             if title_type not in ("game", "dvr", ""):
+                continue
+            if is_system_app(title_id, name):
                 continue
 
             devices = [str(d) for d in (t.get("devices") or [])]
