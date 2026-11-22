@@ -44,17 +44,17 @@ class TestLegacyUxBridge(unittest.TestCase):
                 self.assertIn("Vertex", r_index.text)
                 self.assertIn("setting-gog-username", r_index.text)
                 self.assertIn('data-platform="GOG"', r_index.text)
-                self.assertIn("/static/styles.css?v=65", r_index.text)
-                self.assertIn("/static/app.js?v=66", r_index.text)
+                self.assertIn("/static/styles.css?v=67", r_index.text)
+                self.assertIn("/static/app.js?v=67", r_index.text)
 
-                r_app_js = client.get("/static/app.js?v=66")
+                r_app_js = client.get("/static/app.js?v=67")
                 self.assertEqual(r_app_js.status_code, 200)
                 self.assertIn("X-Vertex-UI", r_app_js.text)
                 self.assertIn("no-cache", r_app_js.headers.get("cache-control", ""))
 
                 r_sw = client.get("/sw.js")
                 self.assertEqual(r_sw.status_code, 200)
-                self.assertIn("vertex-pwa-v66", r_sw.text)
+                self.assertIn("vertex-pwa-v67", r_sw.text)
 
                 r_manifest = client.get("/manifest.webmanifest")
                 self.assertEqual(r_manifest.status_code, 200)
@@ -464,3 +464,95 @@ class TestLegacyUxBridge(unittest.TestCase):
         self.assertIsNotNone(reset_match)
         self.assertNotIn("sortBy", reset_match.group(1))
         self.assertNotIn("sort-select", reset_match.group(1))
+
+    def test_beaten_transition_shows_congrats_card_and_dismiss_persists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            app = self._make_app(tmp_path)
+            now_dt = datetime.now(timezone.utc).replace(microsecond=0)
+            start_iso = (now_dt - timedelta(hours=2)).isoformat()
+            end_iso = (now_dt - timedelta(hours=1)).isoformat()
+
+            with TestClient(app) as client:
+                r_boot = client.post(
+                    "/api/auth/bootstrap",
+                    json={"username": "finisher1", "password": "StrongPassword!99"},
+                )
+                self.assertEqual(r_boot.status_code, 201)
+
+                r_game = client.post(
+                    "/api/games",
+                    headers=UI_HDR,
+                    json={
+                        "title": "Metaphor: ReFantazio",
+                        "platform": "PC (Steam)",
+                        "completion_status": "Playing",
+                        "playtime_hours": 72.5,
+                    },
+                )
+                self.assertEqual(r_game.status_code, 200)
+                gid = r_game.json()["game"]["id"]
+
+                # Record a session that ended 1 hour ago
+                self.assertEqual(
+                    client.post(
+                        "/api/integrations/homeassistant/events",
+                        json={
+                            "event": "start",
+                            "title": "Metaphor: ReFantazio",
+                            "platform": "PC (Steam)",
+                            "started_at": start_iso,
+                        },
+                    ).status_code,
+                    200,
+                )
+                self.assertEqual(
+                    client.post(
+                        "/api/integrations/homeassistant/events",
+                        json={
+                            "event": "stop",
+                            "title": "Metaphor: ReFantazio",
+                            "platform": "PC (Steam)",
+                            "ended_at": end_iso,
+                        },
+                    ).status_code,
+                    200,
+                )
+
+                # User switches Playing -> Beaten via legacy UI PATCH
+                r_beaten = client.patch(
+                    f"/api/games/{gid}",
+                    headers=UI_HDR,
+                    json={"completion_status": "Beaten"},
+                )
+                self.assertEqual(r_beaten.status_code, 200)
+
+                r_stats = client.get("/api/stats", headers=UI_HDR)
+                self.assertEqual(r_stats.status_code, 200)
+                prompts = r_stats.json()["playtime_prompts"]
+                self.assertEqual(len(prompts), 1)
+                self.assertEqual(prompts[0]["prompt_type"], "congrats")
+                self.assertEqual(prompts[0]["current_status"], "Beaten")
+                self.assertEqual(prompts[0]["sessions_count"], 1)
+
+                # User uses Rate & Review -> submits rating with completion_status="Beaten"
+                r_rate = client.patch(
+                    f"/api/games/{gid}",
+                    headers=UI_HDR,
+                    json={"completion_status": "Beaten", "user_rating": 10, "notes": "Masterpiece JRPG"},
+                )
+                self.assertEqual(r_rate.status_code, 200)
+                prompts_after_rate = client.get("/api/stats", headers=UI_HDR).json()["playtime_prompts"]
+                self.assertEqual(len(prompts_after_rate), 1)
+                self.assertEqual(prompts_after_rate[0]["user_rating"], 10)
+
+                # Dismiss persists across subsequent stats fetches
+                prompt_id = prompts_after_rate[0]["prompt_id"]
+                r_dismiss = client.post(
+                    f"/api/playtime-prompts/{prompt_id}/resolve",
+                    headers=UI_HDR,
+                    json={"action": "dismiss"},
+                )
+                self.assertEqual(r_dismiss.status_code, 200)
+                self.assertEqual(r_dismiss.json()["stats"]["playtime_prompts"], [])
+                self.assertEqual(client.get("/api/stats", headers=UI_HDR).json()["playtime_prompts"], [])

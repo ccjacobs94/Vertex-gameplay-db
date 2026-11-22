@@ -228,6 +228,46 @@ export async function renderLibraryView(container: HTMLElement): Promise<void> {
     clearEl(promptsHost);
     for (const p of prompts) {
       const coverThumb = createCoverElement(p.title, p.platform, p.cover_url, 10, [], "cover-thumb-sm");
+      if (p.prompt_type === "congrats") {
+        const verb = p.current_status === "Completed" ? "completing" : "beating";
+        const achText = p.achievements_total > 0
+          ? ` • ${p.achievements_unlocked}/${p.achievements_total} achievements`
+          : (p.achievements_unlocked > 0 ? ` • ${p.achievements_unlocked} achievements` : "");
+        const sessText = p.sessions_count > 0
+          ? ` • ${p.sessions_count} session${p.sessions_count === 1 ? "" : "s"}`
+          : "";
+        const ratingText = p.user_rating ? ` • ★ ${p.user_rating}/10` : "";
+        const gameObj = allGames.find((g) => g.id === p.game_id);
+        promptsHost.appendChild(el("article", { class: "playtime-prompt-card playtime-prompt-congrats" }, [
+          el("div", { class: "playtime-prompt-left" }, [
+            coverThumb,
+            el("div", { class: "stack", style: "gap:0.2rem" }, [
+              el("div", { class: "row-actions" }, [
+                el("strong", {}, [`Congratulations on ${verb} ${p.title}!`]),
+                p.delta_hours > 0 ? el("span", { class: "playtime-prompt-delta" }, [`+${p.delta_hours}h final`]) : null,
+                el("span", { class: "muted" }, [formatCardPlatformLabel(p.platform)]),
+              ]),
+              el("span", { class: "muted" }, [`${p.total_playtime_hours}h total${sessText}${achText}${ratingText}`]),
+            ]),
+          ]),
+          el("div", { class: "row-actions" }, [
+            gameObj ? el("button", {
+              type: "button",
+              class: "btn btn-primary",
+              onClick: () => openEditDialog(gameObj),
+            }, ["★ Rate & Review"]) : null,
+            el("button", {
+              type: "button",
+              class: "btn btn-secondary",
+              onClick: async () => {
+                await resolvePlaytimePrompt(p.id, "dismiss");
+                await refresh();
+              },
+            }, ["Dismiss"]),
+          ]),
+        ]));
+        continue;
+      }
       promptsHost.appendChild(el("article", { class: "playtime-prompt-card" }, [
         el("div", { class: "playtime-prompt-left" }, [
           coverThumb,

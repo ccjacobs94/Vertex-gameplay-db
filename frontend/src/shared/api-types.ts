@@ -589,6 +589,11 @@ export interface PlaytimePromptResponse {
   total_playtime_hours: number;
   detected_at: string;
   status: string;
+  prompt_type?: string;
+  sessions_count?: number;
+  achievements_unlocked?: number;
+  achievements_total?: number;
+  user_rating?: number | null;
 }
 
 export interface PriceHistoryEntryResponse {

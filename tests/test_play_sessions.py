@@ -662,6 +662,128 @@ class TestPlaySessionAPIAndMCP(unittest.TestCase):
         self.assertEqual(s_alpha["ended_at"], t_beta.isoformat())
         self.assertEqual(s_alpha["duration_minutes"], 60)
 
+    def test_beaten_and_completed_suppress_nudge_and_show_congrats_notification(self):
+        now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+        g = db.upsert_synced_game(
+            external_id="steam:7001",
+            title="Clair Obscur: Expedition 33",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_minutes=1200,
+            achievements_unlocked=25,
+            achievements_total=50,
+            db_path=self.db_path,
+        )
+        # Final session ended 1 hour ago while game was Playing
+        db.upsert_synced_game(
+            external_id="steam:7001",
+            title="Clair Obscur: Expedition 33",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_minutes=1260,
+            last_played=(now_utc - timedelta(hours=1)).isoformat(),
+            achievements_unlocked=30,
+            achievements_total=50,
+            db_path=self.db_path,
+        )
+
+        # User beats the game and switches Playing -> Beaten
+        db.update_game(g["id"], {"completion_status": "Beaten"}, db_path=self.db_path)
+        prompts = db.get_pending_playtime_prompts(db_path=self.db_path)
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0]["prompt_type"], "congrats")
+        self.assertEqual(prompts[0]["current_status"], "Beaten")
+        self.assertEqual(prompts[0]["sessions_count"], 1)
+        self.assertEqual(prompts[0]["achievements_unlocked"], 30)
+        self.assertEqual(prompts[0]["achievements_total"], 50)
+
+        # User clicks Rate & Review (edit modal submits completion_status="Beaten" + rating) -> stays congrats with rating
+        db.update_game(
+            g["id"],
+            {"completion_status": "Beaten", "user_rating": 10},
+            db_path=self.db_path,
+        )
+        prompts_rated = db.get_pending_playtime_prompts(db_path=self.db_path)
+        self.assertEqual(len(prompts_rated), 1)
+        self.assertEqual(prompts_rated[0]["prompt_type"], "congrats")
+        self.assertEqual(prompts_rated[0]["user_rating"], 10)
+
+        # Delayed sync within 24h adding +45m keeps congrats instead of "Mark as Playing?"
+        db.upsert_synced_game(
+            external_id="steam:7001",
+            title="Clair Obscur: Expedition 33",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_minutes=1305,
+            db_path=self.db_path,
+        )
+        prompts_after_sync = db.get_pending_playtime_prompts(db_path=self.db_path)
+        self.assertEqual(len(prompts_after_sync), 1)
+        self.assertEqual(prompts_after_sync[0]["prompt_type"], "congrats")
+
+        # Dismissing keeps it dismissed even on another sync within 24h or saving notes
+        res = db.resolve_playtime_prompt(prompts_after_sync[0]["prompt_id"], "dismiss", db_path=self.db_path)
+        self.assertEqual(res["action"], "dismiss")
+        self.assertEqual(db.get_pending_playtime_prompts(db_path=self.db_path), [])
+
+        db.update_game(g["id"], {"completion_status": "Beaten", "notes": "GOTY"}, db_path=self.db_path)
+        self.assertEqual(db.get_pending_playtime_prompts(db_path=self.db_path), [])
+
+        db.upsert_synced_game(
+            external_id="steam:7001",
+            title="Clair Obscur: Expedition 33",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_minutes=1350,
+            db_path=self.db_path,
+        )
+        self.assertEqual(db.get_pending_playtime_prompts(db_path=self.db_path), [])
+
+        # Backdate status_updated_at > 24h ago -> genuine replay +45m triggers standard playtime nudge
+        old_ts = (now_utc - timedelta(hours=30)).isoformat()
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("UPDATE games SET status_updated_at = ? WHERE id = ?", (old_ts, g["id"]))
+        db.upsert_synced_game(
+            external_id="steam:7001",
+            title="Clair Obscur: Expedition 33",
+            platform="PC (Steam)",
+            source="Steam",
+            playtime_minutes=1395,
+            db_path=self.db_path,
+        )
+        replay_prompts = db.get_pending_playtime_prompts(db_path=self.db_path)
+        self.assertEqual(len(replay_prompts), 1)
+        self.assertEqual(replay_prompts[0]["prompt_type"], "playtime")
+
+    def test_delayed_sync_within_24h_after_marking_completed_shows_congrats(self):
+        now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+        g = db.upsert_synced_game(
+            external_id="xbox:7002",
+            title="Hades II",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=600,
+            db_path=self.db_path,
+        )
+        # User marks Completed before the final session syncs
+        db.update_game(g["id"], {"completion_status": "Completed"}, db_path=self.db_path)
+        self.assertEqual(db.get_pending_playtime_prompts(db_path=self.db_path), [])
+
+        # Delayed sync discovers +60m session within 24h -> creates congrats, not playtime nudge
+        db.upsert_synced_game(
+            external_id="xbox:7002",
+            title="Hades II",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=660,
+            last_played=(now_utc - timedelta(minutes=70)).isoformat(),
+            db_path=self.db_path,
+        )
+        prompts = db.get_pending_playtime_prompts(db_path=self.db_path)
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0]["prompt_type"], "congrats")
+        self.assertEqual(prompts[0]["current_status"], "Completed")
+
 
 if __name__ == "__main__":
     unittest.main()
