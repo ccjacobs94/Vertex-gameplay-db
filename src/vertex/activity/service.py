@@ -419,49 +419,8 @@ class ActivityService:
                 "Unplayed",
             ):
                 conn.execute(
-                    "UPDATE games SET completion_status = 'Playing', updated_at = ? WHERE id = ?",
-                    (now_iso, game_id),
-                )
-            elif (
-                game["status_locked"]
-                and (game["completion_status"] or "Not Played") != "Playing"
-                and not game["playtime_prompt_muted"]
-                and delta >= 30
-            ):
-                prev_hrs = round(prev_baseline / 60.0, 2)
-                new_hrs = round(obs_mins / 60.0, 2)
-                delta_hrs = round(delta / 60.0, 2)
-                conn.execute(
-                    """
-                    INSERT INTO playtime_prompts (
-                        game_id, previous_hours, new_hours, delta_hours, current_status,
-                        detected_at, status, resolved_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL)
-                    ON CONFLICT(game_id) DO UPDATE SET
-                        new_hours = excluded.new_hours,
-                        delta_hours = CASE
-                            WHEN playtime_prompts.status = 'pending'
-                            THEN ROUND(playtime_prompts.delta_hours + excluded.delta_hours, 2)
-                            ELSE excluded.delta_hours
-                        END,
-                        previous_hours = CASE
-                            WHEN playtime_prompts.status = 'pending'
-                            THEN playtime_prompts.previous_hours
-                            ELSE excluded.previous_hours
-                        END,
-                        current_status = excluded.current_status,
-                        detected_at = excluded.detected_at,
-                        status = 'pending',
-                        resolved_at = NULL
-                    """,
-                    (
-                        game_id,
-                        prev_hrs,
-                        new_hrs,
-                        delta_hrs,
-                        game["completion_status"] or "Not Played",
-                        obs_iso,
-                    ),
+                    "UPDATE games SET completion_status = 'Playing', status_updated_at = ?, updated_at = ? WHERE id = ?",
+                    (now_iso, now_iso, game_id),
                 )
 
             # Avoid double-counting time already recorded by exact interval sources (e.g. Home Assistant / Telemetry).
@@ -491,6 +450,160 @@ class ActivityService:
                     baseline_minutes=obs_mins,
                     session=None,
                 )
+
+            if (
+                game["status_locked"]
+                and (game["completion_status"] or "Not Played") != "Playing"
+                and effective_delta >= 30
+            ):
+                cid = game["canonical_id"]
+                group_ids = [game_id]
+                if cid is not None:
+                    g_rows = conn.execute(
+                        "SELECT id FROM games WHERE canonical_id = ?",
+                        (cid,),
+                    ).fetchall()
+                    group_ids = list({int(gr["id"]) for gr in g_rows} | {game_id})
+                placeholders = ",".join("?" for _ in group_ids)
+
+                prev_hrs = round(prev_baseline / 60.0, 2)
+                new_hrs = round(obs_mins / 60.0, 2)
+                delta_hrs = round(effective_delta / 60.0, 2)
+                comp_status = game["completion_status"] or "Not Played"
+                status_upd_raw = (
+                    game["status_updated_at"]
+                    if "status_updated_at" in game.keys()
+                    else None
+                )
+                status_upd_dt: datetime | None = None
+                if status_upd_raw:
+                    try:
+                        status_upd_dt = _parse_iso(str(status_upd_raw))
+                    except ValueError:
+                        status_upd_dt = None
+
+                is_post_completion_sync = False
+                if comp_status in ("Beaten", "Completed") and status_upd_dt is not None:
+                    within_window = abs((obs_dt - status_upd_dt).total_seconds()) <= 86400
+                    if within_window:
+                        has_post_exact = False
+                        post_exact_rows = conn.execute(
+                            f"SELECT started_at FROM play_sessions WHERE game_id IN ({placeholders}) AND precision_level = 'exact'",
+                            group_ids,
+                        ).fetchall()
+                        for per in post_exact_rows:
+                            try:
+                                if _parse_iso(per["started_at"]) > status_upd_dt:
+                                    has_post_exact = True
+                                    break
+                            except ValueError:
+                                continue
+                        if not has_post_exact:
+                            is_post_completion_sync = True
+
+                if is_post_completion_sync and status_upd_dt is not None:
+                    prompt_rows = conn.execute(
+                        f"SELECT id, game_id, prompt_type, status, resolved_at FROM playtime_prompts WHERE game_id IN ({placeholders})",
+                        group_ids,
+                    ).fetchall()
+                    already_dismissed = False
+                    existing_congrats_gid: int | None = None
+                    for pr in prompt_rows:
+                        p_type_existing = (
+                            pr["prompt_type"]
+                            if "prompt_type" in pr.keys() and pr["prompt_type"]
+                            else "playtime"
+                        )
+                        if p_type_existing == "congrats":
+                            if pr["status"] in ("dismissed", "resolved") and pr["resolved_at"]:
+                                try:
+                                    if _parse_iso(pr["resolved_at"]) >= status_upd_dt:
+                                        already_dismissed = True
+                                        break
+                                except ValueError:
+                                    pass
+                            elif pr["status"] == "pending":
+                                existing_congrats_gid = int(pr["game_id"])
+
+                    if not already_dismissed:
+                        prompt_target_id = existing_congrats_gid or game_id
+                        tot_row = conn.execute(
+                            f"SELECT SUM(COALESCE(playtime_minutes, 0)) AS tot_m FROM games WHERE id IN ({placeholders})",
+                            group_ids,
+                        ).fetchone()
+                        tot_hrs_group = round(max(float(obs_mins), float(tot_row["tot_m"] or 0)) / 60.0, 2) if tot_row else new_hrs
+                        prev_hrs_group = max(0.0, round(tot_hrs_group - delta_hrs, 2))
+                        conn.execute(
+                            f"DELETE FROM playtime_prompts WHERE game_id IN ({placeholders}) AND game_id != ?",
+                            (*group_ids, prompt_target_id),
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO playtime_prompts (
+                                game_id, previous_hours, new_hours, delta_hours, current_status,
+                                detected_at, status, resolved_at, prompt_type
+                            ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, 'congrats')
+                            ON CONFLICT(game_id) DO UPDATE SET
+                                new_hours = excluded.new_hours,
+                                delta_hours = CASE
+                                    WHEN playtime_prompts.status = 'pending' AND COALESCE(playtime_prompts.prompt_type, 'playtime') = 'congrats'
+                                    THEN ROUND(playtime_prompts.delta_hours + excluded.delta_hours, 2)
+                                    ELSE excluded.delta_hours
+                                END,
+                                previous_hours = CASE
+                                    WHEN playtime_prompts.status = 'pending' AND COALESCE(playtime_prompts.prompt_type, 'playtime') = 'congrats'
+                                    THEN playtime_prompts.previous_hours
+                                    ELSE excluded.previous_hours
+                                END,
+                                current_status = excluded.current_status,
+                                detected_at = excluded.detected_at,
+                                status = 'pending',
+                                resolved_at = NULL,
+                                prompt_type = 'congrats'
+                            """,
+                            (
+                                prompt_target_id,
+                                prev_hrs_group,
+                                tot_hrs_group,
+                                delta_hrs,
+                                comp_status,
+                                obs_iso,
+                            ),
+                        )
+                elif not game["playtime_prompt_muted"]:
+                    conn.execute(
+                        """
+                        INSERT INTO playtime_prompts (
+                            game_id, previous_hours, new_hours, delta_hours, current_status,
+                            detected_at, status, resolved_at, prompt_type
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, 'playtime')
+                        ON CONFLICT(game_id) DO UPDATE SET
+                            new_hours = excluded.new_hours,
+                            delta_hours = CASE
+                                WHEN playtime_prompts.status = 'pending' AND COALESCE(playtime_prompts.prompt_type, 'playtime') = 'playtime'
+                                THEN ROUND(playtime_prompts.delta_hours + excluded.delta_hours, 2)
+                                ELSE excluded.delta_hours
+                            END,
+                            previous_hours = CASE
+                                WHEN playtime_prompts.status = 'pending' AND COALESCE(playtime_prompts.prompt_type, 'playtime') = 'playtime'
+                                THEN playtime_prompts.previous_hours
+                                ELSE excluded.previous_hours
+                            END,
+                            current_status = excluded.current_status,
+                            detected_at = excluded.detected_at,
+                            status = 'pending',
+                            resolved_at = NULL,
+                            prompt_type = 'playtime'
+                        """,
+                        (
+                            game_id,
+                            prev_hrs,
+                            new_hrs,
+                            delta_hrs,
+                            comp_status,
+                            obs_iso,
+                        ),
+                    )
 
             last_sess = conn.execute(
                 """
@@ -905,7 +1018,8 @@ class ActivityService:
             rows = conn.execute(
                 """
                 SELECT pp.*, g.title, g.platform, g.cover_url, g.completion_status AS game_status,
-                       g.playtime_hours, g.playtime_prompt_muted
+                       g.playtime_hours, g.playtime_prompt_muted,
+                       g.achievements_unlocked, g.achievements_total, g.user_rating, g.canonical_id
                 FROM playtime_prompts pp
                 LEFT JOIN games g ON g.id = pp.game_id
                 WHERE pp.status = 'pending'
@@ -916,27 +1030,69 @@ class ActivityService:
             prompts: list[PlaytimePrompt] = []
             stale_ids: list[int] = []
             for r in rows:
+                p_type = (
+                    r["prompt_type"]
+                    if "prompt_type" in r.keys() and r["prompt_type"]
+                    else "playtime"
+                )
+                game_status = r["game_status"]
                 if (
                     r["title"] is None
-                    or r["game_status"] == "Playing"
-                    or bool(r["playtime_prompt_muted"])
+                    or (p_type == "playtime" and (game_status == "Playing" or bool(r["playtime_prompt_muted"])))
+                    or (p_type == "congrats" and game_status not in ("Beaten", "Completed"))
                 ):
                     stale_ids.append(int(r["id"]))
                     continue
+
+                g_id = int(r["game_id"])
+                cid = r["canonical_id"]
+                group_ids = [g_id]
+                total_hrs = float(r["playtime_hours"] or 0.0)
+                ach_unl = int(r["achievements_unlocked"] or 0)
+                ach_tot = int(r["achievements_total"] or 0)
+                user_rating = r["user_rating"]
+
+                if cid is not None:
+                    grp_rows = conn.execute(
+                        "SELECT id, playtime_hours, achievements_unlocked, achievements_total, user_rating FROM games WHERE canonical_id = ?",
+                        (cid,),
+                    ).fetchall()
+                    if grp_rows:
+                        group_ids = list({int(gr["id"]) for gr in grp_rows} | {g_id})
+                        total_hrs = round(sum(float(gr["playtime_hours"] or 0.0) for gr in grp_rows), 1)
+                        ach_unl = max(int(gr["achievements_unlocked"] or 0) for gr in grp_rows)
+                        ach_tot = max(int(gr["achievements_total"] or 0) for gr in grp_rows)
+                        if user_rating is None:
+                            ratings = [int(gr["user_rating"]) for gr in grp_rows if gr["user_rating"] is not None]
+                            if ratings:
+                                user_rating = max(ratings)
+
+                placeholders = ",".join("?" for _ in group_ids)
+                sess_cnt_row = conn.execute(
+                    f"SELECT COUNT(*) AS cnt FROM play_sessions WHERE game_id IN ({placeholders})",
+                    group_ids,
+                ).fetchone()
+                sessions_count = int(sess_cnt_row["cnt"] or 0) if sess_cnt_row else 0
+
                 prompts.append(
                     PlaytimePrompt(
                         id=int(r["id"]),
-                        game_id=int(r["game_id"]),
+                        game_id=g_id,
                         title=r["title"],
                         platform=r["platform"],
                         cover_url=r["cover_url"],
-                        current_status=r["game_status"] or r["current_status"],
+                        current_status=game_status or r["current_status"],
                         previous_hours=round(float(r["previous_hours"] or 0.0), 1),
                         new_hours=round(float(r["new_hours"] or 0.0), 1),
                         delta_hours=round(float(r["delta_hours"] or 0.0), 1),
-                        total_playtime_hours=float(r["playtime_hours"] or 0.0),
+                        total_playtime_hours=total_hrs,
                         detected_at=r["detected_at"],
                         status=r["status"],
+                        prompt_type=p_type,
+                        sessions_count=sessions_count,
+                        achievements_unlocked=ach_unl,
+                        achievements_total=ach_tot,
+                        user_rating=user_rating,
                     )
                 )
 

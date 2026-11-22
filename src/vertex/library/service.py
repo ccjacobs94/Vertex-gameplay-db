@@ -6,7 +6,7 @@ import json
 import re
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from vertex.catalog.models import normalize_title
@@ -496,9 +496,16 @@ class LibraryService:
                     raise ValidationError("Platform cannot be empty")
                 updates["platform"] = cleaned_p
 
+            old_status = row["completion_status"] or "Not Played"
+            norm_status: str | None = None
+            status_changed = False
             if completion_status is not None:
-                updates["completion_status"] = _normalize_completion_status(completion_status)
+                norm_status = _normalize_completion_status(completion_status)
+                status_changed = norm_status != old_status
+                updates["completion_status"] = norm_status
                 updates["status_locked"] = 1 if status_locked is None else (1 if status_locked else 0)
+                if status_changed:
+                    updates["status_updated_at"] = now_iso
             elif status_locked is not None:
                 updates["status_locked"] = 1 if status_locked else 0
 
@@ -558,6 +565,37 @@ class LibraryService:
                 f"UPDATE games SET {assigns} WHERE id = ?",
                 (*updates.values(), game_id),
             )
+
+            cid = row["canonical_id"]
+            group_ids = [game_id]
+            if cid is not None:
+                group_rows = conn.execute(
+                    "SELECT id FROM games WHERE canonical_id = ?",
+                    (cid,),
+                ).fetchall()
+                group_ids = list({int(gr["id"]) for gr in group_rows} | {game_id})
+                if completion_status is not None:
+                    if status_changed:
+                        conn.execute(
+                            "UPDATE games SET completion_status = ?, status_locked = ?, status_updated_at = ?, updated_at = ? WHERE canonical_id = ?",
+                            (norm_status, updates["status_locked"], now_iso, now_iso, cid),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE games SET completion_status = ?, status_locked = ?, updated_at = ? WHERE canonical_id = ?",
+                            (norm_status, updates["status_locked"], now_iso, cid),
+                        )
+
+            if norm_status is not None:
+                self._sync_prompts_on_status_change(
+                    conn,
+                    game_id=game_id,
+                    group_ids=group_ids,
+                    new_status=norm_status,
+                    status_changed=status_changed,
+                    now_iso=now_iso,
+                )
+
             updated = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
             upsert_platform_copy(
                 conn,
@@ -574,6 +612,134 @@ class LibraryService:
                 now_iso=now_iso,
             )
             return row_to_game(updated)
+
+    @staticmethod
+    def _sync_prompts_on_status_change(
+        conn: sqlite3.Connection,
+        *,
+        game_id: int,
+        group_ids: list[int],
+        new_status: str,
+        status_changed: bool,
+        now_iso: str,
+    ) -> None:
+        placeholders = ",".join("?" for _ in group_ids)
+        if new_status in ("Beaten", "Completed"):
+            if status_changed:
+                now_dt = datetime.fromisoformat(now_iso.replace("Z", "+00:00"))
+                cutoff_dt = now_dt - timedelta(hours=24)
+                max_dt = now_dt + timedelta(minutes=5)
+                sess_rows = conn.execute(
+                    f"SELECT ended_at, duration_minutes FROM play_sessions WHERE game_id IN ({placeholders}) ORDER BY ended_at DESC, id DESC",
+                    group_ids,
+                ).fetchall()
+                recent_mins: int | None = None
+                for sr in sess_rows:
+                    raw_end = (sr["ended_at"] or "").strip()
+                    if not raw_end:
+                        continue
+                    try:
+                        edt = datetime.fromisoformat(raw_end.replace("Z", "+00:00"))
+                        if edt.tzinfo is None:
+                            edt = edt.replace(tzinfo=timezone.utc)
+                        edt = edt.astimezone(timezone.utc)
+                    except ValueError:
+                        continue
+                    if cutoff_dt <= edt <= max_dt:
+                        recent_mins = int(sr["duration_minutes"] or 0)
+                        break
+
+                pending_row = conn.execute(
+                    f"SELECT id, delta_hours FROM playtime_prompts WHERE game_id IN ({placeholders}) AND status = 'pending' ORDER BY id DESC LIMIT 1",
+                    group_ids,
+                ).fetchone()
+
+                if recent_mins is not None or pending_row is not None:
+                    tot_row = conn.execute(
+                        f"SELECT SUM(COALESCE(playtime_hours, 0.0)) AS tot FROM games WHERE id IN ({placeholders})",
+                        group_ids,
+                    ).fetchone()
+                    total_hrs = round(float(tot_row["tot"] or 0.0), 2) if tot_row else 0.0
+                    delta_hrs = (
+                        round(float(recent_mins) / 60.0, 2)
+                        if recent_mins is not None
+                        else round(float(pending_row["delta_hours"] or 0.0), 2)
+                    )
+                    prev_hrs = max(0.0, round(total_hrs - delta_hrs, 2))
+                    conn.execute(
+                        f"DELETE FROM playtime_prompts WHERE game_id IN ({placeholders}) AND game_id != ?",
+                        (*group_ids, game_id),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO playtime_prompts (
+                            game_id, previous_hours, new_hours, delta_hours, current_status,
+                            detected_at, status, resolved_at, prompt_type
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, 'congrats')
+                        ON CONFLICT(game_id) DO UPDATE SET
+                            previous_hours = excluded.previous_hours,
+                            new_hours = excluded.new_hours,
+                            delta_hours = excluded.delta_hours,
+                            current_status = excluded.current_status,
+                            detected_at = excluded.detected_at,
+                            status = 'pending',
+                            resolved_at = NULL,
+                            prompt_type = 'congrats'
+                        """,
+                        (game_id, prev_hrs, total_hrs, delta_hrs, new_status, now_iso),
+                    )
+                else:
+                    conn.execute(
+                        f"DELETE FROM playtime_prompts WHERE game_id IN ({placeholders})",
+                        group_ids,
+                    )
+            else:
+                pending_playtime = conn.execute(
+                    f"""
+                    SELECT id, previous_hours, new_hours, delta_hours
+                    FROM playtime_prompts
+                    WHERE game_id IN ({placeholders})
+                      AND status = 'pending'
+                      AND COALESCE(prompt_type, 'playtime') = 'playtime'
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    group_ids,
+                ).fetchone()
+                if pending_playtime is not None:
+                    conn.execute(
+                        f"DELETE FROM playtime_prompts WHERE game_id IN ({placeholders}) AND game_id != ?",
+                        (*group_ids, game_id),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO playtime_prompts (
+                            game_id, previous_hours, new_hours, delta_hours, current_status,
+                            detected_at, status, resolved_at, prompt_type
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, 'congrats')
+                        ON CONFLICT(game_id) DO UPDATE SET
+                            previous_hours = excluded.previous_hours,
+                            new_hours = excluded.new_hours,
+                            delta_hours = excluded.delta_hours,
+                            current_status = excluded.current_status,
+                            detected_at = excluded.detected_at,
+                            status = 'pending',
+                            resolved_at = NULL,
+                            prompt_type = 'congrats'
+                        """,
+                        (
+                            game_id,
+                            float(pending_playtime["previous_hours"] or 0.0),
+                            float(pending_playtime["new_hours"] or 0.0),
+                            float(pending_playtime["delta_hours"] or 0.0),
+                            new_status,
+                            now_iso,
+                        ),
+                    )
+        elif status_changed:
+            conn.execute(
+                f"DELETE FROM playtime_prompts WHERE game_id IN ({placeholders})",
+                group_ids,
+            )
 
     def delete_game(self, scope: UserScope, game_id: int) -> None:
         scope.require_active()
@@ -708,6 +874,11 @@ class LibraryService:
                     existing_cov = (existing["cover_url"] or "").strip() if existing["cover_url"] else ""
                     next_cover = existing_cov or clean_cover
 
+                status_changed_sync = new_status != existing["completion_status"]
+                next_status_upd = now_iso if status_changed_sync else (
+                    existing["status_updated_at"] if "status_updated_at" in existing.keys() else None
+                )
+
                 conn.execute(
                     """
                     UPDATE games
@@ -717,6 +888,7 @@ class LibraryService:
                         last_synced_playtime_minutes = MAX(COALESCE(last_synced_playtime_minutes, 0), ?),
                         last_played = COALESCE(?, last_played),
                         completion_status = ?,
+                        status_updated_at = ?,
                         is_game_pass = ?,
                         is_play_anywhere = ?,
                         achievements_unlocked = ?,
@@ -736,6 +908,7 @@ class LibraryService:
                         obs_mins,
                         last_played,
                         new_status,
+                        next_status_upd,
                         gp,
                         pa,
                         next_ach_u,

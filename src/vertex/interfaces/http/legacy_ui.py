@@ -1040,7 +1040,7 @@ class LegacyReconcileDismissBody(BaseModel):
 
 
 class LegacyPromptResolveBody(BaseModel):
-    action: str = Field(..., pattern="^(set_playing|mute|dismiss)$")
+    action: str = Field(..., pattern="^(accept|set_playing|mute|dismiss)$")
 
 
 class LegacyTimezoneBody(BaseModel):
@@ -1497,7 +1497,8 @@ def ui_resolve_playtime_prompt(
     scope: UserScope = Depends(require_write_scope),
     services: AppServices = Depends(get_services),
 ) -> dict[str, Any]:
-    res = services.activity.resolve_playtime_prompt(scope, prompt_id, body.action)
+    normalized_action = "accept" if body.action == "set_playing" else body.action
+    res = services.activity.resolve_playtime_prompt(scope, prompt_id, normalized_action)
     return {
         "status": "ok",
         **asdict(res),
