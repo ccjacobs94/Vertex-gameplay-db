@@ -54,6 +54,11 @@ class PlaytimePrompt:
     total_playtime_hours: float
     detected_at: str
     status: str
+    prompt_type: str = "playtime"
+    sessions_count: int = 0
+    achievements_unlocked: int = 0
+    achievements_total: int = 0
+    user_rating: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

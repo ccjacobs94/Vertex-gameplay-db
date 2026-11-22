@@ -520,14 +520,16 @@ const STATUS_COLORS = {
   Dropped: "#ef4444",
 };
 
-async function openGameById(gameId) {
-  let game = state.games.find((g) => g.id === gameId);
+async function openGameById(gameId, options = {}) {
+  const matchesId = (g) =>
+    g && (g.id === gameId || (g.linked_games || []).some((lg) => lg.id === gameId));
+  let game = state.games.find(matchesId);
   if (!game) {
     try {
-      const res = await fetch(`/api/games?search=${encodeURIComponent(gameId)}`);
+      const res = await fetch("/api/games?limit=5000");
       if (res.ok) {
         const d = await res.json();
-        game = (d.games || []).find((g) => g.id === gameId);
+        game = (d.games || []).find(matchesId);
       }
     } catch (e) {
       console.error("Failed to fetch game by ID:", e);
@@ -535,6 +537,12 @@ async function openGameById(gameId) {
   }
   if (game) {
     openEditModal(game);
+    if (options && options.focusRating) {
+      const pill = document.querySelector("#edit-rating-pills .rating-pill") || document.getElementById("edit-notes");
+      if (pill && typeof pill.focus === "function") {
+        pill.focus();
+      }
+    }
   }
 }
 
@@ -1964,7 +1972,7 @@ function renderPlaytimePrompts(prompts) {
   const bannerEl = document.getElementById("playtime-prompts-banner");
   if (!bannerEl) return;
 
-  if (state.playtimePrompts.length === 0 || state.activeTab === "habits") {
+  if (state.playtimePrompts.length === 0 || state.activeTab !== "library") {
     bannerEl.hidden = true;
     bannerEl.innerHTML = "";
     return;
@@ -1974,8 +1982,10 @@ function renderPlaytimePrompts(prompts) {
   bannerEl.innerHTML = "";
 
   for (const p of state.playtimePrompts) {
+    const promptId = p.prompt_id ?? p.id;
+    const isCongrats = p.prompt_type === "congrats";
     const card = document.createElement("article");
-    card.className = "playtime-prompt-card";
+    card.className = isCongrats ? "playtime-prompt-card playtime-prompt-congrats" : "playtime-prompt-card";
 
     const fallbackSrc = makeFallbackCover(p.title, p.platform);
     const coverSrc = p.cover_url || fallbackSrc;
@@ -1998,49 +2008,102 @@ function renderPlaytimePrompts(prompts) {
     const info = document.createElement("div");
     info.className = "playtime-prompt-info";
 
-    const isReplay = p.current_status === "Beaten" || p.current_status === "Completed";
-    const kickerText = isReplay ? "Replay Activity Detected" : "Recent Playtime Detected";
+    if (isCongrats) {
+      const isCompleted = p.current_status === "Completed";
+      const kickerText = isCompleted ? "🏆 Game Completed!" : "🎉 Game Beaten!";
+      const verb = isCompleted ? "completing" : "beating";
+      const deltaBadge = p.delta_hours > 0
+        ? `<span class="playtime-prompt-delta">+${p.delta_hours} hrs final session</span>`
+        : "";
 
-    info.innerHTML = `
-      <div class="playtime-prompt-kicker">
-        <span>${escapeHtml(kickerText)}</span>
-        <span class="playtime-prompt-delta">+${p.delta_hours} hrs</span>
-        <span class="reconcile-copy-plat">${escapeHtml(p.platform)}</span>
-      </div>
-      <div class="playtime-prompt-text">
-        Mark <strong>${escapeHtml(p.title)}</strong> as <strong>Playing</strong>?
-      </div>
-      <div class="playtime-prompt-sub">
-        Playtime increased from ${p.previous_hours}h to ${p.new_hours}h &bull; Current status: <strong>${escapeHtml(p.current_status)}</strong>
-      </div>
-    `;
+      const statsParts = [`<strong>${p.total_playtime_hours}h</strong> total`];
+      if (p.sessions_count > 0) {
+        statsParts.push(`<strong>${p.sessions_count}</strong> session${p.sessions_count === 1 ? "" : "s"}`);
+      }
+      if (p.achievements_total > 0) {
+        statsParts.push(`<strong>${p.achievements_unlocked || 0} / ${p.achievements_total}</strong> achievements`);
+      } else if (p.achievements_unlocked > 0) {
+        statsParts.push(`<strong>${p.achievements_unlocked}</strong> achievements`);
+      }
+      if (p.user_rating) {
+        statsParts.push(`&#9733; <strong>${p.user_rating}/10</strong>`);
+      }
+
+      info.innerHTML = `
+        <div class="playtime-prompt-kicker">
+          <span>${escapeHtml(kickerText)}</span>
+          ${deltaBadge}
+          <span class="reconcile-copy-plat">${escapeHtml(p.platform)}</span>
+        </div>
+        <div class="playtime-prompt-text">
+          Congratulations on ${verb} <strong>${escapeHtml(p.title)}</strong>!
+        </div>
+        <div class="playtime-prompt-sub">
+          ${statsParts.join(" &bull; ")}
+        </div>
+      `;
+    } else {
+      const isReplay = p.current_status === "Beaten" || p.current_status === "Completed";
+      const kickerText = isReplay ? "Replay Activity Detected" : "Recent Playtime Detected";
+
+      info.innerHTML = `
+        <div class="playtime-prompt-kicker">
+          <span>${escapeHtml(kickerText)}</span>
+          <span class="playtime-prompt-delta">+${p.delta_hours} hrs</span>
+          <span class="reconcile-copy-plat">${escapeHtml(p.platform)}</span>
+        </div>
+        <div class="playtime-prompt-text">
+          Mark <strong>${escapeHtml(p.title)}</strong> as <strong>Playing</strong>?
+        </div>
+        <div class="playtime-prompt-sub">
+          Playtime increased from ${p.previous_hours}h to ${p.new_hours}h &bull; Current status: <strong>${escapeHtml(p.current_status)}</strong>
+        </div>
+      `;
+    }
     left.appendChild(info);
 
     const actions = document.createElement("div");
     actions.className = "playtime-prompt-actions";
 
-    const acceptBtn = document.createElement("button");
-    acceptBtn.type = "button";
-    acceptBtn.className = "btn btn-primary btn-xs";
-    acceptBtn.textContent = "▶ Mark as Playing";
-    acceptBtn.addEventListener("click", () => resolvePlaytimePrompt(p.prompt_id, "accept"));
+    if (isCongrats) {
+      const rateBtn = document.createElement("button");
+      rateBtn.type = "button";
+      rateBtn.className = "btn btn-congrats btn-xs";
+      rateBtn.textContent = p.user_rating ? "★ Edit Rating & Notes" : "★ Rate & Review";
+      rateBtn.addEventListener("click", () => openGameById(p.game_id, { focusRating: true }));
 
-    const dismissBtn = document.createElement("button");
-    dismissBtn.type = "button";
-    dismissBtn.className = "btn btn-secondary btn-xs";
-    dismissBtn.textContent = `Dismiss for now (Keep ${p.current_status})`;
-    dismissBtn.addEventListener("click", () => resolvePlaytimePrompt(p.prompt_id, "dismiss"));
+      const dismissBtn = document.createElement("button");
+      dismissBtn.type = "button";
+      dismissBtn.className = "btn btn-secondary btn-xs";
+      dismissBtn.textContent = "Dismiss";
+      dismissBtn.addEventListener("click", () => resolvePlaytimePrompt(promptId, "dismiss"));
 
-    const muteBtn = document.createElement("button");
-    muteBtn.type = "button";
-    muteBtn.className = "btn-link-subtle";
-    muteBtn.textContent = "Don't ask again";
-    muteBtn.title = "Never prompt on playtime increases for this game";
-    muteBtn.addEventListener("click", () => resolvePlaytimePrompt(p.prompt_id, "mute"));
+      actions.appendChild(rateBtn);
+      actions.appendChild(dismissBtn);
+    } else {
+      const acceptBtn = document.createElement("button");
+      acceptBtn.type = "button";
+      acceptBtn.className = "btn btn-primary btn-xs";
+      acceptBtn.textContent = "▶ Mark as Playing";
+      acceptBtn.addEventListener("click", () => resolvePlaytimePrompt(promptId, "accept"));
 
-    actions.appendChild(acceptBtn);
-    actions.appendChild(dismissBtn);
-    actions.appendChild(muteBtn);
+      const dismissBtn = document.createElement("button");
+      dismissBtn.type = "button";
+      dismissBtn.className = "btn btn-secondary btn-xs";
+      dismissBtn.textContent = `Dismiss for now (Keep ${p.current_status})`;
+      dismissBtn.addEventListener("click", () => resolvePlaytimePrompt(promptId, "dismiss"));
+
+      const muteBtn = document.createElement("button");
+      muteBtn.type = "button";
+      muteBtn.className = "btn-link-subtle";
+      muteBtn.textContent = "Don't ask again";
+      muteBtn.title = "Never prompt on playtime increases for this game";
+      muteBtn.addEventListener("click", () => resolvePlaytimePrompt(promptId, "mute"));
+
+      actions.appendChild(acceptBtn);
+      actions.appendChild(dismissBtn);
+      actions.appendChild(muteBtn);
+    }
 
     card.appendChild(left);
     card.appendChild(actions);

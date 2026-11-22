@@ -706,6 +706,144 @@ class TestRound2Services(unittest.TestCase):
             self.assertEqual(retry.status, "duplicate_ignored")
             self.assertEqual(retry.game_id, first.game_id)
 
+    def test_post_completion_congrats_and_exact_session_suppression(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scope, _, mgr, lib, act, _, _, _ = self._setup(Path(tmp))
+            now_dt = datetime.now(timezone.utc).replace(microsecond=0)
+            g = lib.add_manual_game(
+                scope,
+                title="Elden Ring",
+                platform="Xbox",
+                completion_status="Playing",
+                status_locked=True,
+                playtime_hours=80.0,
+            )
+            act.seed_baseline_if_absent(
+                scope,
+                game_id=g.id,
+                source="Xbox",
+                baseline_minutes=4800,
+                observed_at=(now_dt - timedelta(hours=3)).isoformat(),
+            )
+            # Exact telemetry session ended 30m ago
+            act.record_interval_observation(
+                scope,
+                game_id=g.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt - timedelta(minutes=90)).isoformat(),
+                ended_at=(now_dt - timedelta(minutes=30)).isoformat(),
+                duration_minutes=60,
+                precision_level="exact",
+                idempotency_key="er-exact-1",
+            )
+            # User switches status Playing -> Beaten
+            lib.update_game(scope, g.id, completion_status="Beaten")
+            prompts = act.list_playtime_prompts(scope)
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(prompts[0].prompt_type, "congrats")
+            self.assertEqual(prompts[0].current_status, "Beaten")
+            self.assertEqual(prompts[0].sessions_count, 1)
+
+            # Delayed cumulative sync covered by exact session must not overwrite congrats with playtime nudge
+            covered = act.record_cumulative_observation(
+                scope,
+                game_id=g.id,
+                source="Xbox",
+                platform="Xbox",
+                observed_minutes=4860,
+                observed_at=(now_dt - timedelta(minutes=28)).isoformat(),
+                idempotency_key="er-cum-covered",
+            )
+            self.assertEqual(covered.status, "covered_by_exact_session")
+            prompts2 = act.list_playtime_prompts(scope)
+            self.assertEqual(len(prompts2), 1)
+            self.assertEqual(prompts2[0].prompt_type, "congrats")
+
+            # Uncovered +45m cumulative sync within 24h updates congrats rather than creating playtime nudge
+            act.record_cumulative_observation(
+                scope,
+                game_id=g.id,
+                source="Xbox",
+                platform="Xbox",
+                observed_minutes=4905,
+                observed_at=(now_dt + timedelta(hours=2)).isoformat(),
+                idempotency_key="er-cum-late",
+            )
+            prompts3 = act.list_playtime_prompts(scope)
+            self.assertEqual(len(prompts3), 1)
+            self.assertEqual(prompts3[0].prompt_type, "congrats")
+
+            # Dismiss keeps it dismissed across subsequent 24h cumulative syncs
+            act.resolve_playtime_prompt(scope, prompts3[0].id, "dismiss")
+            self.assertEqual(act.list_playtime_prompts(scope), [])
+            act.record_cumulative_observation(
+                scope,
+                game_id=g.id,
+                source="Xbox",
+                platform="Xbox",
+                observed_minutes=4950,
+                observed_at=(now_dt + timedelta(hours=4)).isoformat(),
+                idempotency_key="er-cum-late-2",
+            )
+            self.assertEqual(act.list_playtime_prompts(scope), [])
+
+            # Cumulative observation > 24h after marking Beaten triggers standard replay playtime nudge
+            act.record_cumulative_observation(
+                scope,
+                game_id=g.id,
+                source="Xbox",
+                platform="Xbox",
+                observed_minutes=5010,
+                observed_at=(now_dt + timedelta(hours=30)).isoformat(),
+                idempotency_key="er-cum-replay",
+            )
+            replay_prompts = act.list_playtime_prompts(scope)
+            self.assertEqual(len(replay_prompts), 1)
+            self.assertEqual(replay_prompts[0].prompt_type, "playtime")
+
+            # Also verify exact session starting AFTER status_updated_at triggers playtime nudge on uncovered delta
+            g2 = lib.add_manual_game(
+                scope,
+                title="Cyberpunk 2077",
+                platform="Xbox",
+                completion_status="Playing",
+                status_locked=True,
+                playtime_hours=20.0,
+            )
+            act.seed_baseline_if_absent(
+                scope,
+                game_id=g2.id,
+                source="Xbox",
+                baseline_minutes=1200,
+                observed_at=(now_dt - timedelta(hours=2)).isoformat(),
+            )
+            lib.update_game(scope, g2.id, completion_status="Completed")
+            # New exact session starts 1 hour AFTER marking Completed
+            act.record_interval_observation(
+                scope,
+                game_id=g2.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt + timedelta(hours=1)).isoformat(),
+                ended_at=(now_dt + timedelta(hours=1, minutes=20)).isoformat(),
+                duration_minutes=20,
+                precision_level="exact",
+                idempotency_key="cp-post-exact",
+            )
+            act.record_cumulative_observation(
+                scope,
+                game_id=g2.id,
+                source="Xbox",
+                platform="Xbox",
+                observed_minutes=1270,
+                observed_at=(now_dt + timedelta(hours=3)).isoformat(),
+                idempotency_key="cp-post-cum",
+            )
+            cp_prompts = [p for p in act.list_playtime_prompts(scope) if p.game_id == g2.id]
+            self.assertEqual(len(cp_prompts), 1)
+            self.assertEqual(cp_prompts[0].prompt_type, "playtime")
+
 
 if __name__ == "__main__":
     unittest.main()
