@@ -185,6 +185,8 @@ class HomeAssistantService:
         platform: str,
         import_kind: str,
         key_prefix: str,
+        evaluate_prompt: bool = False,
+        evaluate_prompt_cutoff: datetime | None = None,
     ) -> tuple[int, int]:
         imported = 0
         skipped = 0
@@ -202,6 +204,10 @@ class HomeAssistantService:
                 f"{game.id}|{span.started_at}|{span.ended_at}|{span.duration_minutes}".encode("utf-8")
             ).hexdigest()[:24]
             idem_key = f"{key_prefix}:{digest}"
+            should_prompt = evaluate_prompt
+            if should_prompt and evaluate_prompt_cutoff is not None:
+                end_dt = _parse_iso(span.ended_at)
+                should_prompt = end_dt is not None and end_dt >= evaluate_prompt_cutoff
             outcome = self.activity_service.record_interval_observation(
                 scope,
                 game_id=game.id,
@@ -212,6 +218,7 @@ class HomeAssistantService:
                 duration_minutes=span.duration_minutes,
                 idempotency_key=idem_key,
                 precision_level="exact",
+                evaluate_prompt=should_prompt,
                 payload={"import_kind": import_kind, "title": span.title},
             )
             if outcome.status == "session_created":
@@ -237,6 +244,7 @@ class HomeAssistantService:
             platform=platform,
             import_kind="csv",
             key_prefix="ha_csv",
+            evaluate_prompt=False,
         )
         return HomeAssistantImportResult(
             status="ok",
@@ -280,12 +288,15 @@ class HomeAssistantService:
             start_time=start_dt,
         )
         spans = parse_ha_state_entries(entries, max_gap_seconds=max_gap_seconds)
+        prompt_cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
         imported, skipped = self._ingest_spans(
             scope,
             spans,
             platform=platform,
             import_kind="history",
             key_prefix="ha_hist",
+            evaluate_prompt=True,
+            evaluate_prompt_cutoff=prompt_cutoff,
         )
         return HomeAssistantSyncResult(
             status="ok",

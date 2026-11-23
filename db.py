@@ -794,6 +794,9 @@ def _consolidate_dicts(
         # Status, rating, favorite, critic_score, release_year
         unified["favorite"] = any(bool(m.get("favorite")) for m in members)
         unified["status_locked"] = any(bool(m.get("status_locked")) for m in members)
+        unified["playtime_prompt_muted"] = (
+            1 if any(bool(m.get("playtime_prompt_muted")) for m in members) else 0
+        )
         ratings = [int(m["user_rating"]) for m in members if m.get("user_rating") is not None]
         if unified.get("user_rating") is None and ratings:
             unified["user_rating"] = max(ratings)
@@ -1049,6 +1052,90 @@ def _upsert_prompt_row(
         )
 
 
+def _sum_recent_window_session_minutes(
+    conn: sqlite3.Connection,
+    *,
+    group_ids: List[int],
+    session_end_dt: datetime,
+    status_upd_dt: Optional[datetime],
+    comp_status: str,
+    last_playtime_dismiss_dt: Optional[datetime],
+    has_pending_playtime: bool,
+    current_session_id: Optional[int],
+    current_delta_mins: int,
+    coalesced_created_at: Optional[str],
+) -> int:
+    """Sum qualifying play_sessions minutes across group_ids in the rolling 24h window."""
+    if not group_ids:
+        return current_delta_mins
+    placeholders = ",".join("?" for _ in group_ids)
+    ps_cols = {
+        r["name"] for r in conn.execute("PRAGMA table_info(play_sessions)").fetchall()
+    }
+    prec_select = "precision_level" if "precision_level" in ps_cols else "NULL AS precision_level"
+    sess_rows = conn.execute(
+        f"""
+        SELECT id, started_at, ended_at, duration_minutes, source, {prec_select}, created_at
+        FROM play_sessions
+        WHERE game_id IN ({placeholders})
+        ORDER BY ended_at DESC, id DESC
+        """,
+        tuple(group_ids),
+    ).fetchall()
+
+    window_start_dt = session_end_dt - timedelta(hours=24)
+    window_mins = 0
+    for sr in sess_rows:
+        prec = sr["precision_level"] or "estimated"
+        if prec == "coarse" or sr["source"] == "achievement_backfill":
+            continue
+        s_start = _parse_utc_iso(sr["started_at"])
+        s_end = _parse_utc_iso(sr["ended_at"])
+        if not s_start or not s_end:
+            continue
+        if not (window_start_dt <= s_end <= session_end_dt):
+            continue
+        if status_upd_dt is not None:
+            if comp_status in _COMPLETION_CONGRATS_STATUSES:
+                is_exact_row = prec == "exact" or sr["source"] in (
+                    "xbox_telemetry",
+                    "gog_telemetry",
+                    "homeassistant",
+                    "home_assistant",
+                    "webhook",
+                )
+                if is_exact_row and s_start <= status_upd_dt:
+                    continue
+                if not is_exact_row and s_end <= status_upd_dt:
+                    continue
+            elif s_end <= status_upd_dt:
+                continue
+
+        sid = int(sr["id"])
+        s_dur = int(sr["duration_minutes"] or 0)
+        if last_playtime_dismiss_dt is not None and not has_pending_playtime:
+            if current_session_id is not None and sid == current_session_id:
+                if coalesced_created_at is not None:
+                    ca_dt = _parse_utc_iso(coalesced_created_at)
+                    if ca_dt is None or ca_dt <= last_playtime_dismiss_dt:
+                        window_mins += min(s_dur, current_delta_mins)
+                    else:
+                        window_mins += s_dur
+                else:
+                    window_mins += s_dur
+            else:
+                ca_dt = _parse_utc_iso(sr["created_at"]) if sr["created_at"] else None
+                if ca_dt is None or ca_dt <= last_playtime_dismiss_dt:
+                    continue
+                window_mins += s_dur
+        else:
+            window_mins += s_dur
+
+    if window_mins == 0 and current_delta_mins > 0:
+        return current_delta_mins
+    return window_mins
+
+
 def upsert_synced_game(
     external_id: str,
     title: str,
@@ -1164,6 +1251,10 @@ def upsert_synced_game(
                 int(existing["playtime_minutes"] or 0) if "playtime_minutes" in existing.keys() else 0,
                 incoming_mins,
             )
+
+            synced_session_id: Optional[int] = None
+            coalesced_created_at: Optional[str] = None
+            synced_session_end_dt: Optional[datetime] = None
 
             # Preserve existing status on sync updates; prompt the user when playtime increases >= 0.5h
             new_status = existing["completion_status"]
@@ -1285,7 +1376,7 @@ def upsert_synced_game(
                 # Anti-Fragmentation Coalescing
                 prev_sess = conn.execute(
                     """
-                    SELECT id, ended_at, duration_minutes, achievements_unlocked, is_locked
+                    SELECT id, ended_at, duration_minutes, achievements_unlocked, is_locked, created_at
                     FROM play_sessions
                     WHERE game_id = ? AND platform = ?
                     ORDER BY ended_at DESC, id DESC
@@ -1314,17 +1405,22 @@ def upsert_synced_game(
                                 """,
                                 (merged_ended_dt.isoformat(), merged_duration, merged_ach, prev_sess["id"]),
                             )
+                            synced_session_id = int(prev_sess["id"])
+                            coalesced_created_at = prev_sess["created_at"]
+                            synced_session_end_dt = merged_ended_dt
 
                 if not coalesced:
-                    conn.execute(
+                    sess_cur = conn.execute(
                         """
                         INSERT INTO play_sessions (
                             game_id, platform, started_at, ended_at, duration_minutes,
-                            source, notes, achievements_unlocked, is_locked
-                        ) VALUES (?, ?, ?, ?, ?, 'sync', NULL, ?, 0)
+                            source, notes, achievements_unlocked, is_locked, created_at
+                        ) VALUES (?, ?, ?, ?, ?, 'sync', NULL, ?, 0, ?)
                         """,
-                        (game_id, platform, started_at_str, ended_at_str, session_duration_mins, ach_delta),
+                        (game_id, platform, started_at_str, ended_at_str, session_duration_mins, ach_delta, now),
                     )
+                    synced_session_id = int(sess_cur.lastrowid)
+                    synced_session_end_dt = ended_dt
 
                 # Automatic Status Transition
                 if not bool(existing["status_locked"]):
@@ -1435,7 +1531,7 @@ def upsert_synced_game(
                 ),
             )
 
-            if delta_hours >= PLAYTIME_PROMPT_THRESHOLD_HOURS:
+            if delta_minutes > 0 or delta_hours >= PLAYTIME_PROMPT_THRESHOLD_HOURS:
                 target_id = existing["canonical_id"] if existing["canonical_id"] is not None else game_id
                 target_row = conn.execute(
                     "SELECT id, completion_status, playtime_prompt_muted, status_updated_at FROM games WHERE id = ?",
@@ -1446,21 +1542,48 @@ def upsert_synced_game(
                     cid = existing["canonical_id"]
                     group_rows = (
                         conn.execute(
-                            "SELECT id, playtime_hours FROM games WHERE canonical_id = ?",
+                            "SELECT id, playtime_hours, playtime_prompt_muted, status_updated_at FROM games WHERE canonical_id = ?",
                             (cid,),
                         ).fetchall()
                         if cid is not None
                         else [target_row]
                     )
                     group_ids = list({int(gr["id"]) for gr in group_rows} | {int(target_id)})
+                    group_muted = any(bool(gr["playtime_prompt_muted"]) for gr in group_rows)
+                    placeholders = ",".join("?" for _ in group_ids)
                     now_dt = _parse_utc_iso(now) or datetime.now(timezone.utc)
-                    session_end_dt = ended_dt if delta_minutes > 0 else now_dt
-                    status_upd_raw = (
-                        target_row["status_updated_at"]
-                        if "status_updated_at" in target_row.keys()
-                        else None
-                    )
-                    status_upd_dt = _parse_utc_iso(status_upd_raw)
+                    session_end_dt = synced_session_end_dt or now_dt
+                    status_upd_dt: Optional[datetime] = None
+                    for gr in group_rows:
+                        raw_upd = gr["status_updated_at"] if "status_updated_at" in gr.keys() else None
+                        cand_dt = _parse_utc_iso(raw_upd) if raw_upd else None
+                        if cand_dt is not None and (status_upd_dt is None or cand_dt > status_upd_dt):
+                            status_upd_dt = cand_dt
+
+                    prompt_rows = conn.execute(
+                        f"""
+                        SELECT id, game_id, prompt_type, status, resolved_at, previous_hours, delta_hours
+                        FROM playtime_prompts
+                        WHERE game_id IN ({placeholders})
+                        ORDER BY id DESC
+                        """,
+                        tuple(group_ids),
+                    ).fetchall()
+                    existing_pending_playtime = None
+                    existing_pending_congrats = None
+                    last_playtime_dismiss_dt: Optional[datetime] = None
+                    for pr in prompt_rows:
+                        pr_type = pr["prompt_type"] if "prompt_type" in pr.keys() and pr["prompt_type"] else "playtime"
+                        pr_status = pr["status"] if "status" in pr.keys() and pr["status"] else "pending"
+                        if pr_type == "playtime":
+                            if pr_status == "pending" and existing_pending_playtime is None:
+                                existing_pending_playtime = pr
+                            elif pr_status in ("dismissed", "resolved") and pr["resolved_at"]:
+                                rd = _parse_utc_iso(pr["resolved_at"])
+                                if rd is not None and (last_playtime_dismiss_dt is None or rd > last_playtime_dismiss_dt):
+                                    last_playtime_dismiss_dt = rd
+                        elif pr_type == "congrats" and pr_status == "pending" and existing_pending_congrats is None:
+                            existing_pending_congrats = pr
 
                     is_post_completion_sync = False
                     if t_status in _COMPLETION_CONGRATS_STATUSES and status_upd_dt is not None:
@@ -1469,21 +1592,28 @@ def upsert_synced_game(
                             is_post_completion_sync = True
 
                     if is_post_completion_sync and status_upd_dt is not None:
-                        if not _was_congrats_dismissed_since(conn, group_ids, status_upd_dt):
+                        if (
+                            delta_hours >= PLAYTIME_PROMPT_THRESHOLD_HOURS
+                            or existing_pending_congrats is not None
+                        ) and not _was_congrats_dismissed_since(conn, group_ids, status_upd_dt):
                             total_group_hrs = (
                                 round(sum(float(gr["playtime_hours"] or 0.0) for gr in group_rows), 2)
                                 if cid is not None
                                 else new_playtime
                             )
                             prev_group_hrs = max(0.0, round(total_group_hrs - delta_hours, 2))
-                            placeholders = ",".join("?" for _ in group_ids)
+                            congrats_tid = (
+                                int(existing_pending_congrats["game_id"])
+                                if existing_pending_congrats is not None
+                                else target_id
+                            )
                             conn.execute(
                                 f"DELETE FROM playtime_prompts WHERE game_id IN ({placeholders}) AND game_id != ?",
-                                (*group_ids, target_id),
+                                (*group_ids, congrats_tid),
                             )
                             _upsert_prompt_row(
                                 conn,
-                                target_id=target_id,
+                                target_id=congrats_tid,
                                 prev_hours=prev_group_hrs,
                                 new_hours=total_group_hrs,
                                 delta_hours=delta_hours,
@@ -1492,18 +1622,65 @@ def upsert_synced_game(
                                 prompt_type="congrats",
                                 accumulate_delta=True,
                             )
-                    elif not bool(existing["playtime_prompt_muted"]) and not bool(target_row["playtime_prompt_muted"]):
-                        _upsert_prompt_row(
-                            conn,
-                            target_id=target_id,
-                            prev_hours=old_playtime,
-                            new_hours=new_playtime,
-                            delta_hours=delta_hours,
-                            current_status=t_status,
-                            detected_at=now,
-                            prompt_type="playtime",
-                            accumulate_delta=True,
+                    elif (
+                        not group_muted
+                        and not (
+                            t_status not in _COMPLETION_CONGRATS_STATUSES
+                            and status_upd_dt is not None
+                            and session_end_dt <= status_upd_dt
                         )
+                    ):
+                        eff_delta_mins = delta_minutes if delta_minutes > 0 else int(round(delta_hours * 60))
+                        window_mins = _sum_recent_window_session_minutes(
+                            conn,
+                            group_ids=group_ids,
+                            session_end_dt=session_end_dt,
+                            status_upd_dt=status_upd_dt,
+                            comp_status=t_status,
+                            last_playtime_dismiss_dt=last_playtime_dismiss_dt,
+                            has_pending_playtime=existing_pending_playtime is not None,
+                            current_session_id=synced_session_id,
+                            current_delta_mins=eff_delta_mins,
+                            coalesced_created_at=coalesced_created_at,
+                        )
+                        if (
+                            window_mins >= 30
+                            or delta_hours >= PLAYTIME_PROMPT_THRESHOLD_HOURS
+                            or existing_pending_playtime is not None
+                        ):
+                            total_group_hrs = (
+                                round(sum(float(gr["playtime_hours"] or 0.0) for gr in group_rows), 2)
+                                if cid is not None
+                                else new_playtime
+                            )
+                            if existing_pending_playtime is not None:
+                                prev_hrs = float(existing_pending_playtime["previous_hours"] or 0.0)
+                                cum_delta_hrs = round(float(existing_pending_playtime["delta_hours"] or 0.0) + delta_hours, 2)
+                                eff_new_hrs = max(total_group_hrs, round(prev_hrs + cum_delta_hrs, 2))
+                            else:
+                                cum_delta_hrs = round(max(float(window_mins) / 60.0, float(delta_hours)), 2)
+                                eff_new_hrs = max(total_group_hrs, cum_delta_hrs)
+                                prev_hrs = max(0.0, round(eff_new_hrs - cum_delta_hrs, 2))
+                            prompt_tid = (
+                                int(existing_pending_playtime["game_id"])
+                                if existing_pending_playtime is not None
+                                else target_id
+                            )
+                            conn.execute(
+                                f"DELETE FROM playtime_prompts WHERE game_id IN ({placeholders}) AND game_id != ?",
+                                (*group_ids, prompt_tid),
+                            )
+                            _upsert_prompt_row(
+                                conn,
+                                target_id=prompt_tid,
+                                prev_hours=prev_hrs,
+                                new_hours=eff_new_hrs,
+                                delta_hours=cum_delta_hrs,
+                                current_status=t_status,
+                                detected_at=now,
+                                prompt_type="playtime",
+                                accumulate_delta=False,
+                            )
 
         row = conn.execute("SELECT * FROM games WHERE id = ?", (game_id,)).fetchone()
         return _row_to_dict(row)

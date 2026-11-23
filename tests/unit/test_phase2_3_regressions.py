@@ -601,6 +601,88 @@ class TestPhase2And3Regressions(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn(scope.user_id, rta_mgr.active_clients)
                 fake_task.cancel.assert_called_once()
 
+    # Regression (2026-11-23): Xbox telemetry closing a session + advancing baseline must still emit playtime nudge
+    async def test_xbox_telemetry_session_on_locked_plan_to_play_creates_playtime_prompt(self):
+        t0 = datetime.now(timezone.utc).replace(microsecond=0) + timedelta(minutes=5)
+        t_exit_poll = t0 + timedelta(minutes=39)
+        state = {"active": True, "minutes": 1}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if "/v2/presence" in path:
+                if state["active"]:
+                    return httpx.Response(
+                        200,
+                        json={
+                            "state": "Online",
+                            "devices": [{"titles": [{"id": "2087575977", "name": "MOUSE: P.I. For Hire", "state": "Active"}]}],
+                        },
+                    )
+                return httpx.Response(200, json={"state": "Offline"})
+            if path.endswith("/v2/player/stats"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "statlistscollection": [
+                            {"stats": [{"titleid": "2087575977", "name": "MinutesPlayed", "value": str(state["minutes"])}]}
+                        ]
+                    },
+                )
+            if "/v2/achievements/player/2533274000001/2087575977" in path:
+                return httpx.Response(200, json={"achievements": []})
+            return httpx.Response(404)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, _, ident, lib, act, _, tel = self._make_stack(Path(tmp), handler)
+            acct, _ = ident.bootstrap_admin(username="alice", password="AlicePassword!1")
+            scope = acct.to_scope()
+            ident.update_connections(scope, xbox_xuid="2533274000001", xbl_api_key="xbl-key")
+
+            w_copy = lib.add_manual_game(
+                scope,
+                title="Mouse P.I. For Hire",
+                platform="Xbox",
+                completion_status="Plan to Play",
+                status_locked=True,
+                playtime_hours=0.0,
+            )
+            x_copy, _ = lib.apply_platform_snapshot(
+                scope,
+                external_id="xbox:2087575977",
+                title="MOUSE: P.I. For Hire",
+                platform="Xbox / PC",
+                source="Xbox",
+                playtime_minutes=1,
+            )
+            canon_id = lib.merge_games(scope, [w_copy.id, x_copy.id])
+            lib.update_game(scope, x_copy.id, completion_status="Plan to Play")
+
+            await tel.poll_user(scope, now=t0, sleep_before_flush=False)
+            state["active"] = False
+            state["minutes"] = 40
+            await tel.poll_user(scope, now=t_exit_poll, sleep_before_flush=False)
+
+            prompts = act.list_playtime_prompts(scope)
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(prompts[0].game_id, canon_id)
+            self.assertEqual(prompts[0].prompt_type, "playtime")
+            self.assertEqual(prompts[0].current_status, "Plan to Play")
+
+            # Follow-up scheduled sync sees baseline=40 (no_change) and must preserve the pending prompt
+            follow = act.record_cumulative_observation(
+                scope,
+                game_id=x_copy.id,
+                source="Xbox",
+                platform="Xbox / PC",
+                observed_minutes=40,
+                observed_at=(t_exit_poll + timedelta(minutes=30)).isoformat(),
+                idempotency_key="xbox_sync:follow_up:40",
+            )
+            self.assertEqual(follow.status, "no_change")
+            prompts_after = act.list_playtime_prompts(scope)
+            self.assertEqual(len(prompts_after), 1)
+            self.assertEqual(prompts_after[0].prompt_type, "playtime")
+
 
 if __name__ == "__main__":
     unittest.main()
