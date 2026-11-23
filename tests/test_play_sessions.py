@@ -784,6 +784,76 @@ class TestPlaySessionAPIAndMCP(unittest.TestCase):
         self.assertEqual(prompts[0]["prompt_type"], "congrats")
         self.assertEqual(prompts[0]["current_status"], "Completed")
 
+    # Regression (2026-11-23): cumulative same-day sync deltas adding up to >=30m should trigger playtime nudge
+    def test_cumulative_same_day_sync_deltas_trigger_playtime_prompt(self):
+        now_utc = datetime.now(timezone.utc).replace(microsecond=0)
+        g = db.upsert_synced_game(
+            external_id="xbox:7003",
+            title="MOUSE: P.I. For Hire",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=60,
+            db_path=self.db_path,
+        )
+        db.update_game(g["id"], {"completion_status": "Plan to Play"}, db_path=self.db_path)
+        self.assertEqual(db.get_pending_playtime_prompts(db_path=self.db_path), [])
+
+        # First 15m delta -> below 30m threshold
+        db.upsert_synced_game(
+            external_id="xbox:7003",
+            title="MOUSE: P.I. For Hire",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=75,
+            last_played=(now_utc + timedelta(minutes=10)).isoformat(),
+            db_path=self.db_path,
+        )
+        self.assertEqual(db.get_pending_playtime_prompts(db_path=self.db_path), [])
+
+        # Second 20m delta 2h later -> 15 + 20 = 35m >= 30m in 24h -> triggers prompt
+        db.upsert_synced_game(
+            external_id="xbox:7003",
+            title="MOUSE: P.I. For Hire",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=95,
+            last_played=(now_utc + timedelta(hours=2)).isoformat(),
+            db_path=self.db_path,
+        )
+        prompts = db.get_pending_playtime_prompts(db_path=self.db_path)
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0]["prompt_type"], "playtime")
+        self.assertAlmostEqual(prompts[0]["delta_hours"], 0.6, places=1)
+
+        # Dismiss -> +10m stays dismissed -> +20m (10 + 20 = 30m) re-prompts
+        db.resolve_playtime_prompt(prompts[0]["prompt_id"], "dismiss", db_path=self.db_path)
+        self.assertEqual(db.get_pending_playtime_prompts(db_path=self.db_path), [])
+
+        db.upsert_synced_game(
+            external_id="xbox:7003",
+            title="MOUSE: P.I. For Hire",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=105,
+            last_played=(now_utc + timedelta(hours=3)).isoformat(),
+            db_path=self.db_path,
+        )
+        self.assertEqual(db.get_pending_playtime_prompts(db_path=self.db_path), [])
+
+        db.upsert_synced_game(
+            external_id="xbox:7003",
+            title="MOUSE: P.I. For Hire",
+            platform="Xbox",
+            source="Xbox",
+            playtime_minutes=125,
+            last_played=(now_utc + timedelta(hours=4)).isoformat(),
+            db_path=self.db_path,
+        )
+        prompts2 = db.get_pending_playtime_prompts(db_path=self.db_path)
+        self.assertEqual(len(prompts2), 1)
+        self.assertEqual(prompts2[0]["prompt_type"], "playtime")
+        self.assertAlmostEqual(prompts2[0]["delta_hours"], 0.5, places=1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -844,6 +844,248 @@ class TestRound2Services(unittest.TestCase):
             self.assertEqual(len(cp_prompts), 1)
             self.assertEqual(cp_prompts[0].prompt_type, "playtime")
 
+    # Regression (2026-11-23): exact telemetry/HA sessions & cumulative 24h window triggers for locked non-Playing games
+    def test_exact_session_and_cumulative_24h_playtime_prompts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            scope, _, _, lib, act, _, _, ha = self._setup(Path(tmp))
+            now_dt = datetime.now(timezone.utc).replace(microsecond=0)
+
+            # 1. Reconciled Plan-to-Play game gets 39m exact xbox_telemetry session -> triggers 1 playtime nudge
+            w_copy = lib.add_manual_game(
+                scope,
+                title="Mouse P.I. For Hire",
+                platform="Xbox",
+                completion_status="Plan to Play",
+                status_locked=True,
+                playtime_hours=0.0,
+            )
+            x_copy, _ = lib.apply_platform_snapshot(
+                scope,
+                external_id="xbox:2087575977",
+                title="MOUSE: P.I. For Hire",
+                platform="Xbox / PC",
+                source="Xbox",
+                playtime_minutes=1,
+            )
+            canon_id = lib.merge_games(scope, [w_copy.id, x_copy.id])
+            lib.update_game(scope, x_copy.id, completion_status="Plan to Play")
+
+            act.record_interval_observation(
+                scope,
+                game_id=x_copy.id,
+                source="xbox_telemetry",
+                platform="Xbox / PC",
+                started_at=(now_dt + timedelta(minutes=6)).isoformat(),
+                ended_at=(now_dt + timedelta(minutes=45)).isoformat(),
+                duration_minutes=39,
+                precision_level="exact",
+                idempotency_key="mouse-exact-1",
+            )
+            prompts = act.list_playtime_prompts(scope)
+            self.assertEqual(len(prompts), 1)
+            self.assertEqual(prompts[0].game_id, canon_id)
+            self.assertEqual(prompts[0].prompt_type, "playtime")
+            self.assertEqual(prompts[0].current_status, "Plan to Play")
+            self.assertAlmostEqual(prompts[0].delta_hours, 0.7, places=1)
+
+            # Muting one copy of a reconciled group suppresses prompts across the entire canonical group
+            lib.update_game(scope, x_copy.id, playtime_prompt_muted=True)
+            self.assertEqual(act.list_playtime_prompts(scope), [])
+            act.record_interval_observation(
+                scope,
+                game_id=w_copy.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt + timedelta(hours=2)).isoformat(),
+                ended_at=(now_dt + timedelta(hours=2, minutes=40)).isoformat(),
+                duration_minutes=40,
+                precision_level="exact",
+                idempotency_key="mouse-exact-muted",
+            )
+            self.assertEqual(act.list_playtime_prompts(scope), [])
+
+            # 2. Cumulative 24h threshold: 15m + 20m same day on locked Plan to Play -> no prompt at 15m, prompt at 35m
+            g_cum = lib.add_manual_game(
+                scope,
+                title="Hollow Knight: Silksong",
+                platform="Xbox",
+                completion_status="Plan to Play",
+                status_locked=True,
+                playtime_hours=1.0,
+            )
+            act.record_interval_observation(
+                scope,
+                game_id=g_cum.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt + timedelta(minutes=5)).isoformat(),
+                ended_at=(now_dt + timedelta(minutes=20)).isoformat(),
+                duration_minutes=15,
+                precision_level="exact",
+                idempotency_key="silksong-1",
+            )
+            self.assertEqual([p for p in act.list_playtime_prompts(scope) if p.game_id == g_cum.id], [])
+
+            act.record_interval_observation(
+                scope,
+                game_id=g_cum.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt + timedelta(hours=2)).isoformat(),
+                ended_at=(now_dt + timedelta(hours=2, minutes=20)).isoformat(),
+                duration_minutes=20,
+                precision_level="exact",
+                idempotency_key="silksong-2",
+            )
+            cum_prompts = [p for p in act.list_playtime_prompts(scope) if p.game_id == g_cum.id]
+            self.assertEqual(len(cum_prompts), 1)
+            self.assertEqual(cum_prompts[0].prompt_type, "playtime")
+            self.assertAlmostEqual(cum_prompts[0].delta_hours, 0.6, places=1)
+            self.assertAlmostEqual(cum_prompts[0].previous_hours, 1.0, places=1)
+            self.assertAlmostEqual(cum_prompts[0].new_hours, 1.6, places=1)
+
+            # Dismiss resets cumulative baseline: +5m stays dismissed, +25m (5+25=30m) re-prompts
+            act.resolve_playtime_prompt(scope, cum_prompts[0].id, "dismiss")
+            self.assertEqual([p for p in act.list_playtime_prompts(scope) if p.game_id == g_cum.id], [])
+
+            act.record_interval_observation(
+                scope,
+                game_id=g_cum.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt + timedelta(hours=3)).isoformat(),
+                ended_at=(now_dt + timedelta(hours=3, minutes=5)).isoformat(),
+                duration_minutes=5,
+                precision_level="exact",
+                idempotency_key="silksong-3",
+            )
+            self.assertEqual([p for p in act.list_playtime_prompts(scope) if p.game_id == g_cum.id], [])
+
+            act.record_interval_observation(
+                scope,
+                game_id=g_cum.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt + timedelta(hours=4)).isoformat(),
+                ended_at=(now_dt + timedelta(hours=4, minutes=25)).isoformat(),
+                duration_minutes=25,
+                precision_level="exact",
+                idempotency_key="silksong-4",
+            )
+            re_prompts = [p for p in act.list_playtime_prompts(scope) if p.game_id == g_cum.id]
+            self.assertEqual(len(re_prompts), 1)
+            self.assertAlmostEqual(re_prompts[0].delta_hours, 0.5, places=1)
+            act.resolve_playtime_prompt(scope, re_prompts[0].id, "dismiss")
+
+            # 3. Beaten game: pre-status exact session must NOT prompt, two post-completion exact sessions (15m + 20m) DO
+            g_beaten = lib.add_manual_game(
+                scope,
+                title="Clair Obscur",
+                platform="Xbox",
+                completion_status="Playing",
+                status_locked=True,
+                playtime_hours=30.0,
+            )
+            lib.update_game(scope, g_beaten.id, completion_status="Beaten")
+            # Session starting before/at status_updated_at -> must NOT emit playtime nudge (may emit congrats)
+            act.record_interval_observation(
+                scope,
+                game_id=g_beaten.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt - timedelta(minutes=50)).isoformat(),
+                ended_at=(now_dt - timedelta(minutes=10)).isoformat(),
+                duration_minutes=40,
+                precision_level="exact",
+                idempotency_key="obscur-pre",
+            )
+            pre_prompts = [p for p in act.list_playtime_prompts(scope) if p.game_id == g_beaten.id]
+            self.assertEqual([p for p in pre_prompts if p.prompt_type == "playtime"], [])
+            for pp in pre_prompts:
+                act.resolve_playtime_prompt(scope, pp.id, "dismiss")
+
+            # Two post-completion exact sessions strictly after status_updated_at (15m + 20m) -> replay playtime nudge
+            act.record_interval_observation(
+                scope,
+                game_id=g_beaten.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt + timedelta(minutes=10)).isoformat(),
+                ended_at=(now_dt + timedelta(minutes=25)).isoformat(),
+                duration_minutes=15,
+                precision_level="exact",
+                idempotency_key="obscur-post-1",
+            )
+            self.assertEqual(
+                [p for p in act.list_playtime_prompts(scope) if p.game_id == g_beaten.id and p.prompt_type == "playtime"],
+                [],
+            )
+
+            act.record_interval_observation(
+                scope,
+                game_id=g_beaten.id,
+                source="xbox_telemetry",
+                platform="Xbox",
+                started_at=(now_dt + timedelta(minutes=40)).isoformat(),
+                ended_at=(now_dt + timedelta(minutes=60)).isoformat(),
+                duration_minutes=20,
+                precision_level="exact",
+                idempotency_key="obscur-post-2",
+            )
+            beaten_prompts = [p for p in act.list_playtime_prompts(scope) if p.game_id == g_beaten.id]
+            self.assertEqual(len(beaten_prompts), 1)
+            self.assertEqual(beaten_prompts[0].prompt_type, "playtime")
+
+            # 4. Historical achievement backfill (coarse) & CSV import must NOT trigger prompts; live HA stop event DOES
+            g_hist = lib.add_manual_game(
+                scope,
+                title="Doom Eternal",
+                platform="Xbox",
+                completion_status="Plan to Play",
+                status_locked=True,
+                playtime_hours=0.0,
+            )
+            lib.upsert_game_achievements(
+                scope,
+                game_id=g_hist.id,
+                source="Xbox",
+                platform="Xbox",
+                achievements=[
+                    {"external_ach_id": "d1", "name": "Rip", "unlocked": True, "unlock_time": (now_dt - timedelta(hours=2)).isoformat()},
+                    {"external_ach_id": "d2", "name": "Tear", "unlocked": True, "unlock_time": (now_dt - timedelta(hours=1)).isoformat()},
+                ],
+            )
+            bf = act.backfill_historical_sessions_from_achievements(scope)
+            self.assertEqual(bf.sessions_created, 1)
+            self.assertEqual([p for p in act.list_playtime_prompts(scope) if p.game_id == g_hist.id], [])
+
+            ha.import_csv(
+                scope,
+                csv_content="entity_id,state,last_changed\n"
+                f"sensor.xbox,Doom Eternal,{(now_dt - timedelta(minutes=50)).isoformat()}\n"
+                f"sensor.xbox,off,{(now_dt - timedelta(minutes=5)).isoformat()}\n",
+                platform="Xbox",
+            )
+            self.assertEqual([p for p in act.list_playtime_prompts(scope) if p.game_id == g_hist.id], [])
+
+            ha.ingest_event(
+                scope,
+                event="start",
+                title="Doom Eternal",
+                platform="Xbox",
+                external_id="ha_doom_1",
+                started_at=(now_dt + timedelta(minutes=5)).isoformat(),
+            )
+            ha.ingest_event(
+                scope,
+                event="stop",
+                external_id="ha_doom_1",
+                ended_at=(now_dt + timedelta(minutes=40)).isoformat(),
+            )
+            ha_prompts = [p for p in act.list_playtime_prompts(scope) if p.game_id == g_hist.id]
+            self.assertEqual(len(ha_prompts), 1)
+            self.assertEqual(ha_prompts[0].prompt_type, "playtime")
+
 
 if __name__ == "__main__":
     unittest.main()
